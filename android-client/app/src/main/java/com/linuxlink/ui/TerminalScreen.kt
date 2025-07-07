@@ -1,16 +1,25 @@
 package com.linuxlink.ui
 
+import android.app.Application
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.linuxlink.viewmodel.TerminalViewModel
 
 @Composable
-fun TerminalScreen() {
-    var command by remember { mutableStateOf("") }
-    var output by remember { mutableStateOf("Welcome to Linux-Link Terminal\n") }
-    var isLoading by remember { mutableStateOf(false) }
+fun TerminalScreen(app: Application? = null) {
+    val context = LocalContext.current
+    val terminalViewModel: TerminalViewModel = viewModel(factory = androidx.lifecycle.viewmodel.initializer {
+        TerminalViewModel(context.applicationContext as Application)
+    })
+    val command by terminalViewModel.command.collectAsState()
+    val output by terminalViewModel.output.collectAsState()
+    val isLoading by terminalViewModel.isLoading.collectAsState()
+    val errorMessage by terminalViewModel.errorMessage.collectAsState()
 
     Column(
         modifier = Modifier
@@ -20,21 +29,15 @@ fun TerminalScreen() {
         Row(modifier = Modifier.fillMaxWidth()) {
             TextField(
                 value = command,
-                onValueChange = { command = it },
+                onValueChange = { terminalViewModel.updateCommand(it) },
                 label = { Text("Enter command") },
                 modifier = Modifier.weight(1f),
                 singleLine = true
             )
             Spacer(modifier = Modifier.width(8.dp))
             Button(
-                onClick = {
-                    if (command.isNotEmpty() && !isLoading) {
-                        // Placeholder for command execution
-                        output += "\n$ $command\n[output here]"
-                        command = ""
-                    }
-                },
-                enabled = !isLoading
+                onClick = { terminalViewModel.executeCommand() },
+                enabled = !isLoading && command.isNotEmpty()
             ) {
                 if (isLoading) {
                     CircularProgressIndicator(modifier = Modifier.size(16.dp))
@@ -42,6 +45,9 @@ fun TerminalScreen() {
                     Text("Execute")
                 }
             }
+        }
+        if (errorMessage != null) {
+            Text(errorMessage ?: "", color = MaterialTheme.colorScheme.error)
         }
         Spacer(modifier = Modifier.height(16.dp))
         Card(
