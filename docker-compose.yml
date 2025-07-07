@@ -1,0 +1,12 @@
+version: '3.8'
+services:
+  backend-api:
+    build: ./backend-api
+    ports:
+      - "8000:8000"
+    environment:
+      - JWT_SECRET=your-secret-key-change-this
+      - SAFE_MODE=true
+    volumes:
+      - ./backend-api/audit.log:/app/audit.log
+    restart: unless-stopped 
