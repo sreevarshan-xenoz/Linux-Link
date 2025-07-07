@@ -1,4 +1,4 @@
-# LinuxLink API Documentation
+# Linux-Link API Documentation
 
 ## Authentication
 All endpoints (except `/auth/login`) require a valid JWT in the `Authorization: Bearer <token>` header.
@@ -13,7 +13,7 @@ Authenticate and receive a JWT token.
 **Request:**
 ```json
 {
-  "username": "admin",
+  "username": "serrvarshan-xenoz",
   "password": "linuxlink123"
 }
 ```
@@ -39,7 +39,7 @@ Verify if a JWT token is valid.
 ```json
 {
   "valid": true,
-  "user": "admin"
+  "user": "serrvarshan-xenoz"
 }
 ```
 **Errors:**
@@ -136,7 +136,7 @@ Get a one-tap health check (CPU, RAM, disk, uptime, running services, recent err
 ## Example Usage (cURL)
 ```sh
 # Login
-curl -X POST http://localhost:8000/auth/login -H "Content-Type: application/json" -d '{"username":"admin","password":"linuxlink123"}'
+curl -X POST http://localhost:8000/auth/login -H "Content-Type: application/json" -d '{"username":"serrvarshan-xenoz","password":"linuxlink123"}'
 
 # Execute command
 curl -X POST http://localhost:8000/exec -H "Authorization: Bearer <JWT>" -H "Content-Type: application/json" -d '{"cmd":"ls -la"}'

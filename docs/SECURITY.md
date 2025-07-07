@@ -1,7 +1,7 @@
-# LinuxLink Security Model
+# Linux-Link Security Model
 
 ## Overview
-LinuxLink is designed for secure remote Linux administration. Security is enforced at every layer: authentication, command execution, data storage, and network communication.
+Linux-Link is designed for secure remote Linux administration. Security is enforced at every layer: authentication, command execution, data storage, and network communication.
 
 ---
 

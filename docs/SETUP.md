@@ -1,4 +1,4 @@
-# LinuxLink Setup Guide
+# Linux-Link Setup Guide
 
 ## Prerequisites
 - Python 3.10+
@@ -12,8 +12,8 @@
 
 ### 1. Clone the repo
 ```sh
-git clone https://github.com/yourusername/linuxlink.git
-cd linuxlink/backend-api
+git clone https://github.com/serrvarshan-xenoz/linux-link.git
+cd linux-link/backend-api
 ```
 
 ### 2. Install dependencies
