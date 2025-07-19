@@ -26,12 +26,21 @@ class TerminalViewModel(app: Application) : AndroidViewModel(app) {
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage
 
+    private val _history = MutableStateFlow<List<String>>(emptyList())
+    val history: StateFlow<List<String>> = _history
+
     // Hardcoded backend URL for now
     private val api = Retrofit.Builder()
         .baseUrl("http://10.0.2.2:8000/")
         .addConverterFactory(GsonConverterFactory.create())
         .build()
         .create(ApiService::class.java)
+
+    private val appContext = app.applicationContext
+
+    init {
+        loadHistory()
+    }
 
     fun updateCommand(cmd: String) {
         _command.value = cmd
@@ -44,7 +53,7 @@ class TerminalViewModel(app: Application) : AndroidViewModel(app) {
         _errorMessage.value = null
         viewModelScope.launch {
             try {
-                val token = SecurityManager.getToken(getApplication())
+                val token = SecurityManager.getToken(appContext)
                 if (token == null) {
                     _errorMessage.value = "Not authenticated."
                     _isLoading.value = false
@@ -54,6 +63,7 @@ class TerminalViewModel(app: Application) : AndroidViewModel(app) {
                 if (response.isSuccessful && response.body() != null) {
                     val res: CommandResponse = response.body()!!
                     _output.value += "\n$ $cmd\n${res.stdout}${if (res.stderr.isNotBlank()) "\n${res.stderr}" else ""}"
+                    addToHistory(cmd)
                 } else {
                     _output.value += "\n$ $cmd\n[Error: ${response.errorBody()?.string() ?: "Unknown error"}]"
                 }
@@ -63,6 +73,20 @@ class TerminalViewModel(app: Application) : AndroidViewModel(app) {
                 _isLoading.value = false
                 _command.value = ""
             }
+        }
+    }
+
+    private fun loadHistory() {
+        _history.value = SecurityManager.getCommandHistory(appContext)
+    }
+
+    private fun addToHistory(cmd: String) {
+        val current = _history.value.toMutableList()
+        if (cmd.isNotBlank() && (current.isEmpty() || current.first() != cmd)) {
+            current.add(0, cmd)
+            if (current.size > 50) current.removeLast()
+            _history.value = current
+            SecurityManager.saveCommandHistory(appContext, current)
         }
     }
 } 
