@@ -23,12 +23,17 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage
 
+    private val _shouldLogout = MutableStateFlow(false)
+    val shouldLogout: StateFlow<Boolean> = _shouldLogout
+
     // Hardcoded backend URL for now
     private val api = Retrofit.Builder()
         .baseUrl("http://10.0.2.2:8000/")
         .addConverterFactory(GsonConverterFactory.create())
         .build()
         .create(ApiService::class.java)
+
+    private val appContext = app.applicationContext
 
     init {
         startAutoRefresh()
@@ -48,7 +53,7 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
         _errorMessage.value = null
         viewModelScope.launch {
             try {
-                val token = SecurityManager.getToken(getApplication())
+                val token = SecurityManager.getToken(appContext)
                 if (token == null) {
                     _errorMessage.value = "Not authenticated."
                     _isLoading.value = false
@@ -58,7 +63,17 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
                 if (response.isSuccessful && response.body() != null) {
                     _stats.value = response.body()
                 } else {
-                    _errorMessage.value = response.errorBody()?.string() ?: "Failed to fetch stats"
+                    when (response.code()) {
+                        401, 403 -> {
+                            // Token expired or invalid
+                            SecurityManager.clearToken(appContext)
+                            _shouldLogout.value = true
+                            _errorMessage.value = "Authentication error - please log in again"
+                        }
+                        else -> {
+                            _errorMessage.value = response.errorBody()?.string() ?: "Failed to fetch stats"
+                        }
+                    }
                 }
             } catch (e: Exception) {
                 _errorMessage.value = e.localizedMessage ?: "Network error"
@@ -66,5 +81,9 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
                 _isLoading.value = false
             }
         }
+    }
+
+    fun resetLogoutFlag() {
+        _shouldLogout.value = false
     }
 } 

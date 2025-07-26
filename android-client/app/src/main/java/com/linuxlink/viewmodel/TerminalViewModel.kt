@@ -29,6 +29,9 @@ class TerminalViewModel(app: Application) : AndroidViewModel(app) {
     private val _history = MutableStateFlow<List<String>>(emptyList())
     val history: StateFlow<List<String>> = _history
 
+    private val _shouldLogout = MutableStateFlow(false)
+    val shouldLogout: StateFlow<Boolean> = _shouldLogout
+
     // Hardcoded backend URL for now
     private val api = Retrofit.Builder()
         .baseUrl("http://10.0.2.2:8000/")
@@ -65,7 +68,17 @@ class TerminalViewModel(app: Application) : AndroidViewModel(app) {
                     _output.value += "\n$ $cmd\n${res.stdout}${if (res.stderr.isNotBlank()) "\n${res.stderr}" else ""}"
                     addToHistory(cmd)
                 } else {
-                    _output.value += "\n$ $cmd\n[Error: ${response.errorBody()?.string() ?: "Unknown error"}]"
+                    when (response.code()) {
+                        401, 403 -> {
+                            // Token expired or invalid
+                            SecurityManager.clearToken(appContext)
+                            _shouldLogout.value = true
+                            _output.value += "\n$ $cmd\n[Authentication error - please log in again]"
+                        }
+                        else -> {
+                            _output.value += "\n$ $cmd\n[Error: ${response.errorBody()?.string() ?: "Unknown error"}]"
+                        }
+                    }
                 }
             } catch (e: Exception) {
                 _output.value += "\n$ $cmd\n[Network error: ${e.localizedMessage}]"
@@ -88,5 +101,9 @@ class TerminalViewModel(app: Application) : AndroidViewModel(app) {
             _history.value = current
             SecurityManager.saveCommandHistory(appContext, current)
         }
+    }
+
+    fun resetLogoutFlag() {
+        _shouldLogout.value = false
     }
 } 
