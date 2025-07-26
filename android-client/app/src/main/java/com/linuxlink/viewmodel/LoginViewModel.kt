@@ -24,7 +24,7 @@ class LoginViewModel(app: Application) : AndroidViewModel(app) {
 
     // Hardcoded backend URL for now
     private val api = Retrofit.Builder()
-        .baseUrl("http://10.0.2.2:8000/") // Use your backend IP here
+        .baseUrl("http://192.168.1.100:8000/") // Update with your machine's IP
         .addConverterFactory(GsonConverterFactory.create())
         .build()
         .create(ApiService::class.java)
