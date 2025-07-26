@@ -3,14 +3,13 @@ package com.linuxlink.viewmodel
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.linuxlink.data.api.ApiClient
 import com.linuxlink.data.api.ApiService
 import com.linuxlink.data.api.LoginRequest
 import com.linuxlink.security.SecurityManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-import retrofit2.Retrofit
-import retrofit2.converter.gson.GsonConverterFactory
 
 class LoginViewModel(app: Application) : AndroidViewModel(app) {
     private val _isLoading = MutableStateFlow(false)
@@ -22,12 +21,7 @@ class LoginViewModel(app: Application) : AndroidViewModel(app) {
     private val _loginSuccess = MutableStateFlow(false)
     val loginSuccess: StateFlow<Boolean> = _loginSuccess
 
-    // Hardcoded backend URL for now
-    private val api = Retrofit.Builder()
-        .baseUrl("http://192.168.1.100:8000/") // Update with your machine's IP
-        .addConverterFactory(GsonConverterFactory.create())
-        .build()
-        .create(ApiService::class.java)
+    private val api: ApiService by lazy { ApiClient.create(getApplication()) }
 
     fun login(username: String, password: String) {
         _isLoading.value = true

@@ -18,6 +18,10 @@ android {
         vectorDrawables {
             useSupportLibrary = true
         }
+        
+        // Add buildConfig fields for configuration
+        buildConfigField("String", "DEFAULT_API_BASE_URL", "\"http://192.168.1.100:8000/\"")
+        buildConfigField("String", "API_VERSION", "\"v1\"")
     }
 
     buildTypes {
@@ -35,6 +39,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     composeOptions {
         kotlinCompilerExtensionVersion = "1.5.10"
