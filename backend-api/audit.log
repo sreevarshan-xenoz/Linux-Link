@@ -1,0 +1,5 @@
+2025-07-26 21:50:21,983 - root - INFO - Login successful for user: admin
+2025-07-26 21:50:41,238 - root - INFO - EXEC_ATTEMPT: user=admin, cmd='echo Hello from Linux-Link!', timeout=5
+2025-07-26 21:50:41,238 - root - WARNING - EXEC_BLOCKED: user=admin, cmd='echo Hello from Linux-Link!', reason='Command 'echo' not allowed in safe mode'
+2025-07-26 21:50:47,187 - root - INFO - EXEC_ATTEMPT: user=admin, cmd='ls', timeout=5
+2025-07-26 21:50:47,189 - root - INFO - EXEC_SUCCESS: user=admin, cmd='ls', rc=0
