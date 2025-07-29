@@ -430,6 +430,227 @@ class SecureFileManager:
                 })
         
         return allowed_info
+    
+    def upload_file(self, file_data: bytes, destination_path: str, filename: str, 
+                   overwrite: bool = False, chunk_size: int = 8192) -> Dict[str, Union[str, int, bool]]:
+        """
+        Upload file to specified destination with progress tracking.
+        
+        Args:
+            file_data: File content as bytes
+            destination_path: Directory path where file should be uploaded
+            filename: Name of the file to create
+            overwrite: Whether to overwrite existing files
+            chunk_size: Size of chunks for progress tracking
+            
+        Returns:
+            Dictionary with upload result information
+            
+        Raises:
+            PermissionError: If destination is not allowed or not writable
+            FileManagerError: If upload fails or file exists (when overwrite=False)
+        """
+        # Validate destination directory
+        validated_dest = self._validate_path(destination_path)
+        
+        # Ensure destination is a directory
+        if not os.path.isdir(validated_dest):
+            raise FileManagerError(
+                f"Destination is not a directory: {destination_path}",
+                "NOT_DIRECTORY",
+                {"path": validated_dest}
+            )
+        
+        # Construct full file path
+        full_file_path = os.path.join(validated_dest, filename)
+        
+        # Check if file already exists
+        if os.path.exists(full_file_path) and not overwrite:
+            raise FileManagerError(
+                f"File already exists: {filename}",
+                "FILE_EXISTS",
+                {"path": full_file_path, "filename": filename}
+            )
+        
+        # Validate filename (prevent path traversal in filename)
+        if os.path.sep in filename or '..' in filename:
+            raise FileManagerError(
+                f"Invalid filename: {filename}",
+                "INVALID_FILENAME",
+                {"filename": filename}
+            )
+        
+        # Check write permissions on destination directory
+        if not os.access(validated_dest, os.W_OK):
+            raise PermissionError(
+                f"No write permission for directory: {destination_path}",
+                "WRITE_PERMISSION_DENIED",
+                {"path": validated_dest}
+            )
+        
+        try:
+            total_size = len(file_data)
+            bytes_written = 0
+            
+            # Write file in chunks for progress tracking
+            with open(full_file_path, 'wb') as f:
+                for i in range(0, total_size, chunk_size):
+                    chunk = file_data[i:i + chunk_size]
+                    f.write(chunk)
+                    bytes_written += len(chunk)
+                    
+                    # Log progress for large files
+                    if total_size > 1024 * 1024:  # > 1MB
+                        progress = (bytes_written / total_size) * 100
+                        if bytes_written % (chunk_size * 10) == 0:  # Log every 10 chunks
+                            logger.info(f"Upload progress: {progress:.1f}% ({bytes_written}/{total_size} bytes)")
+            
+            # Get file info for response
+            file_item = self._create_file_item(full_file_path, filename)
+            
+            logger.info(f"Successfully uploaded file: {filename} ({total_size} bytes) to {validated_dest}")
+            
+            return {
+                "success": True,
+                "filename": filename,
+                "path": full_file_path,
+                "size": total_size,
+                "bytes_written": bytes_written,
+                "overwritten": os.path.exists(full_file_path) and overwrite,
+                "file_info": file_item.to_dict()
+            }
+        
+        except OSError as e:
+            # Clean up partial file on error
+            if os.path.exists(full_file_path):
+                try:
+                    os.remove(full_file_path)
+                except OSError:
+                    pass
+            
+            raise FileManagerError(
+                f"Failed to upload file: {filename}",
+                "UPLOAD_FAILED",
+                {"filename": filename, "path": full_file_path, "error": str(e)}
+            )
+    
+    def upload_multiple_files(self, files_data: List[Dict[str, Union[bytes, str]]], 
+                             destination_path: str, overwrite: bool = False) -> Dict[str, List[Dict]]:
+        """
+        Upload multiple files to specified destination.
+        
+        Args:
+            files_data: List of dictionaries with 'data' (bytes) and 'filename' (str)
+            destination_path: Directory path where files should be uploaded
+            overwrite: Whether to overwrite existing files
+            
+        Returns:
+            Dictionary with successful and failed uploads
+        """
+        successful_uploads = []
+        failed_uploads = []
+        
+        for file_info in files_data:
+            try:
+                filename = file_info['filename']
+                file_data = file_info['data']
+                
+                result = self.upload_file(file_data, destination_path, filename, overwrite)
+                successful_uploads.append(result)
+                
+            except Exception as e:
+                failed_uploads.append({
+                    "filename": file_info.get('filename', 'unknown'),
+                    "error": str(e),
+                    "error_code": getattr(e, 'error_code', 'UNKNOWN_ERROR')
+                })
+        
+        return {
+            "successful": successful_uploads,
+            "failed": failed_uploads,
+            "total_files": len(files_data),
+            "success_count": len(successful_uploads),
+            "failure_count": len(failed_uploads)
+        }
+    
+    def create_directory(self, path: str, directory_name: str, 
+                        permissions: int = 0o755) -> Dict[str, Union[str, bool]]:
+        """
+        Create a new directory at specified path.
+        
+        Args:
+            path: Parent directory path
+            directory_name: Name of directory to create
+            permissions: Directory permissions (Unix only)
+            
+        Returns:
+            Dictionary with creation result
+            
+        Raises:
+            PermissionError: If parent directory is not allowed or not writable
+            FileManagerError: If directory creation fails
+        """
+        # Validate parent directory
+        validated_parent = self._validate_path(path)
+        
+        # Ensure parent is a directory
+        if not os.path.isdir(validated_parent):
+            raise FileManagerError(
+                f"Parent path is not a directory: {path}",
+                "NOT_DIRECTORY",
+                {"path": validated_parent}
+            )
+        
+        # Validate directory name
+        if os.path.sep in directory_name or '..' in directory_name:
+            raise FileManagerError(
+                f"Invalid directory name: {directory_name}",
+                "INVALID_DIRECTORY_NAME",
+                {"directory_name": directory_name}
+            )
+        
+        # Construct full directory path
+        full_dir_path = os.path.join(validated_parent, directory_name)
+        
+        # Check if directory already exists
+        if os.path.exists(full_dir_path):
+            raise FileManagerError(
+                f"Directory already exists: {directory_name}",
+                "DIRECTORY_EXISTS",
+                {"path": full_dir_path, "directory_name": directory_name}
+            )
+        
+        # Check write permissions on parent directory
+        if not os.access(validated_parent, os.W_OK):
+            raise PermissionError(
+                f"No write permission for parent directory: {path}",
+                "WRITE_PERMISSION_DENIED",
+                {"path": validated_parent}
+            )
+        
+        try:
+            # Create directory
+            os.makedirs(full_dir_path, mode=permissions, exist_ok=False)
+            
+            # Get directory info for response
+            dir_item = self._create_file_item(full_dir_path, directory_name)
+            
+            logger.info(f"Successfully created directory: {directory_name} at {validated_parent}")
+            
+            return {
+                "success": True,
+                "directory_name": directory_name,
+                "path": full_dir_path,
+                "permissions": oct(permissions),
+                "directory_info": dir_item.to_dict()
+            }
+        
+        except OSError as e:
+            raise FileManagerError(
+                f"Failed to create directory: {directory_name}",
+                "DIRECTORY_CREATION_FAILED",
+                {"directory_name": directory_name, "path": full_dir_path, "error": str(e)}
+            )
 
 
 # Global file manager instance
