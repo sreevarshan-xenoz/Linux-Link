@@ -651,6 +651,336 @@ class SecureFileManager:
                 "DIRECTORY_CREATION_FAILED",
                 {"directory_name": directory_name, "path": full_dir_path, "error": str(e)}
             )
+    
+    def download_file(self, file_path: str, chunk_size: int = 8192) -> Dict[str, Union[str, int, bytes]]:
+        """
+        Download file with streaming support.
+        
+        Args:
+            file_path: Path to file to download
+            chunk_size: Size of chunks for streaming
+            
+        Returns:
+            Dictionary with file information and content
+            
+        Raises:
+            PermissionError: If file access is denied
+            PathNotFoundError: If file doesn't exist
+            FileManagerError: If file is not downloadable
+        """
+        validated_path = self._validate_path(file_path)
+        
+        # Ensure path is a file (not directory)
+        if not os.path.isfile(validated_path):
+            raise FileManagerError(
+                f"Path is not a file: {file_path}",
+                "NOT_FILE",
+                {"path": validated_path}
+            )
+        
+        # Check read permissions
+        if not os.access(validated_path, os.R_OK):
+            raise PermissionError(
+                f"No read permission for file: {file_path}",
+                "READ_PERMISSION_DENIED",
+                {"path": validated_path}
+            )
+        
+        try:
+            # Get file metadata
+            file_item = self._create_file_item(validated_path)
+            
+            # Read file content
+            with open(validated_path, 'rb') as f:
+                file_content = f.read()
+            
+            logger.info(f"Successfully prepared file for download: {file_path} ({len(file_content)} bytes)")
+            
+            return {
+                "success": True,
+                "filename": file_item.name,
+                "path": validated_path,
+                "size": file_item.size,
+                "content": file_content,
+                "mime_type": self._get_mime_type(validated_path),
+                "file_info": file_item.to_dict()
+            }
+        
+        except OSError as e:
+            raise FileManagerError(
+                f"Failed to read file: {file_path}",
+                "FILE_READ_ERROR",
+                {"path": validated_path, "error": str(e)}
+            )
+    
+    def download_file_stream(self, file_path: str, chunk_size: int = 8192):
+        """
+        Download file as a generator for streaming large files.
+        
+        Args:
+            file_path: Path to file to download
+            chunk_size: Size of chunks for streaming
+            
+        Yields:
+            File chunks as bytes
+            
+        Raises:
+            PermissionError: If file access is denied
+            PathNotFoundError: If file doesn't exist
+            FileManagerError: If file is not downloadable
+        """
+        validated_path = self._validate_path(file_path)
+        
+        # Ensure path is a file (not directory)
+        if not os.path.isfile(validated_path):
+            raise FileManagerError(
+                f"Path is not a file: {file_path}",
+                "NOT_FILE",
+                {"path": validated_path}
+            )
+        
+        # Check read permissions
+        if not os.access(validated_path, os.R_OK):
+            raise PermissionError(
+                f"No read permission for file: {file_path}",
+                "READ_PERMISSION_DENIED",
+                {"path": validated_path}
+            )
+        
+        try:
+            file_size = os.path.getsize(validated_path)
+            bytes_read = 0
+            
+            with open(validated_path, 'rb') as f:
+                while True:
+                    chunk = f.read(chunk_size)
+                    if not chunk:
+                        break
+                    
+                    bytes_read += len(chunk)
+                    
+                    # Log progress for large files
+                    if file_size > 1024 * 1024:  # > 1MB
+                        progress = (bytes_read / file_size) * 100
+                        if bytes_read % (chunk_size * 10) == 0:  # Log every 10 chunks
+                            logger.info(f"Download progress: {progress:.1f}% ({bytes_read}/{file_size} bytes)")
+                    
+                    yield chunk
+            
+            logger.info(f"Successfully streamed file: {file_path} ({bytes_read} bytes)")
+        
+        except OSError as e:
+            raise FileManagerError(
+                f"Failed to stream file: {file_path}",
+                "FILE_STREAM_ERROR",
+                {"path": validated_path, "error": str(e)}
+            )
+    
+    def download_multiple_files(self, file_paths: List[str], 
+                               as_archive: bool = False) -> Dict[str, Union[List, bytes, str]]:
+        """
+        Download multiple files, optionally as a compressed archive.
+        
+        Args:
+            file_paths: List of file paths to download
+            as_archive: Whether to return files as a compressed archive
+            
+        Returns:
+            Dictionary with download results or archive data
+        """
+        successful_downloads = []
+        failed_downloads = []
+        
+        for file_path in file_paths:
+            try:
+                result = self.download_file(file_path)
+                successful_downloads.append(result)
+                
+            except Exception as e:
+                failed_downloads.append({
+                    "path": file_path,
+                    "error": str(e),
+                    "error_code": getattr(e, 'error_code', 'UNKNOWN_ERROR')
+                })
+        
+        if as_archive and successful_downloads:
+            # Create archive (requires additional import)
+            try:
+                import zipfile
+                import io
+                
+                archive_buffer = io.BytesIO()
+                
+                with zipfile.ZipFile(archive_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                    for download in successful_downloads:
+                        zip_file.writestr(download['filename'], download['content'])
+                
+                archive_data = archive_buffer.getvalue()
+                archive_buffer.close()
+                
+                return {
+                    "success": True,
+                    "archive": True,
+                    "archive_data": archive_data,
+                    "archive_size": len(archive_data),
+                    "files_included": len(successful_downloads),
+                    "failed_files": failed_downloads
+                }
+            
+            except ImportError:
+                logger.warning("zipfile module not available, returning individual files")
+                as_archive = False
+            except Exception as e:
+                logger.error(f"Failed to create archive: {e}")
+                as_archive = False
+        
+        if not as_archive:
+            return {
+                "success": True,
+                "archive": False,
+                "files": successful_downloads,
+                "failed": failed_downloads,
+                "total_files": len(file_paths),
+                "success_count": len(successful_downloads),
+                "failure_count": len(failed_downloads)
+            }
+    
+    def get_file_content_preview(self, file_path: str, max_size: int = 1024, 
+                                encoding: str = 'utf-8') -> Dict[str, Union[str, bool, int]]:
+        """
+        Get a preview of file content for text files.
+        
+        Args:
+            file_path: Path to file
+            max_size: Maximum bytes to read for preview
+            encoding: Text encoding to use
+            
+        Returns:
+            Dictionary with preview information
+        """
+        validated_path = self._validate_path(file_path)
+        
+        # Ensure path is a file
+        if not os.path.isfile(validated_path):
+            raise FileManagerError(
+                f"Path is not a file: {file_path}",
+                "NOT_FILE",
+                {"path": validated_path}
+            )
+        
+        try:
+            file_size = os.path.getsize(validated_path)
+            is_text = self._is_text_file(validated_path)
+            
+            preview_content = ""
+            is_truncated = False
+            
+            if is_text and file_size > 0:
+                with open(validated_path, 'r', encoding=encoding, errors='ignore') as f:
+                    preview_content = f.read(max_size)
+                    
+                    # Check if file was truncated
+                    if len(preview_content) == max_size and file_size > max_size:
+                        is_truncated = True
+            
+            return {
+                "success": True,
+                "filename": os.path.basename(validated_path),
+                "file_size": file_size,
+                "is_text": is_text,
+                "preview": preview_content,
+                "is_truncated": is_truncated,
+                "encoding": encoding,
+                "mime_type": self._get_mime_type(validated_path)
+            }
+        
+        except OSError as e:
+            raise FileManagerError(
+                f"Failed to preview file: {file_path}",
+                "FILE_PREVIEW_ERROR",
+                {"path": validated_path, "error": str(e)}
+            )
+    
+    def _get_mime_type(self, file_path: str) -> str:
+        """
+        Get MIME type of file based on extension.
+        
+        Args:
+            file_path: Path to file
+            
+        Returns:
+            MIME type string
+        """
+        try:
+            import mimetypes
+            mime_type, _ = mimetypes.guess_type(file_path)
+            return mime_type or "application/octet-stream"
+        except ImportError:
+            # Fallback to basic extension mapping
+            ext = os.path.splitext(file_path)[1].lower()
+            mime_map = {
+                '.txt': 'text/plain',
+                '.html': 'text/html',
+                '.css': 'text/css',
+                '.js': 'application/javascript',
+                '.json': 'application/json',
+                '.xml': 'application/xml',
+                '.pdf': 'application/pdf',
+                '.jpg': 'image/jpeg',
+                '.jpeg': 'image/jpeg',
+                '.png': 'image/png',
+                '.gif': 'image/gif',
+                '.mp3': 'audio/mpeg',
+                '.mp4': 'video/mp4',
+                '.zip': 'application/zip'
+            }
+            return mime_map.get(ext, "application/octet-stream")
+    
+    def _is_text_file(self, file_path: str) -> bool:
+        """
+        Check if file is likely a text file.
+        
+        Args:
+            file_path: Path to file
+            
+        Returns:
+            True if file appears to be text
+        """
+        try:
+            # Check by extension first
+            ext = os.path.splitext(file_path)[1].lower()
+            text_extensions = {
+                '.txt', '.md', '.py', '.js', '.html', '.css', '.json', '.xml',
+                '.yml', '.yaml', '.ini', '.cfg', '.conf', '.log', '.sh', '.bat',
+                '.c', '.cpp', '.h', '.java', '.php', '.rb', '.go', '.rs'
+            }
+            
+            if ext in text_extensions:
+                return True
+            
+            # Check file content (read first few bytes)
+            with open(file_path, 'rb') as f:
+                chunk = f.read(512)
+                if not chunk:
+                    return True  # Empty file
+                
+                # Check for null bytes (binary indicator)
+                if b'\x00' in chunk:
+                    return False
+                
+                # Try to decode as text
+                try:
+                    chunk.decode('utf-8')
+                    return True
+                except UnicodeDecodeError:
+                    try:
+                        chunk.decode('latin-1')
+                        return True
+                    except UnicodeDecodeError:
+                        return False
+        
+        except OSError:
+            return False
 
 
 # Global file manager instance
