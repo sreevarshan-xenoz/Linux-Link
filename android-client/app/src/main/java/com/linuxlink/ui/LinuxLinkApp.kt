@@ -8,6 +8,7 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Monitor
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -89,7 +90,7 @@ fun LinuxLinkApp(app: Application? = null) {
                         NavItem("Terminal", Icons.Default.Computer, "terminal"),
                         NavItem("Monitor", Icons.Default.Monitor, "monitor"),
                         NavItem("Files", Icons.Default.Folder, "files"),
-                        NavItem("Voice", Icons.Default.Mic, "voice")
+                        NavItem("Settings", Icons.Default.Settings, "settings")
                     )
                     items.forEach { item ->
                         NavigationBarItem(
@@ -110,7 +111,7 @@ fun LinuxLinkApp(app: Application? = null) {
                 composable("terminal") { TerminalScreen() }
                 composable("monitor") { MonitorScreen() }
                 composable("files") { FilesScreen() }
-                composable("voice") { VoiceScreen() }
+                composable("settings") { SettingsScreen() }
             }
         }
     }

@@ -1,10 +1,16 @@
 package com.linuxlink.data.api
 
+import android.content.Context
+import com.linuxlink.config.AppConfig
+import okhttp3.OkHttpClient
 import retrofit2.Response
+import retrofit2.Retrofit
+import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.Header
 import retrofit2.http.POST
+import java.util.concurrent.TimeUnit
 
 // Data models
 
@@ -41,4 +47,25 @@ interface ApiService {
     suspend fun getQuickStatus(
         @Header("Authorization") token: String
     ): Response<QuickStatus>
-} 
+}
+
+object ApiClient {
+    fun create(context: Context): ApiService {
+        val baseUrl = AppConfig.getApiBaseUrl(context)
+        val connectionTimeout = AppConfig.getConnectionTimeout(context)
+        val readTimeout = AppConfig.getReadTimeout(context)
+        
+        val okHttpClient = OkHttpClient.Builder()
+            .connectTimeout(connectionTimeout, TimeUnit.SECONDS)
+            .readTimeout(readTimeout, TimeUnit.SECONDS)
+            .writeTimeout(readTimeout, TimeUnit.SECONDS)
+            .build()
+        
+        return Retrofit.Builder()
+            .baseUrl(baseUrl)
+            .client(okHttpClient)
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
+            .create(ApiService::class.java)
+    }
+}
