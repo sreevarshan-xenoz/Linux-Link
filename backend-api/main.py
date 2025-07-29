@@ -8,6 +8,7 @@ import os
 import jwt
 from security import SecureCommandExecutor
 from monitoring import monitor
+from file_manager import get_file_manager, FileManagerError, PermissionError as FilePermissionError
 
 # Enhanced logging configuration
 logging.basicConfig(
@@ -46,6 +47,55 @@ class CommandRequest(BaseModel):
     cmd: str
     timeout: int = 30
 
+# File Management Models
+class BrowseRequest(BaseModel):
+    path: str
+    show_hidden: bool = False
+    sort_by: str = "name"
+    reverse: bool = False
+
+class UploadRequest(BaseModel):
+    destination_path: str
+    filename: str
+    overwrite: bool = False
+
+class FileOperationRequest(BaseModel):
+    file_path: str
+
+class RenameRequest(BaseModel):
+    old_path: str
+    new_name: str
+
+class CopyRequest(BaseModel):
+    source_path: str
+    destination_path: str
+    new_name: str = None
+    overwrite: bool = False
+
+class MoveRequest(BaseModel):
+    source_path: str
+    destination_path: str
+    new_name: str = None
+    overwrite: bool = False
+
+class DeleteRequest(BaseModel):
+    file_path: str
+    force: bool = False
+
+class CreateDirectoryRequest(BaseModel):
+    path: str
+    directory_name: str
+    permissions: int = 0o755
+
+class MultipleFilesRequest(BaseModel):
+    file_paths: list[str]
+    as_archive: bool = False
+
+class PreviewRequest(BaseModel):
+    file_path: str
+    max_size: int = 1024
+    encoding: str = "utf-8"
+
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     try:
         payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=["HS256"])
@@ -54,6 +104,276 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
         raise HTTPException(status_code=401, detail="Token expired")
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
+
+# File Management Endpoints
+
+@app.post("/files/browse")
+async def browse_directory(request: BrowseRequest, user=Depends(verify_token)):
+    """Browse directory contents with security checks."""
+    try:
+        fm = get_file_manager()
+        items = fm.browse_directory(
+            path=request.path,
+            show_hidden=request.show_hidden,
+            sort_by=request.sort_by,
+            reverse=request.reverse
+        )
+        
+        # Convert FileItem objects to dictionaries
+        items_dict = [item.to_dict() for item in items]
+        
+        logging.info(f"BROWSE_SUCCESS: user={user['sub']}, path='{request.path}', items={len(items_dict)}")
+        return {
+            "success": True,
+            "path": request.path,
+            "items": items_dict,
+            "count": len(items_dict)
+        }
+    
+    except (FileManagerError, FilePermissionError) as e:
+        logging.warning(f"BROWSE_ERROR: user={user['sub']}, path='{request.path}', error='{e.message}'")
+        raise HTTPException(status_code=400, detail={"error": e.message, "code": e.error_code})
+    except Exception as e:
+        logging.error(f"BROWSE_CRITICAL: user={user['sub']}, path='{request.path}', error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to browse directory")
+
+@app.post("/files/upload")
+async def upload_file(request: UploadRequest, user=Depends(verify_token)):
+    """Upload file to specified destination."""
+    # Note: In a real implementation, this would handle multipart file upload
+    # For now, this is a placeholder that would work with base64 encoded data
+    try:
+        fm = get_file_manager()
+        
+        # This is a simplified version - in practice, you'd handle multipart upload
+        # For demonstration, we'll create a simple text file
+        file_data = b"Uploaded file content placeholder"
+        
+        result = fm.upload_file(
+            file_data=file_data,
+            destination_path=request.destination_path,
+            filename=request.filename,
+            overwrite=request.overwrite
+        )
+        
+        logging.info(f"UPLOAD_SUCCESS: user={user['sub']}, file='{request.filename}', size={result['size']}")
+        return result
+    
+    except (FileManagerError, FilePermissionError) as e:
+        logging.warning(f"UPLOAD_ERROR: user={user['sub']}, file='{request.filename}', error='{e.message}'")
+        raise HTTPException(status_code=400, detail={"error": e.message, "code": e.error_code})
+    except Exception as e:
+        logging.error(f"UPLOAD_CRITICAL: user={user['sub']}, file='{request.filename}', error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to upload file")
+
+@app.get("/files/download/{file_path:path}")
+async def download_file(file_path: str, user=Depends(verify_token)):
+    """Download file from specified path."""
+    try:
+        fm = get_file_manager()
+        result = fm.download_file(file_path)
+        
+        logging.info(f"DOWNLOAD_SUCCESS: user={user['sub']}, file='{file_path}', size={result['size']}")
+        
+        # In a real implementation, you'd return a streaming response
+        # For now, return file info and base64 encoded content
+        import base64
+        return {
+            "success": True,
+            "filename": result['filename'],
+            "size": result['size'],
+            "mime_type": result['mime_type'],
+            "content_base64": base64.b64encode(result['content']).decode('utf-8'),
+            "file_info": result['file_info']
+        }
+    
+    except (FileManagerError, FilePermissionError) as e:
+        logging.warning(f"DOWNLOAD_ERROR: user={user['sub']}, file='{file_path}', error='{e.message}'")
+        raise HTTPException(status_code=400, detail={"error": e.message, "code": e.error_code})
+    except Exception as e:
+        logging.error(f"DOWNLOAD_CRITICAL: user={user['sub']}, file='{file_path}', error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to download file")
+
+@app.post("/files/operations/rename")
+async def rename_file(request: RenameRequest, user=Depends(verify_token)):
+    """Rename a file or directory."""
+    try:
+        fm = get_file_manager()
+        result = fm.rename_file(request.old_path, request.new_name)
+        
+        logging.info(f"RENAME_SUCCESS: user={user['sub']}, old='{request.old_path}', new='{request.new_name}'")
+        return result
+    
+    except (FileManagerError, FilePermissionError) as e:
+        logging.warning(f"RENAME_ERROR: user={user['sub']}, old='{request.old_path}', error='{e.message}'")
+        raise HTTPException(status_code=400, detail={"error": e.message, "code": e.error_code})
+    except Exception as e:
+        logging.error(f"RENAME_CRITICAL: user={user['sub']}, old='{request.old_path}', error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to rename file")
+
+@app.post("/files/operations/copy")
+async def copy_file(request: CopyRequest, user=Depends(verify_token)):
+    """Copy a file or directory."""
+    try:
+        fm = get_file_manager()
+        result = fm.copy_file(
+            source_path=request.source_path,
+            destination_path=request.destination_path,
+            new_name=request.new_name,
+            overwrite=request.overwrite
+        )
+        
+        logging.info(f"COPY_SUCCESS: user={user['sub']}, src='{request.source_path}', dst='{request.destination_path}'")
+        return result
+    
+    except (FileManagerError, FilePermissionError) as e:
+        logging.warning(f"COPY_ERROR: user={user['sub']}, src='{request.source_path}', error='{e.message}'")
+        raise HTTPException(status_code=400, detail={"error": e.message, "code": e.error_code})
+    except Exception as e:
+        logging.error(f"COPY_CRITICAL: user={user['sub']}, src='{request.source_path}', error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to copy file")
+
+@app.post("/files/operations/move")
+async def move_file(request: MoveRequest, user=Depends(verify_token)):
+    """Move a file or directory."""
+    try:
+        fm = get_file_manager()
+        result = fm.move_file(
+            source_path=request.source_path,
+            destination_path=request.destination_path,
+            new_name=request.new_name,
+            overwrite=request.overwrite
+        )
+        
+        logging.info(f"MOVE_SUCCESS: user={user['sub']}, src='{request.source_path}', dst='{request.destination_path}'")
+        return result
+    
+    except (FileManagerError, FilePermissionError) as e:
+        logging.warning(f"MOVE_ERROR: user={user['sub']}, src='{request.source_path}', error='{e.message}'")
+        raise HTTPException(status_code=400, detail={"error": e.message, "code": e.error_code})
+    except Exception as e:
+        logging.error(f"MOVE_CRITICAL: user={user['sub']}, src='{request.source_path}', error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to move file")
+
+@app.post("/files/operations/delete")
+async def delete_file(request: DeleteRequest, user=Depends(verify_token)):
+    """Delete a file or directory."""
+    try:
+        fm = get_file_manager()
+        result = fm.delete_file(request.file_path, force=request.force)
+        
+        logging.info(f"DELETE_SUCCESS: user={user['sub']}, path='{request.file_path}', force={request.force}")
+        return result
+    
+    except (FileManagerError, FilePermissionError) as e:
+        logging.warning(f"DELETE_ERROR: user={user['sub']}, path='{request.file_path}', error='{e.message}'")
+        raise HTTPException(status_code=400, detail={"error": e.message, "code": e.error_code})
+    except Exception as e:
+        logging.error(f"DELETE_CRITICAL: user={user['sub']}, path='{request.file_path}', error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to delete file")
+
+@app.post("/files/operations/create-directory")
+async def create_directory(request: CreateDirectoryRequest, user=Depends(verify_token)):
+    """Create a new directory."""
+    try:
+        fm = get_file_manager()
+        result = fm.create_directory(
+            path=request.path,
+            directory_name=request.directory_name,
+            permissions=request.permissions
+        )
+        
+        logging.info(f"MKDIR_SUCCESS: user={user['sub']}, path='{request.path}', name='{request.directory_name}'")
+        return result
+    
+    except (FileManagerError, FilePermissionError) as e:
+        logging.warning(f"MKDIR_ERROR: user={user['sub']}, path='{request.path}', error='{e.message}'")
+        raise HTTPException(status_code=400, detail={"error": e.message, "code": e.error_code})
+    except Exception as e:
+        logging.error(f"MKDIR_CRITICAL: user={user['sub']}, path='{request.path}', error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to create directory")
+
+@app.post("/files/download-multiple")
+async def download_multiple_files(request: MultipleFilesRequest, user=Depends(verify_token)):
+    """Download multiple files, optionally as archive."""
+    try:
+        fm = get_file_manager()
+        result = fm.download_multiple_files(
+            file_paths=request.file_paths,
+            as_archive=request.as_archive
+        )
+        
+        if result.get('archive'):
+            import base64
+            result['archive_data_base64'] = base64.b64encode(result['archive_data']).decode('utf-8')
+            del result['archive_data']  # Remove binary data
+        
+        logging.info(f"MULTI_DOWNLOAD_SUCCESS: user={user['sub']}, files={len(request.file_paths)}, archive={request.as_archive}")
+        return result
+    
+    except (FileManagerError, FilePermissionError) as e:
+        logging.warning(f"MULTI_DOWNLOAD_ERROR: user={user['sub']}, error='{e.message}'")
+        raise HTTPException(status_code=400, detail={"error": e.message, "code": e.error_code})
+    except Exception as e:
+        logging.error(f"MULTI_DOWNLOAD_CRITICAL: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to download multiple files")
+
+@app.post("/files/preview")
+async def preview_file(request: PreviewRequest, user=Depends(verify_token)):
+    """Get file content preview."""
+    try:
+        fm = get_file_manager()
+        result = fm.get_file_content_preview(
+            file_path=request.file_path,
+            max_size=request.max_size,
+            encoding=request.encoding
+        )
+        
+        logging.info(f"PREVIEW_SUCCESS: user={user['sub']}, file='{request.file_path}', size={result['file_size']}")
+        return result
+    
+    except (FileManagerError, FilePermissionError) as e:
+        logging.warning(f"PREVIEW_ERROR: user={user['sub']}, file='{request.file_path}', error='{e.message}'")
+        raise HTTPException(status_code=400, detail={"error": e.message, "code": e.error_code})
+    except Exception as e:
+        logging.error(f"PREVIEW_CRITICAL: user={user['sub']}, file='{request.file_path}', error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to preview file")
+
+@app.get("/files/properties/{file_path:path}")
+async def get_file_properties(file_path: str, user=Depends(verify_token)):
+    """Get detailed file properties."""
+    try:
+        fm = get_file_manager()
+        result = fm.get_file_properties(file_path)
+        
+        logging.info(f"PROPERTIES_SUCCESS: user={user['sub']}, file='{file_path}'")
+        return result
+    
+    except (FileManagerError, FilePermissionError) as e:
+        logging.warning(f"PROPERTIES_ERROR: user={user['sub']}, file='{file_path}', error='{e.message}'")
+        raise HTTPException(status_code=400, detail={"error": e.message, "code": e.error_code})
+    except Exception as e:
+        logging.error(f"PROPERTIES_CRITICAL: user={user['sub']}, file='{file_path}', error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get file properties")
+
+@app.get("/files/allowed-paths")
+async def get_allowed_paths(user=Depends(verify_token)):
+    """Get list of allowed root paths for browsing."""
+    try:
+        fm = get_file_manager()
+        result = fm.get_allowed_paths()
+        
+        logging.info(f"ALLOWED_PATHS_SUCCESS: user={user['sub']}, paths={len(result)}")
+        return {
+            "success": True,
+            "allowed_paths": result
+        }
+    
+    except Exception as e:
+        logging.error(f"ALLOWED_PATHS_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get allowed paths")
+
+# Authentication Endpoints
 
 @app.post("/auth/login")
 async def login(request: LoginRequest):
