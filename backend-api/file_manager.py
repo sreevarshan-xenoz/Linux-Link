@@ -981,6 +981,440 @@ class SecureFileManager:
         
         except OSError:
             return False
+    
+    def delete_file(self, file_path: str, force: bool = False) -> Dict[str, Union[str, bool]]:
+        """
+        Delete a file or directory.
+        
+        Args:
+            file_path: Path to file or directory to delete
+            force: Force deletion of directories with contents
+            
+        Returns:
+            Dictionary with deletion result
+            
+        Raises:
+            PermissionError: If deletion is not allowed
+            FileManagerError: If deletion fails
+        """
+        validated_path = self._validate_path(file_path)
+        
+        # Check if file/directory exists
+        if not os.path.exists(validated_path):
+            raise PathNotFoundError(
+                f"Path not found: {file_path}",
+                "PATH_NOT_FOUND",
+                {"path": validated_path}
+            )
+        
+        # Get file info before deletion
+        file_item = self._create_file_item(validated_path)
+        is_directory = file_item.type == FileType.DIRECTORY
+        
+        # Check write permissions on parent directory
+        parent_dir = os.path.dirname(validated_path)
+        if not os.access(parent_dir, os.W_OK):
+            raise PermissionError(
+                f"No write permission for parent directory: {parent_dir}",
+                "WRITE_PERMISSION_DENIED",
+                {"path": parent_dir}
+            )
+        
+        try:
+            if is_directory:
+                if force:
+                    import shutil
+                    shutil.rmtree(validated_path)
+                else:
+                    # Only delete empty directories
+                    os.rmdir(validated_path)
+            else:
+                os.remove(validated_path)
+            
+            logger.info(f"Successfully deleted: {file_path}")
+            
+            return {
+                "success": True,
+                "path": validated_path,
+                "filename": file_item.name,
+                "was_directory": is_directory,
+                "forced": force and is_directory
+            }
+        
+        except OSError as e:
+            error_msg = f"Failed to delete: {file_path}"
+            if is_directory and not force and "Directory not empty" in str(e):
+                error_msg += " (directory not empty, use force=True)"
+            
+            raise FileManagerError(
+                error_msg,
+                "DELETE_FAILED",
+                {"path": validated_path, "is_directory": is_directory, "error": str(e)}
+            )
+    
+    def rename_file(self, old_path: str, new_name: str) -> Dict[str, Union[str, bool]]:
+        """
+        Rename a file or directory.
+        
+        Args:
+            old_path: Current path to file/directory
+            new_name: New name (not full path)
+            
+        Returns:
+            Dictionary with rename result
+            
+        Raises:
+            PermissionError: If rename is not allowed
+            FileManagerError: If rename fails
+        """
+        validated_old_path = self._validate_path(old_path)
+        
+        # Validate new name (prevent path traversal)
+        if os.path.sep in new_name or '..' in new_name:
+            raise FileManagerError(
+                f"Invalid new name: {new_name}",
+                "INVALID_NAME",
+                {"new_name": new_name}
+            )
+        
+        # Construct new path
+        parent_dir = os.path.dirname(validated_old_path)
+        new_path = os.path.join(parent_dir, new_name)
+        
+        # Ensure new path is also allowed
+        if not self._is_path_allowed(new_path):
+            raise PermissionError(
+                f"New path not allowed: {new_path}",
+                "PATH_NOT_ALLOWED",
+                {"new_path": new_path}
+            )
+        
+        # Check if new name already exists
+        if os.path.exists(new_path):
+            raise FileManagerError(
+                f"Name already exists: {new_name}",
+                "NAME_EXISTS",
+                {"new_name": new_name, "new_path": new_path}
+            )
+        
+        # Check write permissions on parent directory
+        if not os.access(parent_dir, os.W_OK):
+            raise PermissionError(
+                f"No write permission for directory: {parent_dir}",
+                "WRITE_PERMISSION_DENIED",
+                {"path": parent_dir}
+            )
+        
+        try:
+            # Get old file info
+            old_file_item = self._create_file_item(validated_old_path)
+            
+            # Perform rename
+            os.rename(validated_old_path, new_path)
+            
+            # Get new file info
+            new_file_item = self._create_file_item(new_path)
+            
+            logger.info(f"Successfully renamed: {old_path} -> {new_name}")
+            
+            return {
+                "success": True,
+                "old_path": validated_old_path,
+                "new_path": new_path,
+                "old_name": old_file_item.name,
+                "new_name": new_name,
+                "file_type": old_file_item.type.value,
+                "new_file_info": new_file_item.to_dict()
+            }
+        
+        except OSError as e:
+            raise FileManagerError(
+                f"Failed to rename: {old_path} -> {new_name}",
+                "RENAME_FAILED",
+                {"old_path": validated_old_path, "new_name": new_name, "error": str(e)}
+            )
+    
+    def copy_file(self, source_path: str, destination_path: str, 
+                 new_name: str = None, overwrite: bool = False) -> Dict[str, Union[str, bool]]:
+        """
+        Copy a file or directory to a new location.
+        
+        Args:
+            source_path: Path to source file/directory
+            destination_path: Destination directory path
+            new_name: New name for copied item (optional)
+            overwrite: Whether to overwrite existing files
+            
+        Returns:
+            Dictionary with copy result
+            
+        Raises:
+            PermissionError: If copy is not allowed
+            FileManagerError: If copy fails
+        """
+        validated_source = self._validate_path(source_path)
+        validated_dest = self._validate_path(destination_path)
+        
+        # Ensure destination is a directory
+        if not os.path.isdir(validated_dest):
+            raise FileManagerError(
+                f"Destination is not a directory: {destination_path}",
+                "NOT_DIRECTORY",
+                {"path": validated_dest}
+            )
+        
+        # Get source file info
+        source_item = self._create_file_item(validated_source)
+        
+        # Determine final name
+        final_name = new_name or source_item.name
+        
+        # Validate final name
+        if os.path.sep in final_name or '..' in final_name:
+            raise FileManagerError(
+                f"Invalid name: {final_name}",
+                "INVALID_NAME",
+                {"name": final_name}
+            )
+        
+        # Construct final path
+        final_path = os.path.join(validated_dest, final_name)
+        
+        # Ensure final path is allowed
+        if not self._is_path_allowed(final_path):
+            raise PermissionError(
+                f"Destination path not allowed: {final_path}",
+                "PATH_NOT_ALLOWED",
+                {"path": final_path}
+            )
+        
+        # Check if destination exists
+        if os.path.exists(final_path) and not overwrite:
+            raise FileManagerError(
+                f"Destination already exists: {final_name}",
+                "DESTINATION_EXISTS",
+                {"path": final_path, "name": final_name}
+            )
+        
+        # Check write permissions on destination directory
+        if not os.access(validated_dest, os.W_OK):
+            raise PermissionError(
+                f"No write permission for destination: {destination_path}",
+                "WRITE_PERMISSION_DENIED",
+                {"path": validated_dest}
+            )
+        
+        try:
+            import shutil
+            
+            if source_item.type == FileType.DIRECTORY:
+                if os.path.exists(final_path):
+                    shutil.rmtree(final_path)
+                shutil.copytree(validated_source, final_path)
+            else:
+                shutil.copy2(validated_source, final_path)
+            
+            # Get copied file info
+            copied_item = self._create_file_item(final_path)
+            
+            logger.info(f"Successfully copied: {source_path} -> {final_path}")
+            
+            return {
+                "success": True,
+                "source_path": validated_source,
+                "destination_path": final_path,
+                "source_name": source_item.name,
+                "destination_name": final_name,
+                "file_type": source_item.type.value,
+                "overwritten": os.path.exists(final_path) and overwrite,
+                "copied_file_info": copied_item.to_dict()
+            }
+        
+        except OSError as e:
+            raise FileManagerError(
+                f"Failed to copy: {source_path} -> {destination_path}",
+                "COPY_FAILED",
+                {"source": validated_source, "destination": final_path, "error": str(e)}
+            )
+    
+    def move_file(self, source_path: str, destination_path: str, 
+                 new_name: str = None, overwrite: bool = False) -> Dict[str, Union[str, bool]]:
+        """
+        Move a file or directory to a new location.
+        
+        Args:
+            source_path: Path to source file/directory
+            destination_path: Destination directory path
+            new_name: New name for moved item (optional)
+            overwrite: Whether to overwrite existing files
+            
+        Returns:
+            Dictionary with move result
+            
+        Raises:
+            PermissionError: If move is not allowed
+            FileManagerError: If move fails
+        """
+        validated_source = self._validate_path(source_path)
+        validated_dest = self._validate_path(destination_path)
+        
+        # Ensure destination is a directory
+        if not os.path.isdir(validated_dest):
+            raise FileManagerError(
+                f"Destination is not a directory: {destination_path}",
+                "NOT_DIRECTORY",
+                {"path": validated_dest}
+            )
+        
+        # Get source file info
+        source_item = self._create_file_item(validated_source)
+        
+        # Determine final name
+        final_name = new_name or source_item.name
+        
+        # Validate final name
+        if os.path.sep in final_name or '..' in final_name:
+            raise FileManagerError(
+                f"Invalid name: {final_name}",
+                "INVALID_NAME",
+                {"name": final_name}
+            )
+        
+        # Construct final path
+        final_path = os.path.join(validated_dest, final_name)
+        
+        # Ensure final path is allowed
+        if not self._is_path_allowed(final_path):
+            raise PermissionError(
+                f"Destination path not allowed: {final_path}",
+                "PATH_NOT_ALLOWED",
+                {"path": final_path}
+            )
+        
+        # Check if destination exists
+        if os.path.exists(final_path) and not overwrite:
+            raise FileManagerError(
+                f"Destination already exists: {final_name}",
+                "DESTINATION_EXISTS",
+                {"path": final_path, "name": final_name}
+            )
+        
+        # Check write permissions on both directories
+        source_parent = os.path.dirname(validated_source)
+        if not os.access(source_parent, os.W_OK):
+            raise PermissionError(
+                f"No write permission for source directory: {source_parent}",
+                "WRITE_PERMISSION_DENIED",
+                {"path": source_parent}
+            )
+        
+        if not os.access(validated_dest, os.W_OK):
+            raise PermissionError(
+                f"No write permission for destination: {destination_path}",
+                "WRITE_PERMISSION_DENIED",
+                {"path": validated_dest}
+            )
+        
+        try:
+            import shutil
+            
+            # Remove destination if overwriting
+            if os.path.exists(final_path) and overwrite:
+                if os.path.isdir(final_path):
+                    shutil.rmtree(final_path)
+                else:
+                    os.remove(final_path)
+            
+            # Perform move
+            shutil.move(validated_source, final_path)
+            
+            # Get moved file info
+            moved_item = self._create_file_item(final_path)
+            
+            logger.info(f"Successfully moved: {source_path} -> {final_path}")
+            
+            return {
+                "success": True,
+                "source_path": validated_source,
+                "destination_path": final_path,
+                "source_name": source_item.name,
+                "destination_name": final_name,
+                "file_type": source_item.type.value,
+                "overwritten": overwrite and os.path.exists(final_path),
+                "moved_file_info": moved_item.to_dict()
+            }
+        
+        except OSError as e:
+            raise FileManagerError(
+                f"Failed to move: {source_path} -> {destination_path}",
+                "MOVE_FAILED",
+                {"source": validated_source, "destination": final_path, "error": str(e)}
+            )
+    
+    def get_file_properties(self, file_path: str) -> Dict[str, Union[str, int, bool, Dict]]:
+        """
+        Get detailed properties of a file or directory.
+        
+        Args:
+            file_path: Path to file or directory
+            
+        Returns:
+            Dictionary with detailed file properties
+        """
+        validated_path = self._validate_path(file_path)
+        file_item = self._create_file_item(validated_path)
+        
+        try:
+            file_stat = os.stat(validated_path)
+            
+            properties = {
+                "basic_info": file_item.to_dict(),
+                "permissions": {
+                    "octal": oct(file_stat.st_mode)[-3:],
+                    "readable": os.access(validated_path, os.R_OK),
+                    "writable": os.access(validated_path, os.W_OK),
+                    "executable": os.access(validated_path, os.X_OK)
+                },
+                "timestamps": {
+                    "created": datetime.fromtimestamp(file_stat.st_ctime).isoformat(),
+                    "modified": file_item.modified.isoformat(),
+                    "accessed": datetime.fromtimestamp(file_stat.st_atime).isoformat()
+                },
+                "system_info": {
+                    "inode": file_stat.st_ino if hasattr(file_stat, 'st_ino') else None,
+                    "device": file_stat.st_dev if hasattr(file_stat, 'st_dev') else None,
+                    "links": file_stat.st_nlink if hasattr(file_stat, 'st_nlink') else None
+                }
+            }
+            
+            # Add directory-specific info
+            if file_item.type == FileType.DIRECTORY:
+                try:
+                    contents = os.listdir(validated_path)
+                    properties["directory_info"] = {
+                        "item_count": len(contents),
+                        "has_subdirectories": any(os.path.isdir(os.path.join(validated_path, item)) for item in contents),
+                        "has_files": any(os.path.isfile(os.path.join(validated_path, item)) for item in contents)
+                    }
+                except PermissionError:
+                    properties["directory_info"] = {"accessible": False}
+            
+            # Add file-specific info
+            elif file_item.type == FileType.FILE:
+                properties["file_info"] = {
+                    "mime_type": self._get_mime_type(validated_path),
+                    "is_text": self._is_text_file(validated_path),
+                    "extension": os.path.splitext(validated_path)[1].lower()
+                }
+            
+            return properties
+        
+        except OSError as e:
+            raise FileManagerError(
+                f"Failed to get properties: {file_path}",
+                "PROPERTIES_ERROR",
+                {"path": validated_path, "error": str(e)}
+            )
 
 
 # Global file manager instance
