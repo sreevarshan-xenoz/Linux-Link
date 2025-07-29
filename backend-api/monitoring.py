@@ -101,12 +101,13 @@ class AsyncSystemMonitor:
     def _get_uptime(self) -> str:
         """Get system uptime"""
         try:
-            with open('/proc/uptime', 'r') as f:
-                uptime_seconds = float(f.readline().split()[0])
-                uptime_days = int(uptime_seconds // 86400)
-                uptime_hours = int((uptime_seconds % 86400) // 3600)
-                uptime_minutes = int((uptime_seconds % 3600) // 60)
-                return f"{uptime_days}d {uptime_hours}h {uptime_minutes}m"
+            # Cross-platform uptime using psutil
+            boot_time = psutil.boot_time()
+            uptime_seconds = time.time() - boot_time
+            uptime_days = int(uptime_seconds // 86400)
+            uptime_hours = int((uptime_seconds % 86400) // 3600)
+            uptime_minutes = int((uptime_seconds % 3600) // 60)
+            return f"{uptime_days}d {uptime_hours}h {uptime_minutes}m"
         except:
             return "Unknown"
 

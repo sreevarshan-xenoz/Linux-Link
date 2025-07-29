@@ -1,0 +1,4 @@
+2025-07-26 13:40:19,265 - root - INFO - Login successful for user: admin
+2025-07-26 13:40:25,448 - root - WARNING - Failed to get critical system info: Command not found: systemctl
+2025-07-26 13:40:27,494 - root - INFO - EXEC_ATTEMPT: user=admin, cmd='whoami', timeout=10
+2025-07-26 13:40:27,495 - root - CRITICAL - EXEC_ERROR: user=admin, cmd='whoami', error='Execution failed: [WinError 267] The directory name is invalid'
