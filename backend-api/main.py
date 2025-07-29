@@ -2,6 +2,7 @@ from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from typing import Union
 import logging
 from datetime import datetime, timedelta
 import os
@@ -9,6 +10,7 @@ import jwt
 from security import SecureCommandExecutor
 from monitoring import monitor
 from file_manager import get_file_manager, FileManagerError, PermissionError as FilePermissionError
+from desktop_controller import get_desktop_controller, DesktopControllerError
 
 # Enhanced logging configuration
 logging.basicConfig(
@@ -95,6 +97,37 @@ class PreviewRequest(BaseModel):
     file_path: str
     max_size: int = 1024
     encoding: str = "utf-8"
+
+# Desktop Control Models
+class WorkspaceSwitchRequest(BaseModel):
+    workspace_id: Union[int, str]
+
+class WindowFocusRequest(BaseModel):
+    window_id: Union[int, str]
+
+class WindowCloseRequest(BaseModel):
+    window_id: Union[int, str]
+
+class WindowMoveRequest(BaseModel):
+    window_id: Union[int, str]
+    x: int
+    y: int
+
+class WindowResizeRequest(BaseModel):
+    window_id: Union[int, str]
+    width: int
+    height: int
+
+class WindowToWorkspaceRequest(BaseModel):
+    window_id: Union[int, str]
+    workspace_id: Union[int, str]
+
+class WallpaperRequest(BaseModel):
+    image_path: str
+    monitor: str = None
+
+class FullscreenRequest(BaseModel):
+    window_id: Union[int, str] = None
 
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     try:
@@ -372,6 +405,339 @@ async def get_allowed_paths(user=Depends(verify_token)):
     except Exception as e:
         logging.error(f"ALLOWED_PATHS_ERROR: user={user['sub']}, error='{str(e)}'")
         raise HTTPException(status_code=500, detail="Failed to get allowed paths")
+
+# Desktop Control Endpoints
+
+@app.get("/desktop/info")
+async def get_desktop_info(user=Depends(verify_token)):
+    """Get desktop environment and window manager information."""
+    try:
+        dc = get_desktop_controller()
+        info = dc.get_window_manager_info()
+        
+        logging.info(f"DESKTOP_INFO_SUCCESS: user={user['sub']}, wm={info['type']}")
+        return {
+            "success": True,
+            "window_manager": info
+        }
+    
+    except Exception as e:
+        logging.error(f"DESKTOP_INFO_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get desktop info")
+
+@app.get("/desktop/workspaces")
+async def get_workspaces(user=Depends(verify_token)):
+    """Get list of workspaces and their windows."""
+    try:
+        dc = get_desktop_controller()
+        workspaces = dc.get_workspaces()
+        
+        # Convert to dictionaries
+        workspaces_dict = [workspace.to_dict() for workspace in workspaces]
+        
+        logging.info(f"WORKSPACES_SUCCESS: user={user['sub']}, count={len(workspaces_dict)}")
+        return {
+            "success": True,
+            "workspaces": workspaces_dict,
+            "count": len(workspaces_dict)
+        }
+    
+    except DesktopControllerError as e:
+        logging.warning(f"WORKSPACES_ERROR: user={user['sub']}, error='{e.message}'")
+        raise HTTPException(status_code=400, detail={"error": e.message, "code": e.error_code})
+    except Exception as e:
+        logging.error(f"WORKSPACES_CRITICAL: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get workspaces")
+
+@app.post("/desktop/workspace")
+async def switch_workspace(request: WorkspaceSwitchRequest, user=Depends(verify_token)):
+    """Switch to specified workspace."""
+    try:
+        dc = get_desktop_controller()
+        success = dc.switch_workspace(request.workspace_id)
+        
+        if success:
+            logging.info(f"WORKSPACE_SWITCH_SUCCESS: user={user['sub']}, workspace={request.workspace_id}")
+            return {
+                "success": True,
+                "workspace_id": request.workspace_id,
+                "message": f"Switched to workspace {request.workspace_id}"
+            }
+        else:
+            logging.warning(f"WORKSPACE_SWITCH_FAILED: user={user['sub']}, workspace={request.workspace_id}")
+            raise HTTPException(status_code=400, detail="Failed to switch workspace")
+    
+    except DesktopControllerError as e:
+        logging.warning(f"WORKSPACE_SWITCH_ERROR: user={user['sub']}, error='{e.message}'")
+        raise HTTPException(status_code=400, detail={"error": e.message, "code": e.error_code})
+    except Exception as e:
+        logging.error(f"WORKSPACE_SWITCH_CRITICAL: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to switch workspace")
+
+@app.get("/desktop/windows")
+async def get_windows(user=Depends(verify_token)):
+    """Get list of all windows."""
+    try:
+        dc = get_desktop_controller()
+        windows = dc.get_windows()
+        
+        # Convert to dictionaries
+        windows_dict = [window.to_dict() for window in windows]
+        
+        logging.info(f"WINDOWS_SUCCESS: user={user['sub']}, count={len(windows_dict)}")
+        return {
+            "success": True,
+            "windows": windows_dict,
+            "count": len(windows_dict)
+        }
+    
+    except DesktopControllerError as e:
+        logging.warning(f"WINDOWS_ERROR: user={user['sub']}, error='{e.message}'")
+        raise HTTPException(status_code=400, detail={"error": e.message, "code": e.error_code})
+    except Exception as e:
+        logging.error(f"WINDOWS_CRITICAL: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get windows")
+
+@app.post("/desktop/window/focus")
+async def focus_window(request: WindowFocusRequest, user=Depends(verify_token)):
+    """Focus specified window."""
+    try:
+        dc = get_desktop_controller()
+        success = dc.focus_window(request.window_id)
+        
+        if success:
+            logging.info(f"WINDOW_FOCUS_SUCCESS: user={user['sub']}, window={request.window_id}")
+            return {
+                "success": True,
+                "window_id": request.window_id,
+                "message": f"Focused window {request.window_id}"
+            }
+        else:
+            logging.warning(f"WINDOW_FOCUS_FAILED: user={user['sub']}, window={request.window_id}")
+            raise HTTPException(status_code=400, detail="Failed to focus window")
+    
+    except DesktopControllerError as e:
+        logging.warning(f"WINDOW_FOCUS_ERROR: user={user['sub']}, error='{e.message}'")
+        raise HTTPException(status_code=400, detail={"error": e.message, "code": e.error_code})
+    except Exception as e:
+        logging.error(f"WINDOW_FOCUS_CRITICAL: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to focus window")
+
+@app.post("/desktop/window/close")
+async def close_window(request: WindowCloseRequest, user=Depends(verify_token)):
+    """Close specified window."""
+    try:
+        dc = get_desktop_controller()
+        success = dc.close_window(request.window_id)
+        
+        if success:
+            logging.info(f"WINDOW_CLOSE_SUCCESS: user={user['sub']}, window={request.window_id}")
+            return {
+                "success": True,
+                "window_id": request.window_id,
+                "message": f"Closed window {request.window_id}"
+            }
+        else:
+            logging.warning(f"WINDOW_CLOSE_FAILED: user={user['sub']}, window={request.window_id}")
+            raise HTTPException(status_code=400, detail="Failed to close window")
+    
+    except DesktopControllerError as e:
+        logging.warning(f"WINDOW_CLOSE_ERROR: user={user['sub']}, error='{e.message}'")
+        raise HTTPException(status_code=400, detail={"error": e.message, "code": e.error_code})
+    except Exception as e:
+        logging.error(f"WINDOW_CLOSE_CRITICAL: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to close window")
+
+@app.post("/desktop/window/move")
+async def move_window(request: WindowMoveRequest, user=Depends(verify_token)):
+    """Move window to specified position."""
+    try:
+        dc = get_desktop_controller()
+        success = dc.adapter.move_window(request.window_id, request.x, request.y)
+        
+        if success:
+            logging.info(f"WINDOW_MOVE_SUCCESS: user={user['sub']}, window={request.window_id}, pos=({request.x},{request.y})")
+            return {
+                "success": True,
+                "window_id": request.window_id,
+                "x": request.x,
+                "y": request.y,
+                "message": f"Moved window {request.window_id} to ({request.x}, {request.y})"
+            }
+        else:
+            logging.warning(f"WINDOW_MOVE_FAILED: user={user['sub']}, window={request.window_id}")
+            raise HTTPException(status_code=400, detail="Failed to move window")
+    
+    except DesktopControllerError as e:
+        logging.warning(f"WINDOW_MOVE_ERROR: user={user['sub']}, error='{e.message}'")
+        raise HTTPException(status_code=400, detail={"error": e.message, "code": e.error_code})
+    except Exception as e:
+        logging.error(f"WINDOW_MOVE_CRITICAL: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to move window")
+
+@app.post("/desktop/window/resize")
+async def resize_window(request: WindowResizeRequest, user=Depends(verify_token)):
+    """Resize window to specified dimensions."""
+    try:
+        dc = get_desktop_controller()
+        success = dc.adapter.resize_window(request.window_id, request.width, request.height)
+        
+        if success:
+            logging.info(f"WINDOW_RESIZE_SUCCESS: user={user['sub']}, window={request.window_id}, size=({request.width}x{request.height})")
+            return {
+                "success": True,
+                "window_id": request.window_id,
+                "width": request.width,
+                "height": request.height,
+                "message": f"Resized window {request.window_id} to {request.width}x{request.height}"
+            }
+        else:
+            logging.warning(f"WINDOW_RESIZE_FAILED: user={user['sub']}, window={request.window_id}")
+            raise HTTPException(status_code=400, detail="Failed to resize window")
+    
+    except DesktopControllerError as e:
+        logging.warning(f"WINDOW_RESIZE_ERROR: user={user['sub']}, error='{e.message}'")
+        raise HTTPException(status_code=400, detail={"error": e.message, "code": e.error_code})
+    except Exception as e:
+        logging.error(f"WINDOW_RESIZE_CRITICAL: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to resize window")
+
+@app.post("/desktop/window/to-workspace")
+async def move_window_to_workspace(request: WindowToWorkspaceRequest, user=Depends(verify_token)):
+    """Move window to specified workspace."""
+    try:
+        dc = get_desktop_controller()
+        
+        # Check if adapter supports this operation
+        if hasattr(dc.adapter, 'move_window_to_workspace'):
+            success = dc.adapter.move_window_to_workspace(request.window_id, request.workspace_id)
+        else:
+            logging.warning(f"WINDOW_TO_WORKSPACE_UNSUPPORTED: user={user['sub']}, wm={dc.wm_type.value}")
+            raise HTTPException(status_code=400, detail="Window to workspace operation not supported by current window manager")
+        
+        if success:
+            logging.info(f"WINDOW_TO_WORKSPACE_SUCCESS: user={user['sub']}, window={request.window_id}, workspace={request.workspace_id}")
+            return {
+                "success": True,
+                "window_id": request.window_id,
+                "workspace_id": request.workspace_id,
+                "message": f"Moved window {request.window_id} to workspace {request.workspace_id}"
+            }
+        else:
+            logging.warning(f"WINDOW_TO_WORKSPACE_FAILED: user={user['sub']}, window={request.window_id}")
+            raise HTTPException(status_code=400, detail="Failed to move window to workspace")
+    
+    except DesktopControllerError as e:
+        logging.warning(f"WINDOW_TO_WORKSPACE_ERROR: user={user['sub']}, error='{e.message}'")
+        raise HTTPException(status_code=400, detail={"error": e.message, "code": e.error_code})
+    except Exception as e:
+        logging.error(f"WINDOW_TO_WORKSPACE_CRITICAL: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to move window to workspace")
+
+@app.post("/desktop/fullscreen")
+async def toggle_fullscreen(request: FullscreenRequest, user=Depends(verify_token)):
+    """Toggle fullscreen for window."""
+    try:
+        dc = get_desktop_controller()
+        
+        # Check if adapter supports this operation
+        if hasattr(dc.adapter, 'toggle_fullscreen'):
+            success = dc.adapter.toggle_fullscreen(request.window_id)
+        else:
+            logging.warning(f"FULLSCREEN_UNSUPPORTED: user={user['sub']}, wm={dc.wm_type.value}")
+            raise HTTPException(status_code=400, detail="Fullscreen toggle not supported by current window manager")
+        
+        if success:
+            logging.info(f"FULLSCREEN_SUCCESS: user={user['sub']}, window={request.window_id or 'active'}")
+            return {
+                "success": True,
+                "window_id": request.window_id,
+                "message": f"Toggled fullscreen for window {request.window_id or 'active'}"
+            }
+        else:
+            logging.warning(f"FULLSCREEN_FAILED: user={user['sub']}, window={request.window_id}")
+            raise HTTPException(status_code=400, detail="Failed to toggle fullscreen")
+    
+    except DesktopControllerError as e:
+        logging.warning(f"FULLSCREEN_ERROR: user={user['sub']}, error='{e.message}'")
+        raise HTTPException(status_code=400, detail={"error": e.message, "code": e.error_code})
+    except Exception as e:
+        logging.error(f"FULLSCREEN_CRITICAL: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to toggle fullscreen")
+
+@app.post("/desktop/wallpaper")
+async def set_wallpaper(request: WallpaperRequest, user=Depends(verify_token)):
+    """Set desktop wallpaper."""
+    try:
+        dc = get_desktop_controller()
+        
+        # Check if adapter supports this operation
+        if hasattr(dc.adapter, 'set_wallpaper'):
+            success = dc.adapter.set_wallpaper(request.image_path, request.monitor)
+        else:
+            logging.warning(f"WALLPAPER_UNSUPPORTED: user={user['sub']}, wm={dc.wm_type.value}")
+            raise HTTPException(status_code=400, detail="Wallpaper setting not supported by current window manager")
+        
+        if success:
+            logging.info(f"WALLPAPER_SUCCESS: user={user['sub']}, image='{request.image_path}', monitor={request.monitor}")
+            return {
+                "success": True,
+                "image_path": request.image_path,
+                "monitor": request.monitor,
+                "message": f"Set wallpaper to {request.image_path}"
+            }
+        else:
+            logging.warning(f"WALLPAPER_FAILED: user={user['sub']}, image='{request.image_path}'")
+            raise HTTPException(status_code=400, detail="Failed to set wallpaper")
+    
+    except DesktopControllerError as e:
+        logging.warning(f"WALLPAPER_ERROR: user={user['sub']}, error='{e.message}'")
+        raise HTTPException(status_code=400, detail={"error": e.message, "code": e.error_code})
+    except Exception as e:
+        logging.error(f"WALLPAPER_CRITICAL: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to set wallpaper")
+
+@app.get("/desktop/monitors")
+async def get_monitors(user=Depends(verify_token)):
+    """Get list of monitors/displays."""
+    try:
+        dc = get_desktop_controller()
+        monitors = dc.get_monitors()
+        
+        # Convert to dictionaries
+        monitors_dict = [monitor.to_dict() for monitor in monitors]
+        
+        logging.info(f"MONITORS_SUCCESS: user={user['sub']}, count={len(monitors_dict)}")
+        return {
+            "success": True,
+            "monitors": monitors_dict,
+            "count": len(monitors_dict)
+        }
+    
+    except DesktopControllerError as e:
+        logging.warning(f"MONITORS_ERROR: user={user['sub']}, error='{e.message}'")
+        raise HTTPException(status_code=400, detail={"error": e.message, "code": e.error_code})
+    except Exception as e:
+        logging.error(f"MONITORS_CRITICAL: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get monitors")
+
+@app.get("/desktop/notifications")
+async def get_notifications(user=Depends(verify_token)):
+    """Get system notifications (placeholder for future implementation)."""
+    try:
+        # This is a placeholder - actual implementation would integrate with
+        # notification daemons like dunst, mako, or desktop environment notifications
+        logging.info(f"NOTIFICATIONS_SUCCESS: user={user['sub']}")
+        return {
+            "success": True,
+            "notifications": [],
+            "count": 0,
+            "message": "Notification integration not yet implemented"
+        }
+    
+    except Exception as e:
+        logging.error(f"NOTIFICATIONS_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get notifications")
 
 # Authentication Endpoints
 
