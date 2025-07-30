@@ -198,6 +198,134 @@ class NaturalLanguageParser:
                     'confidence': 0.7,
                     'parameters': ['application']
                 }
+            ],
+            'navigation': [
+                {
+                    'patterns': [r'go\s+back', r'navigate\s+back'],
+                    'action': 'navigate_back',
+                    'confidence': 0.8
+                },
+                {
+                    'patterns': [r'go\s+forward', r'navigate\s+forward'],
+                    'action': 'navigate_forward',
+                    'confidence': 0.8
+                },
+                {
+                    'patterns': [r'refresh\s+page', r'reload\s+page'],
+                    'action': 'refresh_page',
+                    'confidence': 0.8
+                },
+                {
+                    'patterns': [r'scroll\s+up'],
+                    'action': 'scroll_up',
+                    'confidence': 0.8
+                },
+                {
+                    'patterns': [r'scroll\s+down'],
+                    'action': 'scroll_down',
+                    'confidence': 0.8
+                }
+            ],
+            'communication': [
+                {
+                    'patterns': [r'open\s+email', r'launch\s+mail'],
+                    'action': 'open_email',
+                    'confidence': 0.9
+                },
+                {
+                    'patterns': [r'open\s+browser', r'launch\s+browser'],
+                    'action': 'open_browser',
+                    'confidence': 0.9
+                },
+                {
+                    'patterns': [r'open\s+chat', r'launch\s+messenger'],
+                    'action': 'open_chat',
+                    'confidence': 0.8
+                }
+            ],
+            'productivity': [
+                {
+                    'patterns': [r'open\s+calculator', r'launch\s+calculator'],
+                    'action': 'open_calculator',
+                    'confidence': 0.9
+                },
+                {
+                    'patterns': [r'open\s+text\s+editor', r'launch\s+editor'],
+                    'action': 'open_text_editor',
+                    'confidence': 0.9
+                },
+                {
+                    'patterns': [r'take\s+screenshot', r'capture\s+screen'],
+                    'action': 'take_screenshot',
+                    'confidence': 0.9
+                },
+                {
+                    'patterns': [r'open\s+calendar', r'show\s+calendar'],
+                    'action': 'open_calendar',
+                    'confidence': 0.8
+                }
+            ],
+            'shortcuts': [
+                {
+                    'patterns': [r'copy\s+text', r'copy\s+selection'],
+                    'action': 'copy_text',
+                    'confidence': 0.8
+                },
+                {
+                    'patterns': [r'paste\s+text', r'paste\s+clipboard'],
+                    'action': 'paste_text',
+                    'confidence': 0.8
+                },
+                {
+                    'patterns': [r'select\s+all'],
+                    'action': 'select_all',
+                    'confidence': 0.9
+                },
+                {
+                    'patterns': [r'undo\s+action', r'undo\s+last'],
+                    'action': 'undo',
+                    'confidence': 0.8
+                },
+                {
+                    'patterns': [r'redo\s+action', r'redo\s+last'],
+                    'action': 'redo',
+                    'confidence': 0.8
+                }
+            ],
+            'quick_actions': [
+                {
+                    'patterns': [r'show\s+desktop', r'minimize\s+all'],
+                    'action': 'show_desktop',
+                    'confidence': 0.9
+                },
+                {
+                    'patterns': [r'switch\s+application', r'alt\s+tab'],
+                    'action': 'switch_application',
+                    'confidence': 0.8
+                },
+                {
+                    'patterns': [r'open\s+run\s+dialog', r'show\s+launcher'],
+                    'action': 'open_launcher',
+                    'confidence': 0.8
+                },
+                {
+                    'patterns': [r'show\s+notifications'],
+                    'action': 'show_notifications',
+                    'confidence': 0.8
+                }
+            ],
+            'help': [
+                {
+                    'patterns': [r'help', r'what\s+can\s+you\s+do', r'list\s+commands'],
+                    'action': 'show_help',
+                    'confidence': 0.9
+                },
+                {
+                    'patterns': [r'repeat\s+last\s+command'],
+                    'action': 'repeat_command',
+                    'confidence': 0.8
+                }
+            ]
             ]
         }
     
@@ -310,7 +438,42 @@ class CommandExecutor:
             
             # File commands
             'open_file_manager': self._handle_open_file_manager,
-            'open_application': self._handle_open_application
+            'open_application': self._handle_open_application,
+            
+            # Navigation commands
+            'navigate_back': self._handle_navigate_back,
+            'navigate_forward': self._handle_navigate_forward,
+            'refresh_page': self._handle_refresh_page,
+            'scroll_up': self._handle_scroll_up,
+            'scroll_down': self._handle_scroll_down,
+            
+            # Communication commands
+            'open_email': self._handle_open_email,
+            'open_browser': self._handle_open_browser,
+            'open_chat': self._handle_open_chat,
+            
+            # Productivity commands
+            'open_calculator': self._handle_open_calculator,
+            'open_text_editor': self._handle_open_text_editor,
+            'take_screenshot': self._handle_take_screenshot,
+            'open_calendar': self._handle_open_calendar,
+            
+            # Shortcut commands
+            'copy_text': self._handle_copy_text,
+            'paste_text': self._handle_paste_text,
+            'select_all': self._handle_select_all,
+            'undo': self._handle_undo,
+            'redo': self._handle_redo,
+            
+            # Quick action commands
+            'show_desktop': self._handle_show_desktop,
+            'switch_application': self._handle_switch_application,
+            'open_launcher': self._handle_open_launcher,
+            'show_notifications': self._handle_show_notifications,
+            
+            # Help commands
+            'show_help': self._handle_show_help,
+            'repeat_command': self._handle_repeat_command
         }
     
     def execute_command(self, parsed_command: Dict[str, Any]) -> CommandResult:
@@ -784,6 +947,613 @@ class CommandExecutor:
                 )
         except Exception as e:
             return self._create_error_result(parsed_command, str(e))
+    
+    # Navigation command handlers
+    def _handle_navigate_back(self, parsed_command: Dict) -> CommandResult:
+        """Handle navigate back command"""
+        try:
+            # Send Alt+Left key combination
+            subprocess.run(['xdotool', 'key', 'alt+Left'], timeout=5)
+            return CommandResult(
+                success=True,
+                command=parsed_command['raw_text'],
+                command_type=CommandType.SYSTEM,
+                actions_executed=['navigate_back'],
+                message="Navigated back",
+                confidence=parsed_command['confidence']
+            )
+        except FileNotFoundError:
+            return CommandResult(
+                success=False,
+                command=parsed_command['raw_text'],
+                command_type=CommandType.SYSTEM,
+                actions_executed=[],
+                message="xdotool not available for navigation",
+                confidence=parsed_command['confidence']
+            )
+        except Exception as e:
+            return self._create_error_result(parsed_command, str(e))
+    
+    def _handle_navigate_forward(self, parsed_command: Dict) -> CommandResult:
+        """Handle navigate forward command"""
+        try:
+            subprocess.run(['xdotool', 'key', 'alt+Right'], timeout=5)
+            return CommandResult(
+                success=True,
+                command=parsed_command['raw_text'],
+                command_type=CommandType.SYSTEM,
+                actions_executed=['navigate_forward'],
+                message="Navigated forward",
+                confidence=parsed_command['confidence']
+            )
+        except FileNotFoundError:
+            return CommandResult(
+                success=False,
+                command=parsed_command['raw_text'],
+                command_type=CommandType.SYSTEM,
+                actions_executed=[],
+                message="xdotool not available for navigation",
+                confidence=parsed_command['confidence']
+            )
+        except Exception as e:
+            return self._create_error_result(parsed_command, str(e))
+    
+    def _handle_refresh_page(self, parsed_command: Dict) -> CommandResult:
+        """Handle refresh page command"""
+        try:
+            subprocess.run(['xdotool', 'key', 'F5'], timeout=5)
+            return CommandResult(
+                success=True,
+                command=parsed_command['raw_text'],
+                command_type=CommandType.SYSTEM,
+                actions_executed=['refresh_page'],
+                message="Page refreshed",
+                confidence=parsed_command['confidence']
+            )
+        except FileNotFoundError:
+            return CommandResult(
+                success=False,
+                command=parsed_command['raw_text'],
+                command_type=CommandType.SYSTEM,
+                actions_executed=[],
+                message="xdotool not available for page refresh",
+                confidence=parsed_command['confidence']
+            )
+        except Exception as e:
+            return self._create_error_result(parsed_command, str(e))
+    
+    def _handle_scroll_up(self, parsed_command: Dict) -> CommandResult:
+        """Handle scroll up command"""
+        try:
+            subprocess.run(['xdotool', 'key', 'Page_Up'], timeout=5)
+            return CommandResult(
+                success=True,
+                command=parsed_command['raw_text'],
+                command_type=CommandType.SYSTEM,
+                actions_executed=['scroll_up'],
+                message="Scrolled up",
+                confidence=parsed_command['confidence']
+            )
+        except FileNotFoundError:
+            return CommandResult(
+                success=False,
+                command=parsed_command['raw_text'],
+                command_type=CommandType.SYSTEM,
+                actions_executed=[],
+                message="xdotool not available for scrolling",
+                confidence=parsed_command['confidence']
+            )
+        except Exception as e:
+            return self._create_error_result(parsed_command, str(e))
+    
+    def _handle_scroll_down(self, parsed_command: Dict) -> CommandResult:
+        """Handle scroll down command"""
+        try:
+            subprocess.run(['xdotool', 'key', 'Page_Down'], timeout=5)
+            return CommandResult(
+                success=True,
+                command=parsed_command['raw_text'],
+                command_type=CommandType.SYSTEM,
+                actions_executed=['scroll_down'],
+                message="Scrolled down",
+                confidence=parsed_command['confidence']
+            )
+        except FileNotFoundError:
+            return CommandResult(
+                success=False,
+                command=parsed_command['raw_text'],
+                command_type=CommandType.SYSTEM,
+                actions_executed=[],
+                message="xdotool not available for scrolling",
+                confidence=parsed_command['confidence']
+            )
+        except Exception as e:
+            return self._create_error_result(parsed_command, str(e))
+    
+    # Communication command handlers
+    def _handle_open_email(self, parsed_command: Dict) -> CommandResult:
+        """Handle open email command"""
+        try:
+            email_clients = ['thunderbird', 'evolution', 'kmail', 'geary']
+            
+            for client in email_clients:
+                try:
+                    subprocess.Popen([client], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    return CommandResult(
+                        success=True,
+                        command=parsed_command['raw_text'],
+                        command_type=CommandType.FILE,
+                        actions_executed=['open_email'],
+                        message=f"Opened email client ({client})",
+                        confidence=parsed_command['confidence']
+                    )
+                except FileNotFoundError:
+                    continue
+            
+            return CommandResult(
+                success=False,
+                command=parsed_command['raw_text'],
+                command_type=CommandType.FILE,
+                actions_executed=[],
+                message="No email client found",
+                confidence=parsed_command['confidence']
+            )
+        except Exception as e:
+            return self._create_error_result(parsed_command, str(e))
+    
+    def _handle_open_browser(self, parsed_command: Dict) -> CommandResult:
+        """Handle open browser command"""
+        try:
+            browsers = ['firefox', 'google-chrome', 'chromium', 'brave', 'opera']
+            
+            for browser in browsers:
+                try:
+                    subprocess.Popen([browser], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    return CommandResult(
+                        success=True,
+                        command=parsed_command['raw_text'],
+                        command_type=CommandType.FILE,
+                        actions_executed=['open_browser'],
+                        message=f"Opened browser ({browser})",
+                        confidence=parsed_command['confidence']
+                    )
+                except FileNotFoundError:
+                    continue
+            
+            return CommandResult(
+                success=False,
+                command=parsed_command['raw_text'],
+                command_type=CommandType.FILE,
+                actions_executed=[],
+                message="No browser found",
+                confidence=parsed_command['confidence']
+            )
+        except Exception as e:
+            return self._create_error_result(parsed_command, str(e))
+    
+    def _handle_open_chat(self, parsed_command: Dict) -> CommandResult:
+        """Handle open chat command"""
+        try:
+            chat_apps = ['discord', 'slack', 'telegram-desktop', 'signal-desktop', 'element-desktop']
+            
+            for app in chat_apps:
+                try:
+                    subprocess.Popen([app], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    return CommandResult(
+                        success=True,
+                        command=parsed_command['raw_text'],
+                        command_type=CommandType.FILE,
+                        actions_executed=['open_chat'],
+                        message=f"Opened chat application ({app})",
+                        confidence=parsed_command['confidence']
+                    )
+                except FileNotFoundError:
+                    continue
+            
+            return CommandResult(
+                success=False,
+                command=parsed_command['raw_text'],
+                command_type=CommandType.FILE,
+                actions_executed=[],
+                message="No chat application found",
+                confidence=parsed_command['confidence']
+            )
+        except Exception as e:
+            return self._create_error_result(parsed_command, str(e))
+    
+    # Productivity command handlers
+    def _handle_open_calculator(self, parsed_command: Dict) -> CommandResult:
+        """Handle open calculator command"""
+        try:
+            calculators = ['gnome-calculator', 'kcalc', 'galculator', 'qalculate-gtk']
+            
+            for calc in calculators:
+                try:
+                    subprocess.Popen([calc], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    return CommandResult(
+                        success=True,
+                        command=parsed_command['raw_text'],
+                        command_type=CommandType.FILE,
+                        actions_executed=['open_calculator'],
+                        message=f"Opened calculator ({calc})",
+                        confidence=parsed_command['confidence']
+                    )
+                except FileNotFoundError:
+                    continue
+            
+            return CommandResult(
+                success=False,
+                command=parsed_command['raw_text'],
+                command_type=CommandType.FILE,
+                actions_executed=[],
+                message="No calculator found",
+                confidence=parsed_command['confidence']
+            )
+        except Exception as e:
+            return self._create_error_result(parsed_command, str(e))
+    
+    def _handle_open_text_editor(self, parsed_command: Dict) -> CommandResult:
+        """Handle open text editor command"""
+        try:
+            editors = ['gedit', 'kate', 'mousepad', 'leafpad', 'code', 'atom']
+            
+            for editor in editors:
+                try:
+                    subprocess.Popen([editor], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    return CommandResult(
+                        success=True,
+                        command=parsed_command['raw_text'],
+                        command_type=CommandType.FILE,
+                        actions_executed=['open_text_editor'],
+                        message=f"Opened text editor ({editor})",
+                        confidence=parsed_command['confidence']
+                    )
+                except FileNotFoundError:
+                    continue
+            
+            return CommandResult(
+                success=False,
+                command=parsed_command['raw_text'],
+                command_type=CommandType.FILE,
+                actions_executed=[],
+                message="No text editor found",
+                confidence=parsed_command['confidence']
+            )
+        except Exception as e:
+            return self._create_error_result(parsed_command, str(e))
+    
+    def _handle_take_screenshot(self, parsed_command: Dict) -> CommandResult:
+        """Handle take screenshot command"""
+        try:
+            screenshot_tools = ['gnome-screenshot', 'spectacle', 'scrot', 'flameshot']
+            
+            for tool in screenshot_tools:
+                try:
+                    subprocess.Popen([tool], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    return CommandResult(
+                        success=True,
+                        command=parsed_command['raw_text'],
+                        command_type=CommandType.SYSTEM,
+                        actions_executed=['take_screenshot'],
+                        message=f"Taking screenshot ({tool})",
+                        confidence=parsed_command['confidence']
+                    )
+                except FileNotFoundError:
+                    continue
+            
+            return CommandResult(
+                success=False,
+                command=parsed_command['raw_text'],
+                command_type=CommandType.SYSTEM,
+                actions_executed=[],
+                message="No screenshot tool found",
+                confidence=parsed_command['confidence']
+            )
+        except Exception as e:
+            return self._create_error_result(parsed_command, str(e))
+    
+    def _handle_open_calendar(self, parsed_command: Dict) -> CommandResult:
+        """Handle open calendar command"""
+        try:
+            calendar_apps = ['gnome-calendar', 'korganizer', 'evolution', 'thunderbird']
+            
+            for app in calendar_apps:
+                try:
+                    subprocess.Popen([app], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    return CommandResult(
+                        success=True,
+                        command=parsed_command['raw_text'],
+                        command_type=CommandType.FILE,
+                        actions_executed=['open_calendar'],
+                        message=f"Opened calendar ({app})",
+                        confidence=parsed_command['confidence']
+                    )
+                except FileNotFoundError:
+                    continue
+            
+            return CommandResult(
+                success=False,
+                command=parsed_command['raw_text'],
+                command_type=CommandType.FILE,
+                actions_executed=[],
+                message="No calendar application found",
+                confidence=parsed_command['confidence']
+            )
+        except Exception as e:
+            return self._create_error_result(parsed_command, str(e))
+    
+    # Shortcut command handlers
+    def _handle_copy_text(self, parsed_command: Dict) -> CommandResult:
+        """Handle copy text command"""
+        try:
+            subprocess.run(['xdotool', 'key', 'ctrl+c'], timeout=5)
+            return CommandResult(
+                success=True,
+                command=parsed_command['raw_text'],
+                command_type=CommandType.SYSTEM,
+                actions_executed=['copy_text'],
+                message="Text copied to clipboard",
+                confidence=parsed_command['confidence']
+            )
+        except FileNotFoundError:
+            return CommandResult(
+                success=False,
+                command=parsed_command['raw_text'],
+                command_type=CommandType.SYSTEM,
+                actions_executed=[],
+                message="xdotool not available for copy operation",
+                confidence=parsed_command['confidence']
+            )
+        except Exception as e:
+            return self._create_error_result(parsed_command, str(e))
+    
+    def _handle_paste_text(self, parsed_command: Dict) -> CommandResult:
+        """Handle paste text command"""
+        try:
+            subprocess.run(['xdotool', 'key', 'ctrl+v'], timeout=5)
+            return CommandResult(
+                success=True,
+                command=parsed_command['raw_text'],
+                command_type=CommandType.SYSTEM,
+                actions_executed=['paste_text'],
+                message="Text pasted from clipboard",
+                confidence=parsed_command['confidence']
+            )
+        except FileNotFoundError:
+            return CommandResult(
+                success=False,
+                command=parsed_command['raw_text'],
+                command_type=CommandType.SYSTEM,
+                actions_executed=[],
+                message="xdotool not available for paste operation",
+                confidence=parsed_command['confidence']
+            )
+        except Exception as e:
+            return self._create_error_result(parsed_command, str(e))
+    
+    def _handle_select_all(self, parsed_command: Dict) -> CommandResult:
+        """Handle select all command"""
+        try:
+            subprocess.run(['xdotool', 'key', 'ctrl+a'], timeout=5)
+            return CommandResult(
+                success=True,
+                command=parsed_command['raw_text'],
+                command_type=CommandType.SYSTEM,
+                actions_executed=['select_all'],
+                message="Selected all text",
+                confidence=parsed_command['confidence']
+            )
+        except FileNotFoundError:
+            return CommandResult(
+                success=False,
+                command=parsed_command['raw_text'],
+                command_type=CommandType.SYSTEM,
+                actions_executed=[],
+                message="xdotool not available for select all",
+                confidence=parsed_command['confidence']
+            )
+        except Exception as e:
+            return self._create_error_result(parsed_command, str(e))
+    
+    def _handle_undo(self, parsed_command: Dict) -> CommandResult:
+        """Handle undo command"""
+        try:
+            subprocess.run(['xdotool', 'key', 'ctrl+z'], timeout=5)
+            return CommandResult(
+                success=True,
+                command=parsed_command['raw_text'],
+                command_type=CommandType.SYSTEM,
+                actions_executed=['undo'],
+                message="Undo action performed",
+                confidence=parsed_command['confidence']
+            )
+        except FileNotFoundError:
+            return CommandResult(
+                success=False,
+                command=parsed_command['raw_text'],
+                command_type=CommandType.SYSTEM,
+                actions_executed=[],
+                message="xdotool not available for undo",
+                confidence=parsed_command['confidence']
+            )
+        except Exception as e:
+            return self._create_error_result(parsed_command, str(e))
+    
+    def _handle_redo(self, parsed_command: Dict) -> CommandResult:
+        """Handle redo command"""
+        try:
+            subprocess.run(['xdotool', 'key', 'ctrl+y'], timeout=5)
+            return CommandResult(
+                success=True,
+                command=parsed_command['raw_text'],
+                command_type=CommandType.SYSTEM,
+                actions_executed=['redo'],
+                message="Redo action performed",
+                confidence=parsed_command['confidence']
+            )
+        except FileNotFoundError:
+            return CommandResult(
+                success=False,
+                command=parsed_command['raw_text'],
+                command_type=CommandType.SYSTEM,
+                actions_executed=[],
+                message="xdotool not available for redo",
+                confidence=parsed_command['confidence']
+            )
+        except Exception as e:
+            return self._create_error_result(parsed_command, str(e))
+    
+    # Quick action command handlers
+    def _handle_show_desktop(self, parsed_command: Dict) -> CommandResult:
+        """Handle show desktop command"""
+        try:
+            subprocess.run(['xdotool', 'key', 'super+d'], timeout=5)
+            return CommandResult(
+                success=True,
+                command=parsed_command['raw_text'],
+                command_type=CommandType.DESKTOP,
+                actions_executed=['show_desktop'],
+                message="Showing desktop",
+                confidence=parsed_command['confidence']
+            )
+        except FileNotFoundError:
+            return CommandResult(
+                success=False,
+                command=parsed_command['raw_text'],
+                command_type=CommandType.DESKTOP,
+                actions_executed=[],
+                message="xdotool not available for show desktop",
+                confidence=parsed_command['confidence']
+            )
+        except Exception as e:
+            return self._create_error_result(parsed_command, str(e))
+    
+    def _handle_switch_application(self, parsed_command: Dict) -> CommandResult:
+        """Handle switch application command"""
+        try:
+            subprocess.run(['xdotool', 'key', 'alt+Tab'], timeout=5)
+            return CommandResult(
+                success=True,
+                command=parsed_command['raw_text'],
+                command_type=CommandType.DESKTOP,
+                actions_executed=['switch_application'],
+                message="Switching application",
+                confidence=parsed_command['confidence']
+            )
+        except FileNotFoundError:
+            return CommandResult(
+                success=False,
+                command=parsed_command['raw_text'],
+                command_type=CommandType.DESKTOP,
+                actions_executed=[],
+                message="xdotool not available for app switching",
+                confidence=parsed_command['confidence']
+            )
+        except Exception as e:
+            return self._create_error_result(parsed_command, str(e))
+    
+    def _handle_open_launcher(self, parsed_command: Dict) -> CommandResult:
+        """Handle open launcher command"""
+        try:
+            # Try common launcher shortcuts
+            launchers = [
+                ['xdotool', 'key', 'super'],  # GNOME Activities
+                ['xdotool', 'key', 'alt+F2'],  # Run dialog
+                ['rofi', '-show', 'run'],      # Rofi launcher
+                ['dmenu_run']                  # dmenu launcher
+            ]
+            
+            for launcher in launchers:
+                try:
+                    subprocess.run(launcher, timeout=5)
+                    return CommandResult(
+                        success=True,
+                        command=parsed_command['raw_text'],
+                        command_type=CommandType.DESKTOP,
+                        actions_executed=['open_launcher'],
+                        message=f"Opened launcher ({launcher[0]})",
+                        confidence=parsed_command['confidence']
+                    )
+                except FileNotFoundError:
+                    continue
+            
+            return CommandResult(
+                success=False,
+                command=parsed_command['raw_text'],
+                command_type=CommandType.DESKTOP,
+                actions_executed=[],
+                message="No launcher available",
+                confidence=parsed_command['confidence']
+            )
+        except Exception as e:
+            return self._create_error_result(parsed_command, str(e))
+    
+    def _handle_show_notifications(self, parsed_command: Dict) -> CommandResult:
+        """Handle show notifications command"""
+        try:
+            subprocess.run(['xdotool', 'key', 'super+n'], timeout=5)
+            return CommandResult(
+                success=True,
+                command=parsed_command['raw_text'],
+                command_type=CommandType.DESKTOP,
+                actions_executed=['show_notifications'],
+                message="Showing notifications",
+                confidence=parsed_command['confidence']
+            )
+        except FileNotFoundError:
+            return CommandResult(
+                success=False,
+                command=parsed_command['raw_text'],
+                command_type=CommandType.DESKTOP,
+                actions_executed=[],
+                message="xdotool not available for notifications",
+                confidence=parsed_command['confidence']
+            )
+        except Exception as e:
+            return self._create_error_result(parsed_command, str(e))
+    
+    # Help command handlers
+    def _handle_show_help(self, parsed_command: Dict) -> CommandResult:
+        """Handle show help command"""
+        try:
+            # Get available commands
+            from voice_processor import get_voice_processor
+            vp = get_voice_processor()
+            commands = vp.get_available_commands()
+            
+            # Create help message with common commands
+            common_commands = [
+                "play music", "pause music", "next song", "volume up",
+                "switch to workspace [number]", "open terminal", "close window",
+                "lock screen", "what time is it", "take screenshot",
+                "open browser", "open calculator", "show desktop"
+            ]
+            
+            help_message = f"Available commands: {', '.join(common_commands[:10])}... (and {len(commands) - 10} more)"
+            
+            return CommandResult(
+                success=True,
+                command=parsed_command['raw_text'],
+                command_type=CommandType.SYSTEM,
+                actions_executed=['show_help'],
+                message=help_message,
+                confidence=parsed_command['confidence'],
+                details={'total_commands': len(commands), 'common_commands': common_commands}
+            )
+        except Exception as e:
+            return self._create_error_result(parsed_command, str(e))
+    
+    def _handle_repeat_command(self, parsed_command: Dict) -> CommandResult:
+        """Handle repeat last command"""
+        # This would require storing command history
+        return CommandResult(
+            success=False,
+            command=parsed_command['raw_text'],
+            command_type=CommandType.SYSTEM,
+            actions_executed=[],
+            message="Command history not implemented yet",
+            confidence=parsed_command['confidence']
+        )
     
     def _create_error_result(self, parsed_command: Dict, error_message: str) -> CommandResult:
         """Create error result"""
