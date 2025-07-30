@@ -864,6 +864,143 @@ class ClipboardController:
         except Exception as e:
             logger.error(f"Failed to set clipboard text: {e}")
             return False
+    
+    def get_clipboard_image(self) -> Optional[bytes]:
+        """Get image from clipboard"""
+        try:
+            if self.clipboard_tool == 'xclip':
+                # Try to get PNG image
+                result = subprocess.run(['xclip', '-selection', 'clipboard', '-t', 'image/png', '-o'], 
+                                      capture_output=True, timeout=5)
+                if result.returncode == 0 and result.stdout:
+                    return result.stdout
+                
+                # Try to get JPEG image
+                result = subprocess.run(['xclip', '-selection', 'clipboard', '-t', 'image/jpeg', '-o'], 
+                                      capture_output=True, timeout=5)
+                if result.returncode == 0 and result.stdout:
+                    return result.stdout
+            
+            elif self.clipboard_tool == 'wl-clipboard':
+                # Try to get PNG image
+                result = subprocess.run(['wl-paste', '--type', 'image/png'], 
+                                      capture_output=True, timeout=5)
+                if result.returncode == 0 and result.stdout:
+                    return result.stdout
+                
+                # Try to get JPEG image
+                result = subprocess.run(['wl-paste', '--type', 'image/jpeg'], 
+                                      capture_output=True, timeout=5)
+                if result.returncode == 0 and result.stdout:
+                    return result.stdout
+            
+            return None
+        
+        except Exception as e:
+            logger.error(f"Failed to get clipboard image: {e}")
+            return None
+    
+    def set_clipboard_image(self, image_data: bytes, image_type: str = 'image/png') -> bool:
+        """Set image to clipboard"""
+        try:
+            if self.clipboard_tool == 'xclip':
+                process = subprocess.Popen(['xclip', '-selection', 'clipboard', '-t', image_type], 
+                                         stdin=subprocess.PIPE)
+                process.communicate(input=image_data)
+                return process.returncode == 0
+            
+            elif self.clipboard_tool == 'wl-clipboard':
+                process = subprocess.Popen(['wl-copy', '--type', image_type], 
+                                         stdin=subprocess.PIPE)
+                process.communicate(input=image_data)
+                return process.returncode == 0
+            
+            else:
+                logger.warning("Image clipboard not supported with current tool")
+                return False
+        
+        except Exception as e:
+            logger.error(f"Failed to set clipboard image: {e}")
+            return False
+    
+    def get_clipboard_types(self) -> List[str]:
+        """Get available clipboard content types"""
+        types = []
+        
+        try:
+            if self.clipboard_tool == 'xclip':
+                result = subprocess.run(['xclip', '-selection', 'clipboard', '-t', 'TARGETS', '-o'], 
+                                      capture_output=True, text=True, timeout=5)
+                if result.returncode == 0:
+                    types = [line.strip() for line in result.stdout.split('\n') if line.strip()]
+            
+            elif self.clipboard_tool == 'wl-clipboard':
+                result = subprocess.run(['wl-paste', '--list-types'], 
+                                      capture_output=True, text=True, timeout=5)
+                if result.returncode == 0:
+                    types = [line.strip() for line in result.stdout.split('\n') if line.strip()]
+        
+        except Exception as e:
+            logger.debug(f"Failed to get clipboard types: {e}")
+        
+        return types
+    
+    def has_clipboard_content(self, content_type: str = 'text') -> bool:
+        """Check if clipboard has specific content type"""
+        try:
+            types = self.get_clipboard_types()
+            
+            if content_type == 'text':
+                text_types = ['text/plain', 'TEXT', 'STRING', 'UTF8_STRING']
+                return any(t in types for t in text_types)
+            
+            elif content_type == 'image':
+                image_types = ['image/png', 'image/jpeg', 'image/gif', 'image/bmp']
+                return any(t in types for t in image_types)
+            
+            else:
+                return content_type in types
+        
+        except Exception as e:
+            logger.debug(f"Failed to check clipboard content: {e}")
+            return False
+    
+    def clear_clipboard(self) -> bool:
+        """Clear clipboard contents"""
+        try:
+            if self.clipboard_tool == 'xclip':
+                process = subprocess.Popen(['xclip', '-selection', 'clipboard'], 
+                                         stdin=subprocess.PIPE, text=True)
+                process.communicate(input='')
+                return process.returncode == 0
+            
+            elif self.clipboard_tool == 'xsel':
+                process = subprocess.Popen(['xsel', '--clipboard', '--clear'], 
+                                         stdin=subprocess.PIPE, text=True)
+                process.communicate()
+                return process.returncode == 0
+            
+            elif self.clipboard_tool == 'wl-clipboard':
+                process = subprocess.Popen(['wl-copy', '--clear'], 
+                                         stdin=subprocess.PIPE, text=True)
+                process.communicate()
+                return process.returncode == 0
+            
+            return False
+        
+        except Exception as e:
+            logger.error(f"Failed to clear clipboard: {e}")
+            return False
+    
+    def get_clipboard_info(self) -> Dict[str, Any]:
+        """Get comprehensive clipboard information"""
+        return {
+            'tool': self.clipboard_tool,
+            'has_text': self.has_clipboard_content('text'),
+            'has_image': self.has_clipboard_content('image'),
+            'available_types': self.get_clipboard_types(),
+            'text_preview': self.get_clipboard_text()[:100] if self.has_clipboard_content('text') else None
+        }
 
 
 class MediaController:
@@ -1007,6 +1144,90 @@ class MediaController:
         """Set text to clipboard"""
         return self.clipboard.set_clipboard_text(text)
     
+    def get_clipboard_image(self) -> Optional[bytes]:
+        """Get image from clipboard"""
+        return self.clipboard.get_clipboard_image()
+    
+    def set_clipboard_image(self, image_data: bytes, image_type: str = 'image/png') -> bool:
+        """Set image to clipboard"""
+        return self.clipboard.set_clipboard_image(image_data, image_type)
+    
+    def get_clipboard_types(self) -> List[str]:
+        """Get available clipboard content types"""
+        return self.clipboard.get_clipboard_types()
+    
+    def has_clipboard_content(self, content_type: str = 'text') -> bool:
+        """Check if clipboard has specific content type"""
+        return self.clipboard.has_clipboard_content(content_type)
+    
+    def clear_clipboard(self) -> bool:
+        """Clear clipboard contents"""
+        return self.clipboard.clear_clipboard()
+    
+    def get_clipboard_info(self) -> Dict[str, Any]:
+        """Get comprehensive clipboard information"""
+        return self.clipboard.get_clipboard_info()
+    
+    def sync_clipboard_to_mobile(self) -> Dict[str, Any]:
+        """Sync clipboard content to mobile device"""
+        clipboard_info = self.get_clipboard_info()
+        
+        sync_data = {
+            'has_text': clipboard_info['has_text'],
+            'has_image': clipboard_info['has_image'],
+            'text_content': None,
+            'image_content': None,
+            'image_type': None
+        }
+        
+        if clipboard_info['has_text']:
+            sync_data['text_content'] = self.get_clipboard_text()
+        
+        if clipboard_info['has_image']:
+            image_data = self.get_clipboard_image()
+            if image_data:
+                import base64
+                sync_data['image_content'] = base64.b64encode(image_data).decode('utf-8')
+                
+                # Determine image type from clipboard types
+                types = clipboard_info['available_types']
+                if 'image/png' in types:
+                    sync_data['image_type'] = 'image/png'
+                elif 'image/jpeg' in types:
+                    sync_data['image_type'] = 'image/jpeg'
+                else:
+                    sync_data['image_type'] = 'image/png'  # Default
+        
+        return sync_data
+    
+    def sync_clipboard_from_mobile(self, mobile_data: Dict[str, Any]) -> bool:
+        """Sync clipboard content from mobile device"""
+        success = True
+        
+        try:
+            if mobile_data.get('text_content'):
+                if not self.set_clipboard_text(mobile_data['text_content']):
+                    success = False
+                    logger.warning("Failed to sync text to clipboard")
+            
+            elif mobile_data.get('image_content'):
+                import base64
+                image_data = base64.b64decode(mobile_data['image_content'])
+                image_type = mobile_data.get('image_type', 'image/png')
+                
+                if not self.set_clipboard_image(image_data, image_type):
+                    success = False
+                    logger.warning("Failed to sync image to clipboard")
+            
+            if success:
+                logger.info("Successfully synced clipboard from mobile")
+            
+            return success
+        
+        except Exception as e:
+            logger.error(f"Failed to sync clipboard from mobile: {e}")
+            return False
+    
     def get_comprehensive_status(self) -> Dict[str, Any]:
         """Get comprehensive media and system status"""
         players = self.get_available_players()
@@ -1017,10 +1238,7 @@ class MediaController:
             "active_player": active_player,
             "media_status": None,
             "system_audio": self.get_audio_info(),
-            "clipboard": {
-                "tool": self.clipboard.clipboard_tool,
-                "has_text": bool(self.get_clipboard_text())
-            }
+            "clipboard": self.get_clipboard_info()
         }
         
         if active_player:
