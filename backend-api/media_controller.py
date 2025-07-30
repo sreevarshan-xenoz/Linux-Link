@@ -578,6 +578,214 @@ class AudioController:
             logger.error(f"Failed to toggle mute: {e}")
         
         return False
+    
+    def get_audio_devices(self) -> List[Dict[str, Any]]:
+        """Get list of available audio devices"""
+        devices = []
+        
+        try:
+            if self.audio_system == 'pulseaudio':
+                devices = self._get_pulseaudio_devices()
+            elif self.audio_system == 'pipewire':
+                devices = self._get_pipewire_devices()
+            elif self.audio_system == 'alsa':
+                devices = self._get_alsa_devices()
+        
+        except Exception as e:
+            logger.error(f"Failed to get audio devices: {e}")
+        
+        return devices
+    
+    def _get_pulseaudio_devices(self) -> List[Dict[str, Any]]:
+        """Get PulseAudio devices"""
+        devices = []
+        
+        try:
+            # Get sinks (output devices)
+            result = subprocess.run(['pactl', 'list', 'short', 'sinks'], 
+                                  capture_output=True, text=True, timeout=10)
+            
+            if result.returncode == 0:
+                for line in result.stdout.strip().split('\n'):
+                    if line:
+                        parts = line.split('\t')
+                        if len(parts) >= 2:
+                            devices.append({
+                                'id': parts[0],
+                                'name': parts[1],
+                                'type': 'output',
+                                'description': parts[1]
+                            })
+            
+            # Get sources (input devices)
+            result = subprocess.run(['pactl', 'list', 'short', 'sources'], 
+                                  capture_output=True, text=True, timeout=10)
+            
+            if result.returncode == 0:
+                for line in result.stdout.strip().split('\n'):
+                    if line and not line.endswith('.monitor'):  # Skip monitor sources
+                        parts = line.split('\t')
+                        if len(parts) >= 2:
+                            devices.append({
+                                'id': parts[0],
+                                'name': parts[1],
+                                'type': 'input',
+                                'description': parts[1]
+                            })
+        
+        except Exception as e:
+            logger.debug(f"PulseAudio device enumeration failed: {e}")
+        
+        return devices
+    
+    def _get_pipewire_devices(self) -> List[Dict[str, Any]]:
+        """Get PipeWire devices"""
+        devices = []
+        
+        try:
+            # Get audio sinks
+            result = subprocess.run(['wpctl', 'status'], 
+                                  capture_output=True, text=True, timeout=10)
+            
+            if result.returncode == 0:
+                lines = result.stdout.split('\n')
+                in_sinks = False
+                in_sources = False
+                
+                for line in lines:
+                    line = line.strip()
+                    
+                    if 'Audio' in line and 'Sinks:' in line:
+                        in_sinks = True
+                        in_sources = False
+                        continue
+                    elif 'Audio' in line and 'Sources:' in line:
+                        in_sinks = False
+                        in_sources = True
+                        continue
+                    elif line.startswith('Video') or line.startswith('Settings'):
+                        in_sinks = False
+                        in_sources = False
+                        continue
+                    
+                    if (in_sinks or in_sources) and line and not line.startswith('├') and not line.startswith('│'):
+                        # Parse device line
+                        import re
+                        match = re.search(r'(\d+)\.\s+(.+)', line)
+                        if match:
+                            device_id = match.group(1)
+                            device_name = match.group(2).strip()
+                            
+                            devices.append({
+                                'id': device_id,
+                                'name': device_name,
+                                'type': 'output' if in_sinks else 'input',
+                                'description': device_name
+                            })
+        
+        except Exception as e:
+            logger.debug(f"PipeWire device enumeration failed: {e}")
+        
+        return devices
+    
+    def _get_alsa_devices(self) -> List[Dict[str, Any]]:
+        """Get ALSA devices"""
+        devices = []
+        
+        try:
+            # Get playback devices
+            result = subprocess.run(['aplay', '-l'], 
+                                  capture_output=True, text=True, timeout=10)
+            
+            if result.returncode == 0:
+                import re
+                for line in result.stdout.split('\n'):
+                    match = re.search(r'card (\d+): (.+) \[(.+)\], device (\d+): (.+) \[(.+)\]', line)
+                    if match:
+                        card_id = match.group(1)
+                        card_name = match.group(2)
+                        device_id = match.group(4)
+                        device_name = match.group(5)
+                        
+                        devices.append({
+                            'id': f'hw:{card_id},{device_id}',
+                            'name': f'{card_name} - {device_name}',
+                            'type': 'output',
+                            'description': f'Card {card_id}, Device {device_id}'
+                        })
+            
+            # Get capture devices
+            result = subprocess.run(['arecord', '-l'], 
+                                  capture_output=True, text=True, timeout=10)
+            
+            if result.returncode == 0:
+                import re
+                for line in result.stdout.split('\n'):
+                    match = re.search(r'card (\d+): (.+) \[(.+)\], device (\d+): (.+) \[(.+)\]', line)
+                    if match:
+                        card_id = match.group(1)
+                        card_name = match.group(2)
+                        device_id = match.group(4)
+                        device_name = match.group(5)
+                        
+                        devices.append({
+                            'id': f'hw:{card_id},{device_id}',
+                            'name': f'{card_name} - {device_name}',
+                            'type': 'input',
+                            'description': f'Card {card_id}, Device {device_id}'
+                        })
+        
+        except Exception as e:
+            logger.debug(f"ALSA device enumeration failed: {e}")
+        
+        return devices
+    
+    def set_default_device(self, device_id: str, device_type: str = 'output') -> bool:
+        """Set default audio device"""
+        try:
+            if self.audio_system == 'pulseaudio':
+                if device_type == 'output':
+                    result = subprocess.run(['pactl', 'set-default-sink', device_id], 
+                                          capture_output=True, text=True, timeout=5)
+                else:
+                    result = subprocess.run(['pactl', 'set-default-source', device_id], 
+                                          capture_output=True, text=True, timeout=5)
+                
+                success = result.returncode == 0
+                if success:
+                    logger.info(f"Set default {device_type} device to {device_id}")
+                return success
+            
+            elif self.audio_system == 'pipewire':
+                result = subprocess.run(['wpctl', 'set-default', device_id], 
+                                      capture_output=True, text=True, timeout=5)
+                success = result.returncode == 0
+                if success:
+                    logger.info(f"Set default device to {device_id}")
+                return success
+            
+            else:
+                logger.warning("Setting default device not supported for ALSA")
+                return False
+        
+        except Exception as e:
+            logger.error(f"Failed to set default device: {e}")
+            return False
+    
+    def get_audio_info(self) -> Dict[str, Any]:
+        """Get comprehensive audio system information"""
+        return {
+            'audio_system': self.audio_system,
+            'volume': self.get_volume(),
+            'muted': self.is_muted(),
+            'devices': self.get_audio_devices(),
+            'supported_operations': {
+                'volume_control': True,
+                'mute_control': True,
+                'device_switching': self.audio_system in ['pulseaudio', 'pipewire'],
+                'device_enumeration': True
+            }
+        }
 
 
 class ClipboardController:
@@ -779,6 +987,18 @@ class MediaController:
         """Toggle system audio mute"""
         return self.audio.toggle_mute()
     
+    def get_audio_devices(self) -> List[Dict[str, Any]]:
+        """Get list of available audio devices"""
+        return self.audio.get_audio_devices()
+    
+    def set_default_audio_device(self, device_id: str, device_type: str = 'output') -> bool:
+        """Set default audio device"""
+        return self.audio.set_default_device(device_id, device_type)
+    
+    def get_audio_info(self) -> Dict[str, Any]:
+        """Get comprehensive audio system information"""
+        return self.audio.get_audio_info()
+    
     def get_clipboard_text(self) -> str:
         """Get text from clipboard"""
         return self.clipboard.get_clipboard_text()
@@ -796,11 +1016,7 @@ class MediaController:
             "available_players": players,
             "active_player": active_player,
             "media_status": None,
-            "system_audio": {
-                "volume": self.get_system_volume(),
-                "muted": self.is_system_muted(),
-                "audio_system": self.audio.audio_system
-            },
+            "system_audio": self.get_audio_info(),
             "clipboard": {
                 "tool": self.clipboard.clipboard_tool,
                 "has_text": bool(self.get_clipboard_text())
