@@ -682,17 +682,32 @@ class RemoteDesktopController:
                 {"application": application, "display": display}
             )
     
-    def simulate_input(self, input_type: str, data: Dict[str, Any]) -> bool:
+    def simulate_input(self, input_type: str, data: Dict[str, Any], display: str = None) -> bool:
         """Simulate input events (mouse, keyboard)"""
         try:
+            # Set display environment if specified
+            env = os.environ.copy()
+            if display:
+                env['DISPLAY'] = display
+            
             if input_type == 'mouse_click':
-                return self._simulate_mouse_click(data)
+                return self._simulate_mouse_click(data, env)
             elif input_type == 'mouse_move':
-                return self._simulate_mouse_move(data)
+                return self._simulate_mouse_move(data, env)
+            elif input_type == 'mouse_drag':
+                return self._simulate_mouse_drag(data, env)
+            elif input_type == 'mouse_scroll':
+                return self._simulate_mouse_scroll(data, env)
             elif input_type == 'key_press':
-                return self._simulate_key_press(data)
+                return self._simulate_key_press(data, env)
             elif input_type == 'key_type':
-                return self._simulate_key_type(data)
+                return self._simulate_key_type(data, env)
+            elif input_type == 'key_combination':
+                return self._simulate_key_combination(data, env)
+            elif input_type == 'touch_tap':
+                return self._simulate_touch_tap(data, env)
+            elif input_type == 'touch_swipe':
+                return self._simulate_touch_swipe(data, env)
             else:
                 raise ValueError(f"Unknown input type: {input_type}")
         
@@ -700,53 +715,216 @@ class RemoteDesktopController:
             logger.error(f"Failed to simulate input: {e}")
             return False
     
-    def _simulate_mouse_click(self, data: Dict[str, Any]) -> bool:
+    def _simulate_mouse_click(self, data: Dict[str, Any], env: Dict[str, str]) -> bool:
         """Simulate mouse click"""
         try:
             x = data.get('x', 0)
             y = data.get('y', 0)
             button = data.get('button', 1)  # 1=left, 2=middle, 3=right
+            double_click = data.get('double_click', False)
             
-            subprocess.run(['xdotool', 'mousemove', str(x), str(y)], timeout=2)
-            subprocess.run(['xdotool', 'click', str(button)], timeout=2)
+            # Move to position
+            subprocess.run(['xdotool', 'mousemove', str(x), str(y)], 
+                         env=env, timeout=2)
+            
+            # Perform click
+            if double_click:
+                subprocess.run(['xdotool', 'click', '--repeat', '2', str(button)], 
+                             env=env, timeout=2)
+            else:
+                subprocess.run(['xdotool', 'click', str(button)], 
+                             env=env, timeout=2)
             
             return True
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Mouse click simulation failed: {e}")
             return False
     
-    def _simulate_mouse_move(self, data: Dict[str, Any]) -> bool:
+    def _simulate_mouse_move(self, data: Dict[str, Any], env: Dict[str, str]) -> bool:
         """Simulate mouse movement"""
         try:
             x = data.get('x', 0)
             y = data.get('y', 0)
+            relative = data.get('relative', False)
             
-            subprocess.run(['xdotool', 'mousemove', str(x), str(y)], timeout=2)
+            if relative:
+                subprocess.run(['xdotool', 'mousemove_relative', str(x), str(y)], 
+                             env=env, timeout=2)
+            else:
+                subprocess.run(['xdotool', 'mousemove', str(x), str(y)], 
+                             env=env, timeout=2)
             
             return True
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Mouse move simulation failed: {e}")
             return False
     
-    def _simulate_key_press(self, data: Dict[str, Any]) -> bool:
+    def _simulate_mouse_drag(self, data: Dict[str, Any], env: Dict[str, str]) -> bool:
+        """Simulate mouse drag"""
+        try:
+            start_x = data.get('start_x', 0)
+            start_y = data.get('start_y', 0)
+            end_x = data.get('end_x', 0)
+            end_y = data.get('end_y', 0)
+            button = data.get('button', 1)
+            
+            # Move to start position
+            subprocess.run(['xdotool', 'mousemove', str(start_x), str(start_y)], 
+                         env=env, timeout=2)
+            
+            # Press and hold button
+            subprocess.run(['xdotool', 'mousedown', str(button)], 
+                         env=env, timeout=2)
+            
+            # Drag to end position
+            subprocess.run(['xdotool', 'mousemove', str(end_x), str(end_y)], 
+                         env=env, timeout=2)
+            
+            # Release button
+            subprocess.run(['xdotool', 'mouseup', str(button)], 
+                         env=env, timeout=2)
+            
+            return True
+        except Exception as e:
+            logger.debug(f"Mouse drag simulation failed: {e}")
+            return False
+    
+    def _simulate_mouse_scroll(self, data: Dict[str, Any], env: Dict[str, str]) -> bool:
+        """Simulate mouse scroll"""
+        try:
+            x = data.get('x', 0)
+            y = data.get('y', 0)
+            direction = data.get('direction', 'up')  # up, down, left, right
+            amount = data.get('amount', 1)
+            
+            # Move to position
+            subprocess.run(['xdotool', 'mousemove', str(x), str(y)], 
+                         env=env, timeout=2)
+            
+            # Scroll
+            scroll_map = {
+                'up': '4',
+                'down': '5',
+                'left': '6',
+                'right': '7'
+            }
+            
+            scroll_button = scroll_map.get(direction, '4')
+            
+            for _ in range(amount):
+                subprocess.run(['xdotool', 'click', scroll_button], 
+                             env=env, timeout=2)
+            
+            return True
+        except Exception as e:
+            logger.debug(f"Mouse scroll simulation failed: {e}")
+            return False
+    
+    def _simulate_key_press(self, data: Dict[str, Any], env: Dict[str, str]) -> bool:
         """Simulate key press"""
         try:
             key = data.get('key', '')
+            repeat = data.get('repeat', 1)
             
-            subprocess.run(['xdotool', 'key', key], timeout=2)
+            for _ in range(repeat):
+                subprocess.run(['xdotool', 'key', key], env=env, timeout=2)
             
             return True
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Key press simulation failed: {e}")
             return False
     
-    def _simulate_key_type(self, data: Dict[str, Any]) -> bool:
+    def _simulate_key_type(self, data: Dict[str, Any], env: Dict[str, str]) -> bool:
         """Simulate typing text"""
         try:
             text = data.get('text', '')
+            delay = data.get('delay', 0)  # Delay between characters in ms
             
-            subprocess.run(['xdotool', 'type', text], timeout=5)
+            if delay > 0:
+                subprocess.run(['xdotool', 'type', '--delay', str(delay), text], 
+                             env=env, timeout=10)
+            else:
+                subprocess.run(['xdotool', 'type', text], env=env, timeout=10)
             
             return True
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Key type simulation failed: {e}")
             return False
+    
+    def _simulate_key_combination(self, data: Dict[str, Any], env: Dict[str, str]) -> bool:
+        """Simulate key combination (e.g., Ctrl+C)"""
+        try:
+            keys = data.get('keys', [])
+            
+            if not keys:
+                return False
+            
+            # Join keys with +
+            key_combination = '+'.join(keys)
+            subprocess.run(['xdotool', 'key', key_combination], env=env, timeout=2)
+            
+            return True
+        except Exception as e:
+            logger.debug(f"Key combination simulation failed: {e}")
+            return False
+    
+    def _simulate_touch_tap(self, data: Dict[str, Any], env: Dict[str, str]) -> bool:
+        """Simulate touch tap (maps to mouse click)"""
+        try:
+            # Touch tap is essentially a mouse click
+            return self._simulate_mouse_click(data, env)
+        except Exception as e:
+            logger.debug(f"Touch tap simulation failed: {e}")
+            return False
+    
+    def _simulate_touch_swipe(self, data: Dict[str, Any], env: Dict[str, str]) -> bool:
+        """Simulate touch swipe (maps to mouse drag)"""
+        try:
+            # Touch swipe is essentially a mouse drag
+            return self._simulate_mouse_drag(data, env)
+        except Exception as e:
+            logger.debug(f"Touch swipe simulation failed: {e}")
+            return False
+    
+    def get_input_capabilities(self) -> Dict[str, Any]:
+        """Get input simulation capabilities"""
+        try:
+            # Check if xdotool is available
+            result = subprocess.run(['which', 'xdotool'], 
+                                  capture_output=True, text=True, timeout=2)
+            xdotool_available = result.returncode == 0
+            
+            # Check if we're on Wayland (input simulation is more limited)
+            is_wayland = self.display_server == DisplayServerType.WAYLAND
+            
+            return {
+                'xdotool_available': xdotool_available,
+                'display_server': self.display_server.value,
+                'supported_input_types': [
+                    'mouse_click',
+                    'mouse_move', 
+                    'mouse_drag',
+                    'mouse_scroll',
+                    'key_press',
+                    'key_type',
+                    'key_combination',
+                    'touch_tap',
+                    'touch_swipe'
+                ] if xdotool_available else [],
+                'limitations': {
+                    'wayland_limited': is_wayland,
+                    'requires_xdotool': not xdotool_available
+                }
+            }
+        
+        except Exception as e:
+            logger.error(f"Failed to get input capabilities: {e}")
+            return {
+                'xdotool_available': False,
+                'display_server': 'unknown',
+                'supported_input_types': [],
+                'limitations': {'error': str(e)}
+            }
 
 
 # Global remote desktop controller instance
