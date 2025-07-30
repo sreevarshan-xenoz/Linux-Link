@@ -11,6 +11,7 @@ from security import SecureCommandExecutor
 from monitoring import monitor
 from file_manager import get_file_manager, FileManagerError, PermissionError as FilePermissionError
 from desktop_controller import get_desktop_controller, DesktopControllerError
+from media_controller import get_media_controller, MediaControllerError
 
 # Enhanced logging configuration
 logging.basicConfig(
@@ -128,6 +129,30 @@ class WallpaperRequest(BaseModel):
 
 class FullscreenRequest(BaseModel):
     window_id: Union[int, str] = None
+
+# Media Control Models
+class MediaPlayerRequest(BaseModel):
+    player: str = None
+
+class VolumeRequest(BaseModel):
+    volume: float
+    player: str = None
+
+class ClipboardTextRequest(BaseModel):
+    text: str
+
+class ClipboardImageRequest(BaseModel):
+    image_data: str  # base64 encoded
+    image_type: str = "image/png"
+
+class ClipboardSyncRequest(BaseModel):
+    text_content: str = None
+    image_content: str = None  # base64 encoded
+    image_type: str = None
+
+class AudioDeviceRequest(BaseModel):
+    device_id: str
+    device_type: str = "output"
 
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     try:
@@ -738,6 +763,384 @@ async def get_notifications(user=Depends(verify_token)):
     except Exception as e:
         logging.error(f"NOTIFICATIONS_ERROR: user={user['sub']}, error='{str(e)}'")
         raise HTTPException(status_code=500, detail="Failed to get notifications")
+
+# Media Control Endpoints
+
+@app.get("/media/status")
+async def get_media_status(user=Depends(verify_token)):
+    """Get current media status and available players."""
+    try:
+        mc = get_media_controller()
+        status = mc.get_comprehensive_status()
+        
+        logging.info(f"MEDIA_STATUS_SUCCESS: user={user['sub']}, players={len(status['available_players'])}")
+        return {
+            "success": True,
+            "status": status
+        }
+    
+    except Exception as e:
+        logging.error(f"MEDIA_STATUS_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get media status")
+
+@app.post("/media/control/play-pause")
+async def media_play_pause(request: MediaPlayerRequest, user=Depends(verify_token)):
+    """Toggle play/pause for media player."""
+    try:
+        mc = get_media_controller()
+        success = mc.play_pause(request.player)
+        
+        if success:
+            logging.info(f"MEDIA_PLAY_PAUSE_SUCCESS: user={user['sub']}, player={request.player}")
+            return {
+                "success": True,
+                "player": request.player or mc.get_active_player(),
+                "message": "Play/pause toggled"
+            }
+        else:
+            logging.warning(f"MEDIA_PLAY_PAUSE_FAILED: user={user['sub']}, player={request.player}")
+            raise HTTPException(status_code=400, detail="Failed to toggle play/pause")
+    
+    except Exception as e:
+        logging.error(f"MEDIA_PLAY_PAUSE_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to control media playback")
+
+@app.post("/media/control/play")
+async def media_play(request: MediaPlayerRequest, user=Depends(verify_token)):
+    """Play media."""
+    try:
+        mc = get_media_controller()
+        success = mc.play(request.player)
+        
+        if success:
+            logging.info(f"MEDIA_PLAY_SUCCESS: user={user['sub']}, player={request.player}")
+            return {
+                "success": True,
+                "player": request.player or mc.get_active_player(),
+                "message": "Media playing"
+            }
+        else:
+            logging.warning(f"MEDIA_PLAY_FAILED: user={user['sub']}, player={request.player}")
+            raise HTTPException(status_code=400, detail="Failed to play media")
+    
+    except Exception as e:
+        logging.error(f"MEDIA_PLAY_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to play media")
+
+@app.post("/media/control/pause")
+async def media_pause(request: MediaPlayerRequest, user=Depends(verify_token)):
+    """Pause media."""
+    try:
+        mc = get_media_controller()
+        success = mc.pause(request.player)
+        
+        if success:
+            logging.info(f"MEDIA_PAUSE_SUCCESS: user={user['sub']}, player={request.player}")
+            return {
+                "success": True,
+                "player": request.player or mc.get_active_player(),
+                "message": "Media paused"
+            }
+        else:
+            logging.warning(f"MEDIA_PAUSE_FAILED: user={user['sub']}, player={request.player}")
+            raise HTTPException(status_code=400, detail="Failed to pause media")
+    
+    except Exception as e:
+        logging.error(f"MEDIA_PAUSE_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to pause media")
+
+@app.post("/media/control/stop")
+async def media_stop(request: MediaPlayerRequest, user=Depends(verify_token)):
+    """Stop media."""
+    try:
+        mc = get_media_controller()
+        success = mc.stop(request.player)
+        
+        if success:
+            logging.info(f"MEDIA_STOP_SUCCESS: user={user['sub']}, player={request.player}")
+            return {
+                "success": True,
+                "player": request.player or mc.get_active_player(),
+                "message": "Media stopped"
+            }
+        else:
+            logging.warning(f"MEDIA_STOP_FAILED: user={user['sub']}, player={request.player}")
+            raise HTTPException(status_code=400, detail="Failed to stop media")
+    
+    except Exception as e:
+        logging.error(f"MEDIA_STOP_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to stop media")
+
+@app.post("/media/control/next")
+async def media_next(request: MediaPlayerRequest, user=Depends(verify_token)):
+    """Skip to next track."""
+    try:
+        mc = get_media_controller()
+        success = mc.next_track(request.player)
+        
+        if success:
+            logging.info(f"MEDIA_NEXT_SUCCESS: user={user['sub']}, player={request.player}")
+            return {
+                "success": True,
+                "player": request.player or mc.get_active_player(),
+                "message": "Skipped to next track"
+            }
+        else:
+            logging.warning(f"MEDIA_NEXT_FAILED: user={user['sub']}, player={request.player}")
+            raise HTTPException(status_code=400, detail="Failed to skip to next track")
+    
+    except Exception as e:
+        logging.error(f"MEDIA_NEXT_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to skip track")
+
+@app.post("/media/control/previous")
+async def media_previous(request: MediaPlayerRequest, user=Depends(verify_token)):
+    """Skip to previous track."""
+    try:
+        mc = get_media_controller()
+        success = mc.previous_track(request.player)
+        
+        if success:
+            logging.info(f"MEDIA_PREVIOUS_SUCCESS: user={user['sub']}, player={request.player}")
+            return {
+                "success": True,
+                "player": request.player or mc.get_active_player(),
+                "message": "Skipped to previous track"
+            }
+        else:
+            logging.warning(f"MEDIA_PREVIOUS_FAILED: user={user['sub']}, player={request.player}")
+            raise HTTPException(status_code=400, detail="Failed to skip to previous track")
+    
+    except Exception as e:
+        logging.error(f"MEDIA_PREVIOUS_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to skip track")
+
+@app.post("/media/volume/player")
+async def set_player_volume(request: VolumeRequest, user=Depends(verify_token)):
+    """Set volume for media player."""
+    try:
+        mc = get_media_controller()
+        success = mc.set_player_volume(request.volume, request.player)
+        
+        if success:
+            logging.info(f"PLAYER_VOLUME_SUCCESS: user={user['sub']}, volume={request.volume}, player={request.player}")
+            return {
+                "success": True,
+                "volume": request.volume,
+                "player": request.player or mc.get_active_player(),
+                "message": f"Player volume set to {request.volume}"
+            }
+        else:
+            logging.warning(f"PLAYER_VOLUME_FAILED: user={user['sub']}, volume={request.volume}")
+            raise HTTPException(status_code=400, detail="Failed to set player volume")
+    
+    except Exception as e:
+        logging.error(f"PLAYER_VOLUME_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to set player volume")
+
+@app.post("/media/volume/system")
+async def set_system_volume(request: VolumeRequest, user=Depends(verify_token)):
+    """Set system volume."""
+    try:
+        mc = get_media_controller()
+        success = mc.set_system_volume(request.volume)
+        
+        if success:
+            logging.info(f"SYSTEM_VOLUME_SUCCESS: user={user['sub']}, volume={request.volume}")
+            return {
+                "success": True,
+                "volume": request.volume,
+                "message": f"System volume set to {request.volume}"
+            }
+        else:
+            logging.warning(f"SYSTEM_VOLUME_FAILED: user={user['sub']}, volume={request.volume}")
+            raise HTTPException(status_code=400, detail="Failed to set system volume")
+    
+    except Exception as e:
+        logging.error(f"SYSTEM_VOLUME_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to set system volume")
+
+@app.post("/media/volume/mute")
+async def toggle_system_mute(user=Depends(verify_token)):
+    """Toggle system audio mute."""
+    try:
+        mc = get_media_controller()
+        success = mc.toggle_system_mute()
+        
+        if success:
+            muted = mc.is_system_muted()
+            logging.info(f"SYSTEM_MUTE_SUCCESS: user={user['sub']}, muted={muted}")
+            return {
+                "success": True,
+                "muted": muted,
+                "message": f"System audio {'muted' if muted else 'unmuted'}"
+            }
+        else:
+            logging.warning(f"SYSTEM_MUTE_FAILED: user={user['sub']}")
+            raise HTTPException(status_code=400, detail="Failed to toggle system mute")
+    
+    except Exception as e:
+        logging.error(f"SYSTEM_MUTE_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to toggle system mute")
+
+@app.get("/media/audio/devices")
+async def get_audio_devices(user=Depends(verify_token)):
+    """Get available audio devices."""
+    try:
+        mc = get_media_controller()
+        devices = mc.get_audio_devices()
+        
+        logging.info(f"AUDIO_DEVICES_SUCCESS: user={user['sub']}, count={len(devices)}")
+        return {
+            "success": True,
+            "devices": devices,
+            "count": len(devices)
+        }
+    
+    except Exception as e:
+        logging.error(f"AUDIO_DEVICES_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get audio devices")
+
+@app.post("/media/audio/default-device")
+async def set_default_audio_device(request: AudioDeviceRequest, user=Depends(verify_token)):
+    """Set default audio device."""
+    try:
+        mc = get_media_controller()
+        success = mc.set_default_audio_device(request.device_id, request.device_type)
+        
+        if success:
+            logging.info(f"DEFAULT_DEVICE_SUCCESS: user={user['sub']}, device={request.device_id}, type={request.device_type}")
+            return {
+                "success": True,
+                "device_id": request.device_id,
+                "device_type": request.device_type,
+                "message": f"Default {request.device_type} device set"
+            }
+        else:
+            logging.warning(f"DEFAULT_DEVICE_FAILED: user={user['sub']}, device={request.device_id}")
+            raise HTTPException(status_code=400, detail="Failed to set default audio device")
+    
+    except Exception as e:
+        logging.error(f"DEFAULT_DEVICE_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to set default audio device")
+
+@app.get("/clipboard")
+async def get_clipboard_content(user=Depends(verify_token)):
+    """Get clipboard content."""
+    try:
+        mc = get_media_controller()
+        clipboard_data = mc.sync_clipboard_to_mobile()
+        
+        logging.info(f"CLIPBOARD_GET_SUCCESS: user={user['sub']}, has_text={clipboard_data['has_text']}, has_image={clipboard_data['has_image']}")
+        return {
+            "success": True,
+            "clipboard": clipboard_data
+        }
+    
+    except Exception as e:
+        logging.error(f"CLIPBOARD_GET_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get clipboard content")
+
+@app.post("/clipboard/text")
+async def set_clipboard_text(request: ClipboardTextRequest, user=Depends(verify_token)):
+    """Set text to clipboard."""
+    try:
+        mc = get_media_controller()
+        success = mc.set_clipboard_text(request.text)
+        
+        if success:
+            logging.info(f"CLIPBOARD_TEXT_SUCCESS: user={user['sub']}, length={len(request.text)}")
+            return {
+                "success": True,
+                "text_length": len(request.text),
+                "message": "Text set to clipboard"
+            }
+        else:
+            logging.warning(f"CLIPBOARD_TEXT_FAILED: user={user['sub']}")
+            raise HTTPException(status_code=400, detail="Failed to set clipboard text")
+    
+    except Exception as e:
+        logging.error(f"CLIPBOARD_TEXT_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to set clipboard text")
+
+@app.post("/clipboard/image")
+async def set_clipboard_image(request: ClipboardImageRequest, user=Depends(verify_token)):
+    """Set image to clipboard."""
+    try:
+        mc = get_media_controller()
+        
+        # Decode base64 image data
+        import base64
+        image_data = base64.b64decode(request.image_data)
+        
+        success = mc.set_clipboard_image(image_data, request.image_type)
+        
+        if success:
+            logging.info(f"CLIPBOARD_IMAGE_SUCCESS: user={user['sub']}, size={len(image_data)}, type={request.image_type}")
+            return {
+                "success": True,
+                "image_size": len(image_data),
+                "image_type": request.image_type,
+                "message": "Image set to clipboard"
+            }
+        else:
+            logging.warning(f"CLIPBOARD_IMAGE_FAILED: user={user['sub']}")
+            raise HTTPException(status_code=400, detail="Failed to set clipboard image")
+    
+    except Exception as e:
+        logging.error(f"CLIPBOARD_IMAGE_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to set clipboard image")
+
+@app.post("/clipboard/sync")
+async def sync_clipboard_from_mobile(request: ClipboardSyncRequest, user=Depends(verify_token)):
+    """Sync clipboard content from mobile device."""
+    try:
+        mc = get_media_controller()
+        
+        mobile_data = {
+            'text_content': request.text_content,
+            'image_content': request.image_content,
+            'image_type': request.image_type
+        }
+        
+        success = mc.sync_clipboard_from_mobile(mobile_data)
+        
+        if success:
+            content_type = 'text' if request.text_content else 'image' if request.image_content else 'none'
+            logging.info(f"CLIPBOARD_SYNC_SUCCESS: user={user['sub']}, type={content_type}")
+            return {
+                "success": True,
+                "synced_content": content_type,
+                "message": f"Clipboard synced from mobile ({content_type})"
+            }
+        else:
+            logging.warning(f"CLIPBOARD_SYNC_FAILED: user={user['sub']}")
+            raise HTTPException(status_code=400, detail="Failed to sync clipboard from mobile")
+    
+    except Exception as e:
+        logging.error(f"CLIPBOARD_SYNC_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to sync clipboard from mobile")
+
+@app.post("/clipboard/clear")
+async def clear_clipboard(user=Depends(verify_token)):
+    """Clear clipboard contents."""
+    try:
+        mc = get_media_controller()
+        success = mc.clear_clipboard()
+        
+        if success:
+            logging.info(f"CLIPBOARD_CLEAR_SUCCESS: user={user['sub']}")
+            return {
+                "success": True,
+                "message": "Clipboard cleared"
+            }
+        else:
+            logging.warning(f"CLIPBOARD_CLEAR_FAILED: user={user['sub']}")
+            raise HTTPException(status_code=400, detail="Failed to clear clipboard")
+    
+    except Exception as e:
+        logging.error(f"CLIPBOARD_CLEAR_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to clear clipboard")
 
 # Authentication Endpoints
 
