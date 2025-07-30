@@ -13,6 +13,7 @@ from file_manager import get_file_manager, FileManagerError, PermissionError as 
 from desktop_controller import get_desktop_controller, DesktopControllerError
 from media_controller import get_media_controller, MediaControllerError
 from voice_processor import get_voice_processor, VoiceProcessorError
+from remote_desktop import get_remote_desktop_controller, RemoteDesktopError
 
 # Enhanced logging configuration
 logging.basicConfig(
@@ -180,6 +181,26 @@ class CommandSearchRequest(BaseModel):
 class CommandImportRequest(BaseModel):
     json_data: str
     overwrite: bool = False
+
+# Remote Desktop Models
+class VNCSessionRequest(BaseModel):
+    width: int = 1920
+    height: int = 1080
+    depth: int = 24
+    password: str = None
+
+class WaylandShareRequest(BaseModel):
+    output_name: str = None
+    format: str = "webm"
+
+class InputSimulationRequest(BaseModel):
+    input_type: str
+    data: Dict[str, Any]
+    display: str = None
+
+class ApplicationLaunchRequest(BaseModel):
+    application: str
+    display: str = None
 
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     try:
@@ -1445,6 +1466,237 @@ async def import_custom_commands(request: CommandImportRequest, user=Depends(ver
     except Exception as e:
         logging.error(f"IMPORT_COMMANDS_ERROR: user={user['sub']}, error='{str(e)}'")
         raise HTTPException(status_code=500, detail="Failed to import custom commands")
+
+# Remote Desktop Endpoints
+
+@app.get("/remote-desktop/capabilities")
+async def get_remote_desktop_capabilities(user=Depends(verify_token)):
+    """Get remote desktop capabilities and supported features."""
+    try:
+        rdc = get_remote_desktop_controller()
+        capabilities = rdc.get_capabilities()
+        
+        logging.info(f"REMOTE_DESKTOP_CAPABILITIES_SUCCESS: user={user['sub']}")
+        return {
+            "success": True,
+            "capabilities": capabilities
+        }
+    
+    except Exception as e:
+        logging.error(f"REMOTE_DESKTOP_CAPABILITIES_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get remote desktop capabilities")
+
+@app.get("/remote-desktop/screen-info")
+async def get_screen_info(user=Depends(verify_token)):
+    """Get current screen information."""
+    try:
+        rdc = get_remote_desktop_controller()
+        screen_info = rdc.get_screen_info()
+        
+        logging.info(f"SCREEN_INFO_SUCCESS: user={user['sub']}")
+        return {
+            "success": True,
+            "screen_info": screen_info.to_dict()
+        }
+    
+    except Exception as e:
+        logging.error(f"SCREEN_INFO_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get screen information")
+
+@app.post("/remote-desktop/vnc/start")
+async def start_vnc_session(request: VNCSessionRequest, user=Depends(verify_token)):
+    """Start a new VNC session."""
+    try:
+        rdc = get_remote_desktop_controller()
+        session = rdc.start_vnc_session(
+            width=request.width,
+            height=request.height,
+            depth=request.depth,
+            password=request.password
+        )
+        
+        logging.info(f"VNC_START_SUCCESS: user={user['sub']}, session={session.session_id}, port={session.port}")
+        return {
+            "success": True,
+            "session": session.to_dict()
+        }
+    
+    except RemoteDesktopError as e:
+        logging.warning(f"VNC_START_ERROR: user={user['sub']}, error='{e.message}'")
+        raise HTTPException(status_code=400, detail={"error": e.message, "code": e.error_code})
+    except Exception as e:
+        logging.error(f"VNC_START_CRITICAL: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to start VNC session")
+
+@app.delete("/remote-desktop/vnc/{session_id}")
+async def stop_vnc_session(session_id: str, user=Depends(verify_token)):
+    """Stop a VNC session."""
+    try:
+        rdc = get_remote_desktop_controller()
+        success = rdc.stop_vnc_session(session_id)
+        
+        if success:
+            logging.info(f"VNC_STOP_SUCCESS: user={user['sub']}, session={session_id}")
+            return {
+                "success": True,
+                "session_id": session_id,
+                "message": "VNC session stopped successfully"
+            }
+        else:
+            logging.warning(f"VNC_STOP_FAILED: user={user['sub']}, session={session_id}")
+            raise HTTPException(status_code=404, detail="VNC session not found")
+    
+    except Exception as e:
+        logging.error(f"VNC_STOP_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to stop VNC session")
+
+@app.get("/remote-desktop/vnc/sessions")
+async def get_vnc_sessions(user=Depends(verify_token)):
+    """Get list of active VNC sessions."""
+    try:
+        rdc = get_remote_desktop_controller()
+        sessions = rdc.get_vnc_sessions()
+        
+        sessions_dict = [session.to_dict() for session in sessions]
+        
+        logging.info(f"VNC_SESSIONS_SUCCESS: user={user['sub']}, count={len(sessions_dict)}")
+        return {
+            "success": True,
+            "sessions": sessions_dict,
+            "count": len(sessions_dict)
+        }
+    
+    except Exception as e:
+        logging.error(f"VNC_SESSIONS_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get VNC sessions")
+
+@app.post("/remote-desktop/wayland/start")
+async def start_wayland_share(request: WaylandShareRequest, user=Depends(verify_token)):
+    """Start Wayland screen sharing."""
+    try:
+        rdc = get_remote_desktop_controller()
+        share_info = rdc.start_wayland_share(
+            output_name=request.output_name
+        )
+        
+        logging.info(f"WAYLAND_SHARE_START_SUCCESS: user={user['sub']}, share_id={share_info['share_id']}")
+        return {
+            "success": True,
+            "share_info": share_info
+        }
+    
+    except RemoteDesktopError as e:
+        logging.warning(f"WAYLAND_SHARE_START_ERROR: user={user['sub']}, error='{e.message}'")
+        raise HTTPException(status_code=400, detail={"error": e.message, "code": e.error_code})
+    except Exception as e:
+        logging.error(f"WAYLAND_SHARE_START_CRITICAL: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to start Wayland screen sharing")
+
+@app.delete("/remote-desktop/wayland/{share_id}")
+async def stop_wayland_share(share_id: str, user=Depends(verify_token)):
+    """Stop Wayland screen sharing."""
+    try:
+        rdc = get_remote_desktop_controller()
+        success = rdc.stop_wayland_share(share_id)
+        
+        if success:
+            logging.info(f"WAYLAND_SHARE_STOP_SUCCESS: user={user['sub']}, share_id={share_id}")
+            return {
+                "success": True,
+                "share_id": share_id,
+                "message": "Wayland screen sharing stopped successfully"
+            }
+        else:
+            logging.warning(f"WAYLAND_SHARE_STOP_FAILED: user={user['sub']}, share_id={share_id}")
+            raise HTTPException(status_code=404, detail="Wayland share not found")
+    
+    except Exception as e:
+        logging.error(f"WAYLAND_SHARE_STOP_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to stop Wayland screen sharing")
+
+@app.post("/remote-desktop/input")
+async def simulate_input(request: InputSimulationRequest, user=Depends(verify_token)):
+    """Simulate input events (mouse, keyboard, touch)."""
+    try:
+        rdc = get_remote_desktop_controller()
+        success = rdc.simulate_input(
+            input_type=request.input_type,
+            data=request.data,
+            display=request.display
+        )
+        
+        if success:
+            logging.info(f"INPUT_SIMULATION_SUCCESS: user={user['sub']}, type={request.input_type}")
+            return {
+                "success": True,
+                "input_type": request.input_type,
+                "message": f"Input simulation successful: {request.input_type}"
+            }
+        else:
+            logging.warning(f"INPUT_SIMULATION_FAILED: user={user['sub']}, type={request.input_type}")
+            raise HTTPException(status_code=400, detail="Input simulation failed")
+    
+    except Exception as e:
+        logging.error(f"INPUT_SIMULATION_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to simulate input")
+
+@app.get("/remote-desktop/input/capabilities")
+async def get_input_capabilities(user=Depends(verify_token)):
+    """Get input simulation capabilities."""
+    try:
+        rdc = get_remote_desktop_controller()
+        capabilities = rdc.get_input_capabilities()
+        
+        logging.info(f"INPUT_CAPABILITIES_SUCCESS: user={user['sub']}")
+        return {
+            "success": True,
+            "capabilities": capabilities
+        }
+    
+    except Exception as e:
+        logging.error(f"INPUT_CAPABILITIES_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get input capabilities")
+
+@app.post("/remote-desktop/launch")
+async def launch_application(request: ApplicationLaunchRequest, user=Depends(verify_token)):
+    """Launch application on remote desktop."""
+    try:
+        rdc = get_remote_desktop_controller()
+        result = rdc.launch_application(
+            application=request.application,
+            display=request.display
+        )
+        
+        logging.info(f"APP_LAUNCH_SUCCESS: user={user['sub']}, app={request.application}, pid={result['pid']}")
+        return {
+            "success": True,
+            "launch_info": result
+        }
+    
+    except RemoteDesktopError as e:
+        logging.warning(f"APP_LAUNCH_ERROR: user={user['sub']}, error='{e.message}'")
+        raise HTTPException(status_code=400, detail={"error": e.message, "code": e.error_code})
+    except Exception as e:
+        logging.error(f"APP_LAUNCH_CRITICAL: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to launch application")
+
+@app.get("/remote-desktop/wayland/outputs")
+async def get_wayland_outputs(user=Depends(verify_token)):
+    """Get available Wayland outputs."""
+    try:
+        rdc = get_remote_desktop_controller()
+        outputs = rdc.wayland_share.get_wayland_outputs()
+        
+        logging.info(f"WAYLAND_OUTPUTS_SUCCESS: user={user['sub']}, count={len(outputs)}")
+        return {
+            "success": True,
+            "outputs": outputs,
+            "count": len(outputs)
+        }
+    
+    except Exception as e:
+        logging.error(f"WAYLAND_OUTPUTS_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get Wayland outputs")
 
 # Authentication Endpoints
 
