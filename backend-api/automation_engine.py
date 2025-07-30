@@ -471,9 +471,114 @@ class TaskScheduler:
                 elif ':' in schedule_expr:
                     # Parse time format "HH:MM"
                     schedule.every().day.at(schedule_expr).do(self._run_scheduled_task, task_id)
+                
+                elif schedule_expr.startswith('cron '):
+                    # Basic cron-like support
+                    self._parse_cron_expression(schedule_expr[5:], task_id)
+                
+                elif schedule_expr == 'startup':
+                    # Run once at startup
+                    self._run_scheduled_task(task_id)
+                
+                elif schedule_expr.startswith('on '):
+                    # Parse "on monday", "on weekdays", etc.
+                    day_part = schedule_expr[3:].lower()
+                    if day_part == 'monday':
+                        schedule.every().monday.do(self._run_scheduled_task, task_id)
+                    elif day_part == 'tuesday':
+                        schedule.every().tuesday.do(self._run_scheduled_task, task_id)
+                    elif day_part == 'wednesday':
+                        schedule.every().wednesday.do(self._run_scheduled_task, task_id)
+                    elif day_part == 'thursday':
+                        schedule.every().thursday.do(self._run_scheduled_task, task_id)
+                    elif day_part == 'friday':
+                        schedule.every().friday.do(self._run_scheduled_task, task_id)
+                    elif day_part == 'saturday':
+                        schedule.every().saturday.do(self._run_scheduled_task, task_id)
+                    elif day_part == 'sunday':
+                        schedule.every().sunday.do(self._run_scheduled_task, task_id)
+                    elif day_part == 'weekdays':
+                        for day in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']:
+                            getattr(schedule.every(), day).do(self._run_scheduled_task, task_id)
+                    elif day_part == 'weekends':
+                        schedule.every().saturday.do(self._run_scheduled_task, task_id)
+                        schedule.every().sunday.do(self._run_scheduled_task, task_id)
             
             except Exception as e:
                 logger.error(f"Failed to schedule task {task_id}: {e}")
+    
+    def _parse_cron_expression(self, cron_expr: str, task_id: str):
+        """Parse basic cron expression (simplified)"""
+        try:
+            # Basic cron format: minute hour day month weekday
+            parts = cron_expr.split()
+            if len(parts) != 5:
+                logger.error(f"Invalid cron expression: {cron_expr}")
+                return
+            
+            minute, hour, day, month, weekday = parts
+            
+            # Handle simple cases
+            if minute == '0' and hour != '*':
+                # Run at specific hour
+                if hour.isdigit():
+                    schedule.every().day.at(f"{hour}:00").do(self._run_scheduled_task, task_id)
+            
+            elif minute != '*' and hour != '*':
+                # Run at specific time
+                if minute.isdigit() and hour.isdigit():
+                    schedule.every().day.at(f"{hour}:{minute}").do(self._run_scheduled_task, task_id)
+            
+            # More complex cron parsing would go here
+            
+        except Exception as e:
+            logger.error(f"Failed to parse cron expression {cron_expr}: {e}")
+    
+    def enable_task(self, task_id: str) -> bool:
+        """Enable a scheduled task"""
+        try:
+            if task_id in self.scheduled_tasks:
+                self.scheduled_tasks[task_id]['enabled'] = True
+                self._save_scheduled_tasks()
+                self._update_schedule()
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"Failed to enable task {task_id}: {e}")
+            return False
+    
+    def disable_task(self, task_id: str) -> bool:
+        """Disable a scheduled task"""
+        try:
+            if task_id in self.scheduled_tasks:
+                self.scheduled_tasks[task_id]['enabled'] = False
+                self._save_scheduled_tasks()
+                self._update_schedule()
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"Failed to disable task {task_id}: {e}")
+            return False
+    
+    def get_next_run_time(self, task_id: str) -> Optional[float]:
+        """Get next scheduled run time for a task"""
+        try:
+            # This would require integration with the schedule library
+            # to get next run times for specific jobs
+            return None
+        except Exception as e:
+            logger.error(f"Failed to get next run time for {task_id}: {e}")
+            return None
+    
+    def get_task_history(self, task_id: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """Get execution history for a scheduled task"""
+        try:
+            # This would require storing execution history
+            # For now, return empty list
+            return []
+        except Exception as e:
+            logger.error(f"Failed to get task history for {task_id}: {e}")
+            return []
     
     def _run_scheduled_task(self, task_id: str):
         """Run a scheduled task"""
