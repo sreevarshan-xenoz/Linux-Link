@@ -1574,6 +1574,9 @@ class VoiceProcessor:
         self.parser = NaturalLanguageParser()
         self.executor = CommandExecutor()
         self.custom_commands = {}
+        self.command_history = []
+        self.max_history = 50
+        self._load_custom_commands()
         logger.info("Voice processor initialized")
     
     def process_command(self, text: str) -> CommandResult:
@@ -1607,7 +1610,12 @@ class VoiceProcessor:
                 )
             
             # Execute command
-            return self.executor.execute_command(parsed_command)
+            result = self.executor.execute_command(parsed_command)
+            
+            # Add to command history
+            self._add_to_history(text, result)
+            
+            return result
         
         except Exception as e:
             logger.error(f"Voice command processing failed: {e}")
@@ -1624,16 +1632,23 @@ class VoiceProcessor:
         """Check if text matches any custom commands"""
         text_lower = text.lower().strip()
         
-        for trigger, command_info in self.custom_commands.items():
+        for trigger_key, command_info in self.custom_commands.items():
+            trigger = command_info.get('trigger', trigger_key)
+            
             if trigger.lower() in text_lower:
                 try:
+                    # Update usage statistics
+                    command_info['usage_count'] = command_info.get('usage_count', 0) + 1
+                    command_info['last_used'] = time.time()
+                    self._save_custom_commands()
+                    
                     # Execute custom command actions
                     actions_executed = []
                     for action in command_info['actions']:
-                        # This is a simplified implementation
-                        # In practice, you'd want more sophisticated action execution
-                        subprocess.run(action, shell=True, timeout=10)
-                        actions_executed.append(action)
+                        # Enhanced action execution with parameter substitution
+                        processed_action = self._process_action_parameters(action, text, command_info.get('parameters', {}))
+                        subprocess.run(processed_action, shell=True, timeout=10)
+                        actions_executed.append(processed_action)
                     
                     return CommandResult(
                         success=True,
@@ -1655,14 +1670,48 @@ class VoiceProcessor:
         
         return None
     
-    def add_custom_command(self, trigger: str, actions: List[str], description: str) -> bool:
+    def _process_action_parameters(self, action: str, original_text: str, parameters: Dict[str, Any]) -> str:
+        """Process action string with parameter substitution"""
+        processed_action = action
+        
+        # Replace common placeholders
+        processed_action = processed_action.replace('{original_text}', original_text)
+        processed_action = processed_action.replace('{timestamp}', str(int(time.time())))
+        
+        # Replace custom parameters
+        for param_name, param_value in parameters.items():
+            placeholder = f'{{{param_name}}}'
+            processed_action = processed_action.replace(placeholder, str(param_value))
+        
+        return processed_action
+    
+    def add_custom_command(self, trigger: str, actions: List[str], description: str, 
+                          parameters: Dict[str, Any] = None, category: str = "custom") -> bool:
         """Add a custom voice command"""
         try:
-            self.custom_commands[trigger] = {
+            # Validate trigger
+            if not trigger or not trigger.strip():
+                raise ValueError("Trigger cannot be empty")
+            
+            # Validate actions
+            if not actions or not isinstance(actions, list):
+                raise ValueError("Actions must be a non-empty list")
+            
+            # Store custom command
+            self.custom_commands[trigger.lower().strip()] = {
+                'trigger': trigger,
                 'actions': actions,
                 'description': description,
-                'created_at': time.time()
+                'parameters': parameters or {},
+                'category': category,
+                'created_at': time.time(),
+                'usage_count': 0,
+                'last_used': None
             }
+            
+            # Save to persistent storage
+            self._save_custom_commands()
+            
             logger.info(f"Added custom command: {trigger}")
             return True
         except Exception as e:
@@ -1672,8 +1721,10 @@ class VoiceProcessor:
     def remove_custom_command(self, trigger: str) -> bool:
         """Remove a custom voice command"""
         try:
-            if trigger in self.custom_commands:
-                del self.custom_commands[trigger]
+            trigger_key = trigger.lower().strip()
+            if trigger_key in self.custom_commands:
+                del self.custom_commands[trigger_key]
+                self._save_custom_commands()
                 logger.info(f"Removed custom command: {trigger}")
                 return True
             else:
@@ -1682,17 +1733,301 @@ class VoiceProcessor:
             logger.error(f"Failed to remove custom command: {e}")
             return False
     
+    def update_custom_command(self, trigger: str, actions: List[str] = None, 
+                             description: str = None, parameters: Dict[str, Any] = None) -> bool:
+        """Update an existing custom command"""
+        try:
+            trigger_key = trigger.lower().strip()
+            if trigger_key not in self.custom_commands:
+                return False
+            
+            command = self.custom_commands[trigger_key]
+            
+            if actions is not None:
+                command['actions'] = actions
+            if description is not None:
+                command['description'] = description
+            if parameters is not None:
+                command['parameters'] = parameters
+            
+            command['updated_at'] = time.time()
+            self._save_custom_commands()
+            
+            logger.info(f"Updated custom command: {trigger}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to update custom command: {e}")
+            return False
+    
     def get_custom_commands(self) -> List[Dict[str, Any]]:
         """Get list of custom commands"""
         commands = []
-        for trigger, info in self.custom_commands.items():
-            commands.append({
-                'trigger': trigger,
+        for trigger_key, info in self.custom_commands.items():
+            command_info = {
+                'trigger': info.get('trigger', trigger_key),
                 'actions': info['actions'],
                 'description': info['description'],
-                'created_at': info['created_at']
-            })
+                'category': info.get('category', 'custom'),
+                'parameters': info.get('parameters', {}),
+                'created_at': info['created_at'],
+                'usage_count': info.get('usage_count', 0),
+                'last_used': info.get('last_used')
+            }
+            
+            if 'updated_at' in info:
+                command_info['updated_at'] = info['updated_at']
+            
+            commands.append(command_info)
+        
+        # Sort by usage count and creation time
+        commands.sort(key=lambda x: (x['usage_count'], x['created_at']), reverse=True)
         return commands
+    
+    def export_custom_commands(self) -> str:
+        """Export custom commands to JSON string"""
+        try:
+            export_data = {
+                'version': '1.0',
+                'exported_at': time.time(),
+                'commands': self.get_custom_commands()
+            }
+            return json.dumps(export_data, indent=2)
+        except Exception as e:
+            logger.error(f"Failed to export custom commands: {e}")
+            return ""
+    
+    def import_custom_commands(self, json_data: str, overwrite: bool = False) -> Dict[str, Any]:
+        """Import custom commands from JSON string"""
+        try:
+            import_data = json.loads(json_data)
+            
+            if 'commands' not in import_data:
+                raise ValueError("Invalid import data format")
+            
+            imported_count = 0
+            skipped_count = 0
+            errors = []
+            
+            for command in import_data['commands']:
+                trigger = command.get('trigger', '')
+                
+                if not overwrite and trigger.lower().strip() in self.custom_commands:
+                    skipped_count += 1
+                    continue
+                
+                try:
+                    success = self.add_custom_command(
+                        trigger=trigger,
+                        actions=command.get('actions', []),
+                        description=command.get('description', ''),
+                        parameters=command.get('parameters', {}),
+                        category=command.get('category', 'imported')
+                    )
+                    
+                    if success:
+                        imported_count += 1
+                    else:
+                        errors.append(f"Failed to import command: {trigger}")
+                
+                except Exception as e:
+                    errors.append(f"Error importing {trigger}: {str(e)}")
+            
+            return {
+                'success': True,
+                'imported': imported_count,
+                'skipped': skipped_count,
+                'errors': errors
+            }
+        
+        except Exception as e:
+            logger.error(f"Failed to import custom commands: {e}")
+            return {
+                'success': False,
+                'error': str(e),
+                'imported': 0,
+                'skipped': 0,
+                'errors': []
+            }
+    
+    def _load_custom_commands(self):
+        """Load custom commands from persistent storage"""
+        try:
+            commands_file = os.path.expanduser('~/.linux_link_voice_commands.json')
+            if os.path.exists(commands_file):
+                with open(commands_file, 'r') as f:
+                    data = json.load(f)
+                    self.custom_commands = data.get('commands', {})
+                    logger.info(f"Loaded {len(self.custom_commands)} custom commands")
+        except Exception as e:
+            logger.debug(f"Could not load custom commands: {e}")
+            self.custom_commands = {}
+    
+    def _save_custom_commands(self):
+        """Save custom commands to persistent storage"""
+        try:
+            commands_file = os.path.expanduser('~/.linux_link_voice_commands.json')
+            data = {
+                'version': '1.0',
+                'saved_at': time.time(),
+                'commands': self.custom_commands
+            }
+            
+            with open(commands_file, 'w') as f:
+                json.dump(data, f, indent=2)
+                
+            logger.debug(f"Saved {len(self.custom_commands)} custom commands")
+        except Exception as e:
+            logger.error(f"Failed to save custom commands: {e}")
+    
+    def search_commands(self, query: str, include_builtin: bool = True, 
+                       include_custom: bool = True) -> List[Dict[str, Any]]:
+        """Search for commands matching query"""
+        results = []
+        query_lower = query.lower().strip()
+        
+        if include_builtin:
+            # Search built-in commands
+            for category, patterns in self.parser.patterns.items():
+                for pattern_info in patterns:
+                    for pattern in pattern_info['patterns']:
+                        readable = pattern.replace(r'\s+', ' ').replace(r'\d+', '[number]')
+                        readable = re.sub(r'[()\\]', '', readable)
+                        
+                        if query_lower in readable.lower() or query_lower in pattern_info['action'].lower():
+                            results.append({
+                                'trigger': readable,
+                                'category': category,
+                                'action': pattern_info['action'],
+                                'confidence': pattern_info['confidence'],
+                                'custom': False,
+                                'match_type': 'builtin'
+                            })
+        
+        if include_custom:
+            # Search custom commands
+            for trigger_key, info in self.custom_commands.items():
+                trigger = info.get('trigger', trigger_key)
+                description = info.get('description', '')
+                
+                if (query_lower in trigger.lower() or 
+                    query_lower in description.lower() or
+                    any(query_lower in action.lower() for action in info['actions'])):
+                    
+                    results.append({
+                        'trigger': trigger,
+                        'category': info.get('category', 'custom'),
+                        'description': description,
+                        'actions': info['actions'],
+                        'custom': True,
+                        'match_type': 'custom',
+                        'usage_count': info.get('usage_count', 0)
+                    })
+        
+        # Sort results by relevance
+        def relevance_score(item):
+            score = 0
+            trigger = item.get('trigger', '').lower()
+            
+            # Exact match gets highest score
+            if query_lower == trigger:
+                score += 100
+            # Starts with query gets high score
+            elif trigger.startswith(query_lower):
+                score += 50
+            # Contains query gets medium score
+            elif query_lower in trigger:
+                score += 25
+            
+            # Custom commands with high usage get bonus
+            if item.get('custom') and item.get('usage_count', 0) > 0:
+                score += item['usage_count']
+            
+            return score
+        
+        results.sort(key=relevance_score, reverse=True)
+        return results[:20]  # Limit to top 20 results
+    
+    def _add_to_history(self, command_text: str, result: CommandResult):
+        """Add command to history"""
+        try:
+            history_entry = {
+                'timestamp': time.time(),
+                'command': command_text,
+                'success': result.success,
+                'message': result.message,
+                'confidence': result.confidence,
+                'execution_time': result.execution_time,
+                'command_type': result.command_type.value
+            }
+            
+            self.command_history.append(history_entry)
+            
+            # Keep only recent history
+            if len(self.command_history) > self.max_history:
+                self.command_history = self.command_history[-self.max_history:]
+        
+        except Exception as e:
+            logger.debug(f"Failed to add command to history: {e}")
+    
+    def get_command_history(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """Get recent command history"""
+        return self.command_history[-limit:] if self.command_history else []
+    
+    def clear_command_history(self) -> bool:
+        """Clear command history"""
+        try:
+            self.command_history = []
+            return True
+        except Exception as e:
+            logger.error(f"Failed to clear command history: {e}")
+            return False
+    
+    def get_command_statistics(self) -> Dict[str, Any]:
+        """Get command usage statistics"""
+        try:
+            total_commands = len(self.command_history)
+            successful_commands = sum(1 for entry in self.command_history if entry['success'])
+            
+            # Command type distribution
+            type_counts = {}
+            for entry in self.command_history:
+                cmd_type = entry['command_type']
+                type_counts[cmd_type] = type_counts.get(cmd_type, 0) + 1
+            
+            # Average confidence and execution time
+            if self.command_history:
+                avg_confidence = sum(entry['confidence'] for entry in self.command_history) / total_commands
+                avg_execution_time = sum(entry['execution_time'] for entry in self.command_history) / total_commands
+            else:
+                avg_confidence = 0.0
+                avg_execution_time = 0.0
+            
+            # Most used custom commands
+            custom_usage = []
+            for trigger_key, info in self.custom_commands.items():
+                if info.get('usage_count', 0) > 0:
+                    custom_usage.append({
+                        'trigger': info.get('trigger', trigger_key),
+                        'usage_count': info['usage_count'],
+                        'last_used': info.get('last_used')
+                    })
+            
+            custom_usage.sort(key=lambda x: x['usage_count'], reverse=True)
+            
+            return {
+                'total_commands': total_commands,
+                'successful_commands': successful_commands,
+                'success_rate': successful_commands / total_commands if total_commands > 0 else 0.0,
+                'command_type_distribution': type_counts,
+                'average_confidence': avg_confidence,
+                'average_execution_time': avg_execution_time,
+                'custom_commands_count': len(self.custom_commands),
+                'most_used_custom_commands': custom_usage[:10]
+            }
+        
+        except Exception as e:
+            logger.error(f"Failed to get command statistics: {e}")
+            return {}
     
     def get_available_commands(self) -> List[Dict[str, Any]]:
         """Get list of all available commands"""
