@@ -2,7 +2,7 @@ from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Union
+from typing import Union, List, Dict, Any
 import logging
 from datetime import datetime, timedelta
 import os
@@ -12,6 +12,7 @@ from monitoring import monitor
 from file_manager import get_file_manager, FileManagerError, PermissionError as FilePermissionError
 from desktop_controller import get_desktop_controller, DesktopControllerError
 from media_controller import get_media_controller, MediaControllerError
+from voice_processor import get_voice_processor, VoiceProcessorError
 
 # Enhanced logging configuration
 logging.basicConfig(
@@ -153,6 +154,32 @@ class ClipboardSyncRequest(BaseModel):
 class AudioDeviceRequest(BaseModel):
     device_id: str
     device_type: str = "output"
+
+# Voice Command Models
+class VoiceCommandRequest(BaseModel):
+    text: str
+
+class CustomCommandRequest(BaseModel):
+    trigger: str
+    actions: List[str]
+    description: str
+    parameters: Dict[str, Any] = {}
+    category: str = "custom"
+
+class CustomCommandUpdateRequest(BaseModel):
+    trigger: str
+    actions: List[str] = None
+    description: str = None
+    parameters: Dict[str, Any] = None
+
+class CommandSearchRequest(BaseModel):
+    query: str
+    include_builtin: bool = True
+    include_custom: bool = True
+
+class CommandImportRequest(BaseModel):
+    json_data: str
+    overwrite: bool = False
 
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     try:
@@ -1141,6 +1168,283 @@ async def clear_clipboard(user=Depends(verify_token)):
     except Exception as e:
         logging.error(f"CLIPBOARD_CLEAR_ERROR: user={user['sub']}, error='{str(e)}'")
         raise HTTPException(status_code=500, detail="Failed to clear clipboard")
+
+# Voice Command Endpoints
+
+@app.post("/voice/process")
+async def process_voice_command(request: VoiceCommandRequest, user=Depends(verify_token)):
+    """Process voice command from text input."""
+    try:
+        vp = get_voice_processor()
+        result = vp.process_command(request.text)
+        
+        logging.info(f"VOICE_PROCESS_SUCCESS: user={user['sub']}, command='{request.text}', success={result.success}")
+        return {
+            "success": True,
+            "result": result.to_dict()
+        }
+    
+    except Exception as e:
+        logging.error(f"VOICE_PROCESS_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to process voice command")
+
+@app.get("/voice/commands")
+async def get_available_commands(user=Depends(verify_token)):
+    """Get list of available voice commands."""
+    try:
+        vp = get_voice_processor()
+        commands = vp.get_available_commands()
+        
+        logging.info(f"VOICE_COMMANDS_SUCCESS: user={user['sub']}, count={len(commands)}")
+        return {
+            "success": True,
+            "commands": commands,
+            "count": len(commands)
+        }
+    
+    except Exception as e:
+        logging.error(f"VOICE_COMMANDS_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get available commands")
+
+@app.get("/voice/commands/custom")
+async def get_custom_commands(user=Depends(verify_token)):
+    """Get list of custom voice commands."""
+    try:
+        vp = get_voice_processor()
+        commands = vp.get_custom_commands()
+        
+        logging.info(f"CUSTOM_COMMANDS_SUCCESS: user={user['sub']}, count={len(commands)}")
+        return {
+            "success": True,
+            "commands": commands,
+            "count": len(commands)
+        }
+    
+    except Exception as e:
+        logging.error(f"CUSTOM_COMMANDS_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get custom commands")
+
+@app.post("/voice/commands/custom")
+async def add_custom_command(request: CustomCommandRequest, user=Depends(verify_token)):
+    """Add a new custom voice command."""
+    try:
+        vp = get_voice_processor()
+        success = vp.add_custom_command(
+            trigger=request.trigger,
+            actions=request.actions,
+            description=request.description,
+            parameters=request.parameters,
+            category=request.category
+        )
+        
+        if success:
+            logging.info(f"ADD_CUSTOM_COMMAND_SUCCESS: user={user['sub']}, trigger='{request.trigger}'")
+            return {
+                "success": True,
+                "trigger": request.trigger,
+                "message": f"Custom command '{request.trigger}' added successfully"
+            }
+        else:
+            logging.warning(f"ADD_CUSTOM_COMMAND_FAILED: user={user['sub']}, trigger='{request.trigger}'")
+            raise HTTPException(status_code=400, detail="Failed to add custom command")
+    
+    except Exception as e:
+        logging.error(f"ADD_CUSTOM_COMMAND_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to add custom command")
+
+@app.put("/voice/commands/custom")
+async def update_custom_command(request: CustomCommandUpdateRequest, user=Depends(verify_token)):
+    """Update an existing custom voice command."""
+    try:
+        vp = get_voice_processor()
+        success = vp.update_custom_command(
+            trigger=request.trigger,
+            actions=request.actions,
+            description=request.description,
+            parameters=request.parameters
+        )
+        
+        if success:
+            logging.info(f"UPDATE_CUSTOM_COMMAND_SUCCESS: user={user['sub']}, trigger='{request.trigger}'")
+            return {
+                "success": True,
+                "trigger": request.trigger,
+                "message": f"Custom command '{request.trigger}' updated successfully"
+            }
+        else:
+            logging.warning(f"UPDATE_CUSTOM_COMMAND_FAILED: user={user['sub']}, trigger='{request.trigger}'")
+            raise HTTPException(status_code=404, detail="Custom command not found")
+    
+    except Exception as e:
+        logging.error(f"UPDATE_CUSTOM_COMMAND_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to update custom command")
+
+@app.delete("/voice/commands/custom/{trigger}")
+async def remove_custom_command(trigger: str, user=Depends(verify_token)):
+    """Remove a custom voice command."""
+    try:
+        vp = get_voice_processor()
+        success = vp.remove_custom_command(trigger)
+        
+        if success:
+            logging.info(f"REMOVE_CUSTOM_COMMAND_SUCCESS: user={user['sub']}, trigger='{trigger}'")
+            return {
+                "success": True,
+                "trigger": trigger,
+                "message": f"Custom command '{trigger}' removed successfully"
+            }
+        else:
+            logging.warning(f"REMOVE_CUSTOM_COMMAND_FAILED: user={user['sub']}, trigger='{trigger}'")
+            raise HTTPException(status_code=404, detail="Custom command not found")
+    
+    except Exception as e:
+        logging.error(f"REMOVE_CUSTOM_COMMAND_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to remove custom command")
+
+@app.post("/voice/commands/search")
+async def search_commands(request: CommandSearchRequest, user=Depends(verify_token)):
+    """Search for voice commands matching query."""
+    try:
+        vp = get_voice_processor()
+        results = vp.search_commands(
+            query=request.query,
+            include_builtin=request.include_builtin,
+            include_custom=request.include_custom
+        )
+        
+        logging.info(f"SEARCH_COMMANDS_SUCCESS: user={user['sub']}, query='{request.query}', results={len(results)}")
+        return {
+            "success": True,
+            "query": request.query,
+            "results": results,
+            "count": len(results)
+        }
+    
+    except Exception as e:
+        logging.error(f"SEARCH_COMMANDS_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to search commands")
+
+@app.get("/voice/suggestions/{partial_text}")
+async def get_command_suggestions(partial_text: str, user=Depends(verify_token)):
+    """Get command suggestions for partial text."""
+    try:
+        vp = get_voice_processor()
+        suggestions = vp.get_command_suggestions(partial_text, limit=10)
+        
+        logging.info(f"COMMAND_SUGGESTIONS_SUCCESS: user={user['sub']}, partial='{partial_text}', count={len(suggestions)}")
+        return {
+            "success": True,
+            "partial_text": partial_text,
+            "suggestions": suggestions,
+            "count": len(suggestions)
+        }
+    
+    except Exception as e:
+        logging.error(f"COMMAND_SUGGESTIONS_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get command suggestions")
+
+@app.get("/voice/history")
+async def get_command_history(limit: int = 20, user=Depends(verify_token)):
+    """Get recent voice command history."""
+    try:
+        vp = get_voice_processor()
+        history = vp.get_command_history(limit=limit)
+        
+        logging.info(f"COMMAND_HISTORY_SUCCESS: user={user['sub']}, limit={limit}, count={len(history)}")
+        return {
+            "success": True,
+            "history": history,
+            "count": len(history),
+            "limit": limit
+        }
+    
+    except Exception as e:
+        logging.error(f"COMMAND_HISTORY_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get command history")
+
+@app.delete("/voice/history")
+async def clear_command_history(user=Depends(verify_token)):
+    """Clear voice command history."""
+    try:
+        vp = get_voice_processor()
+        success = vp.clear_command_history()
+        
+        if success:
+            logging.info(f"CLEAR_HISTORY_SUCCESS: user={user['sub']}")
+            return {
+                "success": True,
+                "message": "Command history cleared successfully"
+            }
+        else:
+            logging.warning(f"CLEAR_HISTORY_FAILED: user={user['sub']}")
+            raise HTTPException(status_code=400, detail="Failed to clear command history")
+    
+    except Exception as e:
+        logging.error(f"CLEAR_HISTORY_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to clear command history")
+
+@app.get("/voice/statistics")
+async def get_command_statistics(user=Depends(verify_token)):
+    """Get voice command usage statistics."""
+    try:
+        vp = get_voice_processor()
+        stats = vp.get_command_statistics()
+        
+        logging.info(f"COMMAND_STATS_SUCCESS: user={user['sub']}")
+        return {
+            "success": True,
+            "statistics": stats
+        }
+    
+    except Exception as e:
+        logging.error(f"COMMAND_STATS_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get command statistics")
+
+@app.get("/voice/commands/export")
+async def export_custom_commands(user=Depends(verify_token)):
+    """Export custom commands to JSON."""
+    try:
+        vp = get_voice_processor()
+        json_data = vp.export_custom_commands()
+        
+        if json_data:
+            logging.info(f"EXPORT_COMMANDS_SUCCESS: user={user['sub']}")
+            return {
+                "success": True,
+                "json_data": json_data,
+                "message": "Custom commands exported successfully"
+            }
+        else:
+            logging.warning(f"EXPORT_COMMANDS_FAILED: user={user['sub']}")
+            raise HTTPException(status_code=400, detail="Failed to export custom commands")
+    
+    except Exception as e:
+        logging.error(f"EXPORT_COMMANDS_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to export custom commands")
+
+@app.post("/voice/commands/import")
+async def import_custom_commands(request: CommandImportRequest, user=Depends(verify_token)):
+    """Import custom commands from JSON."""
+    try:
+        vp = get_voice_processor()
+        result = vp.import_custom_commands(request.json_data, overwrite=request.overwrite)
+        
+        if result['success']:
+            logging.info(f"IMPORT_COMMANDS_SUCCESS: user={user['sub']}, imported={result['imported']}, skipped={result['skipped']}")
+            return {
+                "success": True,
+                "imported": result['imported'],
+                "skipped": result['skipped'],
+                "errors": result['errors'],
+                "message": f"Imported {result['imported']} commands successfully"
+            }
+        else:
+            logging.warning(f"IMPORT_COMMANDS_FAILED: user={user['sub']}, error={result.get('error', 'Unknown error')}")
+            raise HTTPException(status_code=400, detail=f"Import failed: {result.get('error', 'Unknown error')}")
+    
+    except Exception as e:
+        logging.error(f"IMPORT_COMMANDS_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to import custom commands")
 
 # Authentication Endpoints
 
