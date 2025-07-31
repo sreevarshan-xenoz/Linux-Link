@@ -47,6 +47,123 @@ class MacroAction:
     condition: str = None
     timeout: int = 30
     retry_count: int = 0
+
+
+class ConditionEvaluator:
+    """Evaluates conditional expressions for macro execution"""
+    
+    def __init__(self):
+        self.variables = {}
+        self.system_info = {}
+        self._update_system_info()
+        logger.info("Condition evaluator initialized")
+    
+    def _update_system_info(self):
+        """Update system information for condition evaluation"""
+        try:
+            import psutil
+            self.system_info = {
+                'cpu_percent': psutil.cpu_percent(interval=1),
+                'memory_percent': psutil.virtual_memory().percent,
+                'disk_usage': psutil.disk_usage('/').percent,
+                'time_hour': datetime.now().hour,
+                'time_minute': datetime.now().minute,
+                'day_of_week': datetime.now().weekday(),
+                'processes': [p.name() for p in psutil.process_iter(['name'])]
+            }
+        except Exception as e:
+            logger.warning(f"Failed to update system info: {e}")
+            self.system_info = {}
+    
+    def set_variable(self, name: str, value: Any):
+        """Set a variable for condition evaluation"""
+        self.variables[name] = value
+        logger.debug(f"Set variable {name} = {value}")
+    
+    def get_variable(self, name: str) -> Any:
+        """Get a variable value"""
+        return self.variables.get(name)
+    
+    def evaluate_condition(self, condition: str, context: Dict[str, Any] = None) -> bool:
+        """
+        Evaluate a conditional expression
+        
+        Supported operators:
+        - Comparison: ==, !=, <, >, <=, >=
+        - Logical: and, or, not
+        - System: cpu_percent, memory_percent, disk_usage, time_hour, etc.
+        - Variables: $variable_name
+        - Process checks: process_running("name")
+        - File checks: file_exists("path")
+        """
+        try:
+            self._update_system_info()
+            
+            # Prepare evaluation context
+            eval_context = {
+                **self.system_info,
+                **self.variables,
+                **(context or {}),
+                'process_running': self._process_running,
+                'file_exists': self._file_exists,
+                'command_success': self._command_success
+            }
+            
+            # Replace variable references
+            processed_condition = self._process_variables(condition)
+            
+            # Evaluate the condition safely
+            result = self._safe_eval(processed_condition, eval_context)
+            logger.debug(f"Condition '{condition}' evaluated to {result}")
+            return bool(result)
+            
+        except Exception as e:
+            logger.error(f"Failed to evaluate condition '{condition}': {e}")
+            return False
+    
+    def _process_variables(self, condition: str) -> str:
+        """Process variable references in condition string"""
+        import re
+        
+        def replace_var(match):
+            var_name = match.group(1)
+            value = self.variables.get(var_name, 0)
+            return str(value)
+        
+        return re.sub(r'\$(\w+)', replace_var, condition)
+    
+    def _safe_eval(self, expression: str, context: Dict[str, Any]) -> Any:
+        """Safely evaluate expression with restricted context"""
+        # Only allow safe built-ins
+        safe_builtins = {
+            'abs': abs, 'bool': bool, 'float': float, 'int': int,
+            'len': len, 'max': max, 'min': min, 'str': str,
+            'True': True, 'False': False, 'None': None
+        }
+        
+        # Create restricted globals
+        restricted_globals = {
+            '__builtins__': safe_builtins,
+            **context
+        }
+        
+        return eval(expression, restricted_globals, {})
+    
+    def _process_running(self, process_name: str) -> bool:
+        """Check if a process is running"""
+        return process_name in self.system_info.get('processes', [])
+    
+    def _file_exists(self, file_path: str) -> bool:
+        """Check if a file exists"""
+        return os.path.exists(file_path)
+    
+    def _command_success(self, command: str) -> bool:
+        """Check if a command executes successfully"""
+        try:
+            result = subprocess.run(command, shell=True, capture_output=True, timeout=10)
+            return result.returncode == 0
+        except Exception:
+            return False
     
     def to_dict(self) -> Dict:
         """Convert to dictionary for JSON serialization"""
@@ -90,6 +207,7 @@ class MacroEngine:
         self.macros = {}
         self.executions = {}
         self.variables = {}
+        self.condition_evaluator = ConditionEvaluator()
         self._load_macros()
         logger.info("Macro engine initialized")
     
@@ -135,6 +253,11 @@ f execute_macro(self, macro_id: str, variables: Dict[str, Any] = None) -> str:
                 started_at=time.time(),
                 variables=variables or {}
             )
+            
+            # Sync variables with condition evaluator
+            if variables:
+                for name, value in variables.items():
+                    self.condition_evaluator.set_variable(name, value)
             
             self.executions[execution_id] = execution
             
@@ -201,7 +324,11 @@ f execute_macro(self, macro_id: str, variables: Dict[str, Any] = None) -> str:
             
             # Check condition if present
             if action_dict.get('condition'):
-                if not self._evaluate_condition(action_dict['condition'], execution):
+                if not self.condition_evaluator.evaluate_condition(
+                    action_dict['condition'], 
+                    execution.variables
+                ):
+                    logger.debug(f"Skipping action due to condition: {action_dict['condition']}")
                     return True  # Skip action but don't fail
             
             if action_type == ActionType.COMMAND:
@@ -212,6 +339,10 @@ f execute_macro(self, macro_id: str, variables: Dict[str, Any] = None) -> str:
                 return self._execute_delay_action(action_dict, execution)
             elif action_type == ActionType.VARIABLE:
                 return self._execute_variable_action(action_dict, execution)
+            elif action_type == ActionType.CONDITION:
+                return self._execute_condition_action(action_dict, execution)
+            elif action_type == ActionType.LOOP:
+                return self._execute_loop_action(action_dict, execution)
             else:
                 logger.warning(f"Unknown action type: {action_type}")
                 return False
@@ -282,6 +413,70 @@ f execute_macro(self, macro_id: str, variables: Dict[str, Any] = None) -> str:
             logger.error(f"Variable action failed: {e}")
             return False
     
+    def _execute_condition_action(self, action_dict: Dict, execution: MacroExecution) -> bool:
+        """Execute conditional action with if/else logic"""
+        try:
+            condition = action_dict.get('parameters', {}).get('condition', '')
+            if_actions = action_dict.get('parameters', {}).get('if_actions', [])
+            else_actions = action_dict.get('parameters', {}).get('else_actions', [])
+            
+            if self.condition_evaluator.evaluate_condition(condition, execution.variables):
+                # Execute if actions
+                for if_action in if_actions:
+                    if not self._execute_action(if_action, execution):
+                        return False
+            else:
+                # Execute else actions
+                for else_action in else_actions:
+                    if not self._execute_action(else_action, execution):
+                        return False
+            
+            return True
+        except Exception as e:
+            logger.error(f"Condition action failed: {e}")
+            return False
+    
+    def _execute_loop_action(self, action_dict: Dict, execution: MacroExecution) -> bool:
+        """Execute loop action with iteration control"""
+        try:
+            loop_type = action_dict.get('parameters', {}).get('type', 'count')
+            actions = action_dict.get('parameters', {}).get('actions', [])
+            
+            if loop_type == 'count':
+                count = int(action_dict.get('parameters', {}).get('count', 1))
+                for i in range(count):
+                    execution.variables['loop_index'] = i
+                    for loop_action in actions:
+                        if not self._execute_action(loop_action, execution):
+                            return False
+            
+            elif loop_type == 'while':
+                condition = action_dict.get('parameters', {}).get('condition', 'False')
+                max_iterations = int(action_dict.get('parameters', {}).get('max_iterations', 100))
+                iteration = 0
+                
+                while (self.condition_evaluator.evaluate_condition(condition, execution.variables) 
+                       and iteration < max_iterations):
+                    execution.variables['loop_index'] = iteration
+                    for loop_action in actions:
+                        if not self._execute_action(loop_action, execution):
+                            return False
+                    iteration += 1
+            
+            elif loop_type == 'foreach':
+                items = action_dict.get('parameters', {}).get('items', [])
+                for i, item in enumerate(items):
+                    execution.variables['loop_index'] = i
+                    execution.variables['loop_item'] = item
+                    for loop_action in actions:
+                        if not self._execute_action(loop_action, execution):
+                            return False
+            
+            return True
+        except Exception as e:
+            logger.error(f"Loop action failed: {e}")
+            return False
+    
     def _substitute_variables(self, text: str, variables: Dict[str, Any]) -> str:
         """Substitute variables in text"""
         try:
@@ -293,27 +488,7 @@ f execute_macro(self, macro_id: str, variables: Dict[str, Any] = None) -> str:
         except Exception:
             return text
     
-    def _evaluate_condition(self, condition: str, execution: MacroExecution) -> bool:
-        """Evaluate condition expression"""
-        try:
-            # Simple condition evaluation
-            # In production, use a proper expression evaluator
-            condition = self._substitute_variables(condition, execution.variables)
-            
-            # Basic comparisons
-            if '==' in condition:
-                left, right = condition.split('==', 1)
-                return left.strip() == right.strip()
-            elif '!=' in condition:
-                left, right = condition.split('!=', 1)
-                return left.strip() != right.strip()
-            else:
-                # Treat as boolean
-                return bool(condition.strip())
-        
-        except Exception as e:
-            logger.error(f"Condition evaluation failed: {e}")
-            return False
+
     
     def get_macro_status(self, execution_id: str) -> Optional[MacroExecution]:
         """Get macro execution status"""
