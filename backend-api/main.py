@@ -16,6 +16,7 @@ from voice_processor import get_voice_processor, VoiceProcessorError
 from remote_desktop import get_remote_desktop_controller, RemoteDesktopError
 from automation_engine import get_automation_engine, AutomationError
 from package_manager import get_package_manager, PackageManagerError
+from security import get_user_manager, get_rbac, SecurityError, UserRole
 
 # Enhanced logging configuration
 logging.basicConfig(
@@ -251,6 +252,19 @@ class FileSearchRequest(BaseModel):
 class DependencySearchRequest(BaseModel):
     package_name: str
     reverse: bool = False
+
+# Device Management Models
+class DeviceRegistrationRequest(BaseModel):
+    device_name: str
+    device_type: str
+    platform: str
+    app_version: str
+    device_info: Dict[str, Any] = {}
+
+class DeviceUpdateRequest(BaseModel):
+    device_name: str = None
+    enabled: bool = None
+    trusted: bool = None
 
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     try:
@@ -2283,6 +2297,255 @@ async def search_dependencies(request: DependencySearchRequest, user=Depends(ver
     except Exception as e:
         logging.error(f"DEPENDENCY_SEARCH_CRITICAL: user={user['sub']}, error='{str(e)}'")
         raise HTTPException(status_code=500, detail="Failed to search dependencies")
+
+# Device Management Endpoints
+
+@app.get("/devices")
+async def get_user_devices(user=Depends(verify_token)):
+    """Get devices registered to the current user."""
+    try:
+        from security import get_device_manager
+        dm = get_device_manager()
+        devices = dm.get_user_devices(user['sub'])
+        
+        # Convert to dictionaries
+        devices_dict = [device.to_dict() for device in devices]
+        
+        logging.info(f"GET_DEVICES_SUCCESS: user={user['sub']}, count={len(devices_dict)}")
+        return {
+            "success": True,
+            "devices": devices_dict,
+            "count": len(devices_dict)
+        }
+    
+    except Exception as e:
+        logging.error(f"GET_DEVICES_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get devices")
+
+@app.post("/devices/register")
+async def register_device(request: DeviceRegistrationRequest, user=Depends(verify_token)):
+    """Register a new device."""
+    try:
+        from security import get_device_manager
+        dm = get_device_manager()
+        
+        # Get client IP and user agent from request
+        # In a real implementation, you'd extract these from the request headers
+        ip_address = "127.0.0.1"  # request.client.host
+        user_agent = "Linux-Link-Client"  # request.headers.get("user-agent")
+        
+        device_id = dm.register_device(
+            device_name=request.device_name,
+            device_type=request.device_type,
+            platform=request.platform,
+            app_version=request.app_version,
+            username=user['sub'],
+            device_info=request.device_info,
+            ip_address=ip_address,
+            user_agent=user_agent
+        )
+        
+        logging.info(f"DEVICE_REGISTER_SUCCESS: user={user['sub']}, device_id={device_id}")
+        return {
+            "success": True,
+            "device_id": device_id,
+            "device_name": request.device_name,
+            "message": f"Device '{request.device_name}' registered successfully"
+        }
+    
+    except SecurityError as e:
+        logging.warning(f"DEVICE_REGISTER_ERROR: user={user['sub']}, error='{e.message}'")
+        raise HTTPException(status_code=400, detail={"error": e.message, "code": e.error_code})
+    except Exception as e:
+        logging.error(f"DEVICE_REGISTER_CRITICAL: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to register device")
+
+@app.get("/devices/{device_id}")
+async def get_device_info(device_id: str, user=Depends(verify_token)):
+    """Get information about a specific device."""
+    try:
+        from security import get_device_manager
+        dm = get_device_manager()
+        device = dm.get_device(device_id)
+        
+        if not device:
+            logging.warning(f"DEVICE_INFO_NOT_FOUND: user={user['sub']}, device_id={device_id}")
+            raise HTTPException(status_code=404, detail="Device not found")
+        
+        # Check if user owns the device or is admin
+        rbac = get_rbac()
+        user_role = UserRole(user.get('role', 'user'))
+        
+        if device.username != user['sub'] and not rbac.has_permission(user_role, "user_management", "view"):
+            logging.warning(f"DEVICE_INFO_FORBIDDEN: user={user['sub']}, device_id={device_id}")
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        logging.info(f"DEVICE_INFO_SUCCESS: user={user['sub']}, device_id={device_id}")
+        return {
+            "success": True,
+            "device": device.to_dict()
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"DEVICE_INFO_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get device information")
+
+@app.put("/devices/{device_id}")
+async def update_device(device_id: str, request: DeviceUpdateRequest, user=Depends(verify_token)):
+    """Update device settings."""
+    try:
+        from security import get_device_manager
+        dm = get_device_manager()
+        device = dm.get_device(device_id)
+        
+        if not device:
+            logging.warning(f"DEVICE_UPDATE_NOT_FOUND: user={user['sub']}, device_id={device_id}")
+            raise HTTPException(status_code=404, detail="Device not found")
+        
+        # Check if user owns the device or is admin
+        rbac = get_rbac()
+        user_role = UserRole(user.get('role', 'user'))
+        
+        if device.username != user['sub'] and not rbac.has_permission(user_role, "user_management", "modify"):
+            logging.warning(f"DEVICE_UPDATE_FORBIDDEN: user={user['sub']}, device_id={device_id}")
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        # Prepare update data
+        update_data = {}
+        if request.device_name is not None:
+            update_data['device_name'] = request.device_name
+        if request.enabled is not None:
+            update_data['enabled'] = request.enabled
+        if request.trusted is not None:
+            # Only admins can set trusted status
+            if rbac.has_permission(user_role, "security", "configure"):
+                update_data['trusted'] = request.trusted
+        
+        success = dm.update_device(device_id, **update_data)
+        
+        if success:
+            logging.info(f"DEVICE_UPDATE_SUCCESS: user={user['sub']}, device_id={device_id}")
+            return {
+                "success": True,
+                "device_id": device_id,
+                "message": "Device updated successfully"
+            }
+        else:
+            logging.warning(f"DEVICE_UPDATE_FAILED: user={user['sub']}, device_id={device_id}")
+            raise HTTPException(status_code=400, detail="Failed to update device")
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"DEVICE_UPDATE_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to update device")
+
+@app.delete("/devices/{device_id}")
+async def delete_device(device_id: str, user=Depends(verify_token)):
+    """Delete a device."""
+    try:
+        from security import get_device_manager
+        dm = get_device_manager()
+        device = dm.get_device(device_id)
+        
+        if not device:
+            logging.warning(f"DEVICE_DELETE_NOT_FOUND: user={user['sub']}, device_id={device_id}")
+            raise HTTPException(status_code=404, detail="Device not found")
+        
+        # Check if user owns the device or is admin
+        rbac = get_rbac()
+        user_role = UserRole(user.get('role', 'user'))
+        
+        if device.username != user['sub'] and not rbac.has_permission(user_role, "user_management", "delete"):
+            logging.warning(f"DEVICE_DELETE_FORBIDDEN: user={user['sub']}, device_id={device_id}")
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        success = dm.delete_device(device_id)
+        
+        if success:
+            logging.info(f"DEVICE_DELETE_SUCCESS: user={user['sub']}, device_id={device_id}")
+            return {
+                "success": True,
+                "device_id": device_id,
+                "message": "Device deleted successfully"
+            }
+        else:
+            logging.warning(f"DEVICE_DELETE_FAILED: user={user['sub']}, device_id={device_id}")
+            raise HTTPException(status_code=400, detail="Failed to delete device")
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"DEVICE_DELETE_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to delete device")
+
+@app.post("/devices/{device_id}/revoke")
+async def revoke_device(device_id: str, user=Depends(verify_token)):
+    """Revoke/disable a device."""
+    try:
+        from security import get_device_manager
+        dm = get_device_manager()
+        device = dm.get_device(device_id)
+        
+        if not device:
+            logging.warning(f"DEVICE_REVOKE_NOT_FOUND: user={user['sub']}, device_id={device_id}")
+            raise HTTPException(status_code=404, detail="Device not found")
+        
+        # Check if user owns the device or is admin
+        rbac = get_rbac()
+        user_role = UserRole(user.get('role', 'user'))
+        
+        if device.username != user['sub'] and not rbac.has_permission(user_role, "user_management", "modify"):
+            logging.warning(f"DEVICE_REVOKE_FORBIDDEN: user={user['sub']}, device_id={device_id}")
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        success = dm.revoke_device(device_id)
+        
+        if success:
+            logging.info(f"DEVICE_REVOKE_SUCCESS: user={user['sub']}, device_id={device_id}")
+            return {
+                "success": True,
+                "device_id": device_id,
+                "message": "Device revoked successfully"
+            }
+        else:
+            logging.warning(f"DEVICE_REVOKE_FAILED: user={user['sub']}, device_id={device_id}")
+            raise HTTPException(status_code=400, detail="Failed to revoke device")
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"DEVICE_REVOKE_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to revoke device")
+
+@app.get("/devices/stats")
+async def get_device_stats(user=Depends(verify_token)):
+    """Get device statistics (admin only)."""
+    try:
+        rbac = get_rbac()
+        user_role = UserRole(user.get('role', 'user'))
+        
+        if not rbac.has_permission(user_role, "user_management", "view"):
+            logging.warning(f"DEVICE_STATS_FORBIDDEN: user={user['sub']}")
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        from security import get_device_manager
+        dm = get_device_manager()
+        stats = dm.get_device_stats()
+        
+        logging.info(f"DEVICE_STATS_SUCCESS: user={user['sub']}")
+        return {
+            "success": True,
+            "stats": stats
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"DEVICE_STATS_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get device statistics")
 
 # Authentication Endpoints
 

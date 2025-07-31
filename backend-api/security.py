@@ -1220,3 +1220,281 @@ def get_rbac() -> RoleBasedAccessControl:
     if _rbac is None:
         _rbac = RoleBasedAccessControl()
     return _rbac
+
+
+@dataclass
+class Device:
+    """Represents a registered device"""
+    device_id: str
+    device_name: str
+    device_type: str  # mobile, desktop, tablet, etc.
+    platform: str  # android, ios, windows, linux, macos
+    app_version: str
+    device_info: Dict[str, Any]
+    username: str
+    registered_at: float
+    last_seen: Optional[float] = None
+    enabled: bool = True
+    trusted: bool = False
+    ip_address: Optional[str] = None
+    user_agent: Optional[str] = None
+    
+    def to_dict(self) -> Dict:
+        """Convert to dictionary for JSON serialization"""
+        return asdict(self)
+
+
+class DeviceManager:
+    """Manages registered devices and their access"""
+    
+    def __init__(self):
+        self.devices = {}
+        self._load_devices()
+        logger.info("Device manager initialized")
+    
+    def _load_devices(self):
+        """Load devices from storage"""
+        try:
+            devices_file = os.path.expanduser('~/.linux_link_devices.json')
+            if os.path.exists(devices_file):
+                with open(devices_file, 'r') as f:
+                    data = json.load(f)
+                    for device_data in data.get('devices', []):
+                        device = Device(
+                            device_id=device_data['device_id'],
+                            device_name=device_data['device_name'],
+                            device_type=device_data['device_type'],
+                            platform=device_data['platform'],
+                            app_version=device_data['app_version'],
+                            device_info=device_data.get('device_info', {}),
+                            username=device_data['username'],
+                            registered_at=device_data['registered_at'],
+                            last_seen=device_data.get('last_seen'),
+                            enabled=device_data.get('enabled', True),
+                            trusted=device_data.get('trusted', False),
+                            ip_address=device_data.get('ip_address'),
+                            user_agent=device_data.get('user_agent')
+                        )
+                        self.devices[device.device_id] = device
+                logger.info(f"Loaded {len(self.devices)} devices")
+        except Exception as e:
+            logger.debug(f"Could not load devices: {e}")
+            self.devices = {}
+    
+    def _save_devices(self):
+        """Save devices to storage"""
+        try:
+            devices_file = os.path.expanduser('~/.linux_link_devices.json')
+            data = {
+                'version': '1.0',
+                'saved_at': time.time(),
+                'devices': [device.to_dict() for device in self.devices.values()]
+            }
+            
+            with open(devices_file, 'w') as f:
+                json.dump(data, f, indent=2)
+            os.chmod(devices_file, 0o600)  # Secure permissions
+                
+            logger.debug(f"Saved {len(self.devices)} devices")
+        except Exception as e:
+            logger.error(f"Failed to save devices: {e}")
+    
+    def register_device(self, device_name: str, device_type: str, platform: str,
+                       app_version: str, username: str, device_info: Dict[str, Any] = None,
+                       ip_address: str = None, user_agent: str = None) -> str:
+        """Register a new device"""
+        try:
+            # Generate unique device ID
+            device_id = secrets.token_urlsafe(32)
+            
+            device = Device(
+                device_id=device_id,
+                device_name=device_name,
+                device_type=device_type,
+                platform=platform,
+                app_version=app_version,
+                device_info=device_info or {},
+                username=username,
+                registered_at=time.time(),
+                last_seen=time.time(),
+                ip_address=ip_address,
+                user_agent=user_agent
+            )
+            
+            self.devices[device_id] = device
+            self._save_devices()
+            
+            logger.info(f"Registered device: {device_name} for user: {username}")
+            return device_id
+        
+        except Exception as e:
+            logger.error(f"Failed to register device: {e}")
+            raise SecurityError("Device registration failed", "DEVICE_REGISTRATION_FAILED")
+    
+    def get_device(self, device_id: str) -> Optional[Device]:
+        """Get device by ID"""
+        return self.devices.get(device_id)
+    
+    def get_user_devices(self, username: str) -> List[Device]:
+        """Get all devices for a user"""
+        return [device for device in self.devices.values() if device.username == username]
+    
+    def update_device(self, device_id: str, **kwargs) -> bool:
+        """Update device properties"""
+        try:
+            device = self.devices.get(device_id)
+            if not device:
+                return False
+            
+            # Update allowed fields
+            allowed_fields = ['device_name', 'enabled', 'trusted', 'last_seen', 'ip_address', 'user_agent']
+            for field, value in kwargs.items():
+                if field in allowed_fields and hasattr(device, field):
+                    setattr(device, field, value)
+            
+            self._save_devices()
+            logger.info(f"Updated device: {device_id}")
+            return True
+        
+        except Exception as e:
+            logger.error(f"Failed to update device {device_id}: {e}")
+            return False
+    
+    def update_device_activity(self, device_id: str, ip_address: str = None, 
+                              user_agent: str = None) -> bool:
+        """Update device last seen and activity info"""
+        try:
+            device = self.devices.get(device_id)
+            if not device:
+                return False
+            
+            device.last_seen = time.time()
+            if ip_address:
+                device.ip_address = ip_address
+            if user_agent:
+                device.user_agent = user_agent
+            
+            self._save_devices()
+            return True
+        
+        except Exception as e:
+            logger.error(f"Failed to update device activity: {e}")
+            return False
+    
+    def revoke_device(self, device_id: str) -> bool:
+        """Revoke/disable a device"""
+        try:
+            device = self.devices.get(device_id)
+            if not device:
+                return False
+            
+            device.enabled = False
+            device.trusted = False
+            self._save_devices()
+            
+            logger.info(f"Revoked device: {device_id}")
+            return True
+        
+        except Exception as e:
+            logger.error(f"Failed to revoke device {device_id}: {e}")
+            return False
+    
+    def delete_device(self, device_id: str) -> bool:
+        """Delete a device"""
+        try:
+            if device_id in self.devices:
+                device = self.devices[device_id]
+                del self.devices[device_id]
+                self._save_devices()
+                
+                logger.info(f"Deleted device: {device.device_name} ({device_id})")
+                return True
+            return False
+        
+        except Exception as e:
+            logger.error(f"Failed to delete device {device_id}: {e}")
+            return False
+    
+    def is_device_authorized(self, device_id: str, username: str) -> bool:
+        """Check if device is authorized for user"""
+        try:
+            device = self.devices.get(device_id)
+            if not device:
+                return False
+            
+            return (device.enabled and 
+                   device.username == username and
+                   device.last_seen and
+                   time.time() - device.last_seen < 86400 * 30)  # 30 days
+        
+        except Exception as e:
+            logger.error(f"Device authorization check failed: {e}")
+            return False
+    
+    def get_device_stats(self) -> Dict[str, Any]:
+        """Get device statistics"""
+        try:
+            total_devices = len(self.devices)
+            enabled_devices = len([d for d in self.devices.values() if d.enabled])
+            trusted_devices = len([d for d in self.devices.values() if d.trusted])
+            
+            # Group by platform
+            platforms = {}
+            device_types = {}
+            
+            for device in self.devices.values():
+                platforms[device.platform] = platforms.get(device.platform, 0) + 1
+                device_types[device.device_type] = device_types.get(device.device_type, 0) + 1
+            
+            # Recent activity (last 24 hours)
+            recent_cutoff = time.time() - 86400
+            recent_devices = len([d for d in self.devices.values() 
+                                if d.last_seen and d.last_seen > recent_cutoff])
+            
+            return {
+                'total_devices': total_devices,
+                'enabled_devices': enabled_devices,
+                'trusted_devices': trusted_devices,
+                'recent_devices': recent_devices,
+                'platforms': platforms,
+                'device_types': device_types
+            }
+        
+        except Exception as e:
+            logger.error(f"Failed to get device stats: {e}")
+            return {}
+    
+    def cleanup_old_devices(self, days: int = 90) -> int:
+        """Clean up devices not seen for specified days"""
+        try:
+            cutoff_time = time.time() - (days * 86400)
+            old_devices = []
+            
+            for device_id, device in self.devices.items():
+                if not device.last_seen or device.last_seen < cutoff_time:
+                    old_devices.append(device_id)
+            
+            for device_id in old_devices:
+                del self.devices[device_id]
+            
+            if old_devices:
+                self._save_devices()
+                logger.info(f"Cleaned up {len(old_devices)} old devices")
+            
+            return len(old_devices)
+        
+        except Exception as e:
+            logger.error(f"Device cleanup failed: {e}")
+            return 0
+
+
+# Global device manager instance
+_device_manager = None
+
+
+def get_device_manager() -> DeviceManager:
+    """Get global device manager instance"""
+    global _device_manager
+    if _device_manager is None:
+        _device_manager = DeviceManager()
+    return _device_manager
