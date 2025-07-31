@@ -855,9 +855,214 @@ class ComprehensivePackageManager:
         self.has_aur_helper = self.pacman._find_aur_helper() is not None
         logger.info(f"Comprehensive package manager initialized (AUR: {self.has_aur_helper})")
     
-    def search_packages(self, query: str, include_aur: bool = True) -> List[Package]:
-        """Search packages in both official repos and AUR"""
-        return self.pacman.search_packages(query, include_aur and self.has_aur_helper)
+    def search_packages(self, query: str, include_aur: bool = True, 
+                       search_type: str = "name_desc", limit: int = 50) -> List[Package]:
+        """
+        Search packages in both official repos and AUR
+        
+        search_type options:
+        - "name_desc": Search in name and description (default)
+        - "name_only": Search in package name only
+        - "desc_only": Search in description only
+        - "exact": Exact name match
+        """
+        packages = []
+        
+        # Search official repositories
+        if search_type == "exact":
+            package = self.pacman.get_package_info(query)
+            if package:
+                packages.append(package)
+        else:
+            packages.extend(self.pacman.search_packages(query, False))
+        
+        # Search AUR if enabled
+        if include_aur and self.has_aur_helper and search_type != "exact":
+            aur_packages = self.pacman._search_aur(query)
+            packages.extend(aur_packages)
+        
+        # Apply search type filtering
+        if search_type == "name_only":
+            packages = [p for p in packages if query.lower() in p.name.lower()]
+        elif search_type == "desc_only":
+            packages = [p for p in packages if query.lower() in p.description.lower()]
+        
+        # Remove duplicates and limit results
+        seen = set()
+        unique_packages = []
+        for package in packages:
+            if package.name not in seen:
+                seen.add(package.name)
+                unique_packages.append(package)
+                if len(unique_packages) >= limit:
+                    break
+        
+        return unique_packages
+    
+    def advanced_search(self, filters: Dict[str, Any]) -> List[Package]:
+        """
+        Advanced package search with multiple filters
+        
+        Supported filters:
+        - query: Search query string
+        - source: "official", "aur", or "all"
+        - status: "installed", "available", "upgradable"
+        - group: Package group name
+        - maintainer: Package maintainer
+        - size_min: Minimum package size in bytes
+        - size_max: Maximum package size in bytes
+        - limit: Maximum number of results
+        """
+        try:
+            query = filters.get('query', '')
+            source_filter = filters.get('source', 'all')
+            status_filter = filters.get('status', 'all')
+            group_filter = filters.get('group', '')
+            maintainer_filter = filters.get('maintainer', '')
+            size_min = filters.get('size_min', 0)
+            size_max = filters.get('size_max', float('inf'))
+            limit = filters.get('limit', 100)
+            
+            packages = []
+            
+            # Get base package list based on status filter
+            if status_filter == "installed":
+                packages = self.list_installed_packages()
+            elif status_filter == "upgradable":
+                packages = self.list_upgradable_packages()
+            else:
+                # Search for packages
+                include_aur = source_filter in ['aur', 'all']
+                if query:
+                    packages = self.search_packages(query, include_aur, limit=limit*2)
+                else:
+                    # Get all installed packages as base
+                    packages = self.list_installed_packages()
+            
+            # Apply filters
+            filtered_packages = []
+            for package in packages:
+                # Source filter
+                if source_filter == "official" and package.source != PackageSource.OFFICIAL:
+                    continue
+                elif source_filter == "aur" and package.source != PackageSource.AUR:
+                    continue
+                
+                # Group filter
+                if group_filter and (not package.groups or group_filter not in package.groups):
+                    continue
+                
+                # Maintainer filter
+                if maintainer_filter and (not package.packager or 
+                                        maintainer_filter.lower() not in package.packager.lower()):
+                    continue
+                
+                # Size filter
+                if package.size and (package.size < size_min or package.size > size_max):
+                    continue
+                
+                filtered_packages.append(package)
+                
+                if len(filtered_packages) >= limit:
+                    break
+            
+            logger.info(f"Advanced search returned {len(filtered_packages)} packages")
+            return filtered_packages
+        
+        except Exception as e:
+            logger.error(f"Advanced search failed: {e}")
+            return []
+    
+    def search_by_file(self, file_path: str) -> List[Package]:
+        """Search for packages that contain a specific file"""
+        try:
+            cmd = [self.pacman.pacman_cmd, '-Qo', file_path]
+            exit_code, stdout, stderr = self.pacman._run_command(cmd)
+            
+            packages = []
+            if exit_code == 0:
+                # Parse output: "/path/to/file is owned by package_name version"
+                lines = stdout.strip().split('\\n')
+                for line in lines:
+                    if ' is owned by ' in line:
+                        parts = line.split(' is owned by ')
+                        if len(parts) == 2:
+                            package_info = parts[1].split()
+                            if len(package_info) >= 2:
+                                name, version = package_info[0], package_info[1]
+                                package = Package(
+                                    name=name,
+                                    version=version,
+                                    description="",
+                                    status=PackageStatus.INSTALLED,
+                                    source=PackageSource.OFFICIAL
+                                )
+                                packages.append(package)
+            
+            logger.info(f"File search for '{file_path}' found {len(packages)} packages")
+            return packages
+        
+        except Exception as e:
+            logger.error(f"File search failed: {e}")
+            return []
+    
+    def search_dependencies(self, package_name: str, reverse: bool = False) -> List[Package]:
+        """
+        Search package dependencies
+        
+        Args:
+            package_name: Name of the package
+            reverse: If True, find packages that depend on this package
+        """
+        try:
+            packages = []
+            
+            if reverse:
+                # Find packages that depend on this package
+                cmd = [self.pacman.pacman_cmd, '-Qi']
+                exit_code, stdout, stderr = self.pacman._run_command(cmd)
+                
+                if exit_code == 0:
+                    current_package = None
+                    current_deps = []
+                    
+                    for line in stdout.split('\\n'):
+                        if line.startswith('Name'):
+                            if current_package and package_name in current_deps:
+                                package = Package(
+                                    name=current_package,
+                                    version="",
+                                    description="",
+                                    status=PackageStatus.INSTALLED,
+                                    source=PackageSource.OFFICIAL
+                                )
+                                packages.append(package)
+                            
+                            current_package = line.split(':', 1)[1].strip()
+                            current_deps = []
+                        
+                        elif line.startswith('Depends On'):
+                            deps_str = line.split(':', 1)[1].strip()
+                            if deps_str != 'None':
+                                current_deps = [dep.split('>=')[0].split('=')[0].strip() 
+                                              for dep in deps_str.split()]
+            else:
+                # Find dependencies of this package
+                package_info = self.get_package_info(package_name)
+                if package_info and package_info.dependencies:
+                    for dep_name in package_info.dependencies:
+                        # Clean dependency name (remove version constraints)
+                        clean_name = dep_name.split('>=')[0].split('=')[0].split('<')[0].strip()
+                        dep_package = self.get_package_info(clean_name)
+                        if dep_package:
+                            packages.append(dep_package)
+            
+            logger.info(f"Dependency search for '{package_name}' found {len(packages)} packages")
+            return packages
+        
+        except Exception as e:
+            logger.error(f"Dependency search failed: {e}")
+            return []
     
     def get_package_info(self, package_name: str, check_aur: bool = True) -> Optional[Package]:
         """Get package info from official repos or AUR"""
