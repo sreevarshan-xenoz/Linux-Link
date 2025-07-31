@@ -572,9 +572,25 @@ class PacmanManager:
         return [item.strip() for item in list_str.split() if item.strip()]
     
     def _search_aur(self, query: str) -> List[Package]:
-        """Search AUR packages (placeholder for AUR integration)"""
-        # This would be implemented with AUR helper integration
-        return []
+        """Search AUR packages using AUR helper"""
+        try:
+            aur_helper = self._find_aur_helper()
+            if not aur_helper:
+                logger.warning("No AUR helper found")
+                return []
+            
+            cmd = [aur_helper, '-Ss', query]
+            exit_code, stdout, stderr = self._run_command(cmd)
+            
+            if exit_code == 0:
+                return self._parse_search_output(stdout, PackageSource.AUR)
+            else:
+                logger.warning(f"AUR search failed: {stderr}")
+                return []
+        
+        except Exception as e:
+            logger.error(f"AUR search failed: {e}")
+            return []
     
     def _is_cache_valid(self) -> bool:
         """Check if package cache is still valid"""
@@ -584,15 +600,356 @@ class PacmanManager:
         """Invalidate package cache"""
         self._package_cache.clear()
         self._cache_timestamp = 0
+    
+    def _find_aur_helper(self) -> Optional[str]:
+        """Find available AUR helper"""
+        aur_helpers = ['yay', 'paru', 'trizen', 'yaourt', 'aurman']
+        
+        for helper in aur_helpers:
+            for path in [f'/usr/bin/{helper}', f'/usr/local/bin/{helper}', f'/bin/{helper}']:
+                if os.path.exists(path):
+                    logger.info(f"Found AUR helper: {helper}")
+                    return path
+        
+        return None
+    
+    def install_aur_packages(self, package_names: List[str], no_confirm: bool = False) -> str:
+        """Install AUR packages and return operation ID"""
+        try:
+            aur_helper = self._find_aur_helper()
+            if not aur_helper:
+                raise PackageManagerError(
+                    "No AUR helper found",
+                    "AUR_HELPER_NOT_FOUND"
+                )
+            
+            operation_id = f"aur_install_{int(time.time())}"
+            
+            operation = PackageOperation(
+                operation_id=operation_id,
+                operation_type="aur_install",
+                packages=package_names,
+                status="running",
+                started_at=time.time(),
+                output=[]
+            )
+            
+            self.operations[operation_id] = operation
+            
+            # Start AUR installation in background thread
+            thread = threading.Thread(
+                target=self._install_aur_packages_thread,
+                args=(operation_id, package_names, no_confirm, aur_helper)
+            )
+            thread.daemon = True
+            thread.start()
+            
+            logger.info(f"Started AUR package installation: {operation_id}")
+            return operation_id
+        
+        except Exception as e:
+            logger.error(f"Failed to start AUR package installation: {e}")
+            raise PackageManagerError(
+                f"AUR installation failed: {str(e)}",
+                "AUR_INSTALL_FAILED"
+            )
+    
+    def _install_aur_packages_thread(self, operation_id: str, package_names: List[str], 
+                                    no_confirm: bool, aur_helper: str):
+        """Install AUR packages in background thread"""
+        try:
+            operation = self.operations[operation_id]
+            
+            cmd = [aur_helper, '-S'] + package_names
+            if no_confirm:
+                cmd.append('--noconfirm')
+            
+            exit_code, stdout, stderr = self._run_command(cmd, timeout=3600)  # 1 hour for AUR builds
+            
+            operation.completed_at = time.time()
+            operation.output = stdout.split('\\n') if stdout else []
+            
+            if exit_code == 0:
+                operation.status = "completed"
+                operation.progress = 100
+                self._invalidate_cache()
+                logger.info(f"AUR package installation completed: {operation_id}")
+            else:
+                operation.status = "failed"
+                operation.error_message = stderr
+                logger.error(f"AUR package installation failed: {operation_id}, {stderr}")
+        
+        except Exception as e:
+            operation = self.operations.get(operation_id)
+            if operation:
+                operation.status = "failed"
+                operation.error_message = str(e)
+                operation.completed_at = time.time()
+            logger.error(f"AUR package installation thread failed: {e}")
+    
+    def get_aur_package_info(self, package_name: str) -> Optional[Package]:
+        """Get detailed information about an AUR package"""
+        try:
+            aur_helper = self._find_aur_helper()
+            if not aur_helper:
+                return None
+            
+            cmd = [aur_helper, '-Si', package_name]
+            exit_code, stdout, stderr = self._run_command(cmd)
+            
+            if exit_code == 0:
+                return self._parse_aur_package_info(stdout)
+            
+            return None
+        
+        except Exception as e:
+            logger.error(f"Failed to get AUR package info for {package_name}: {e}")
+            return None
+    
+    def _parse_aur_package_info(self, output: str) -> Package:
+        """Parse AUR package information"""
+        lines = output.strip().split('\\n')
+        info = {}
+        
+        for line in lines:
+            if ':' in line:
+                key, value = line.split(':', 1)
+                info[key.strip()] = value.strip()
+        
+        return Package(
+            name=info.get('Name', ''),
+            version=info.get('Version', ''),
+            description=info.get('Description', ''),
+            status=PackageStatus.AVAILABLE,
+            source=PackageSource.AUR,
+            size=self._parse_size(info.get('Download Size')),
+            installed_size=self._parse_size(info.get('Installed Size')),
+            dependencies=self._parse_list(info.get('Depends On')),
+            provides=self._parse_list(info.get('Provides')),
+            conflicts=self._parse_list(info.get('Conflicts With')),
+            replaces=self._parse_list(info.get('Replaces')),
+            groups=self._parse_list(info.get('Groups')),
+            url=info.get('URL'),
+            licenses=self._parse_list(info.get('Licenses')),
+            architecture=info.get('Architecture'),
+            build_date=info.get('Build Date'),
+            install_date=info.get('Install Date'),
+            packager=info.get('Packager')
+        )
+    
+    def upgrade_aur_packages(self, no_confirm: bool = False) -> str:
+        """Upgrade AUR packages and return operation ID"""
+        try:
+            aur_helper = self._find_aur_helper()
+            if not aur_helper:
+                raise PackageManagerError(
+                    "No AUR helper found",
+                    "AUR_HELPER_NOT_FOUND"
+                )
+            
+            operation_id = f"aur_upgrade_{int(time.time())}"
+            
+            operation = PackageOperation(
+                operation_id=operation_id,
+                operation_type="aur_upgrade",
+                packages=["aur"],
+                status="running",
+                started_at=time.time(),
+                output=[]
+            )
+            
+            self.operations[operation_id] = operation
+            
+            # Start AUR upgrade in background thread
+            thread = threading.Thread(
+                target=self._upgrade_aur_packages_thread,
+                args=(operation_id, no_confirm, aur_helper)
+            )
+            thread.daemon = True
+            thread.start()
+            
+            logger.info(f"Started AUR package upgrade: {operation_id}")
+            return operation_id
+        
+        except Exception as e:
+            logger.error(f"Failed to start AUR package upgrade: {e}")
+            raise PackageManagerError(
+                f"AUR upgrade failed: {str(e)}",
+                "AUR_UPGRADE_FAILED"
+            )
+    
+    def _upgrade_aur_packages_thread(self, operation_id: str, no_confirm: bool, aur_helper: str):
+        """Upgrade AUR packages in background thread"""
+        try:
+            operation = self.operations[operation_id]
+            
+            cmd = [aur_helper, '-Sua']
+            if no_confirm:
+                cmd.append('--noconfirm')
+            
+            exit_code, stdout, stderr = self._run_command(cmd, timeout=3600)  # 1 hour
+            
+            operation.completed_at = time.time()
+            operation.output = stdout.split('\\n') if stdout else []
+            
+            if exit_code == 0:
+                operation.status = "completed"
+                operation.progress = 100
+                self._invalidate_cache()
+                logger.info(f"AUR package upgrade completed: {operation_id}")
+            else:
+                operation.status = "failed"
+                operation.error_message = stderr
+                logger.error(f"AUR package upgrade failed: {operation_id}, {stderr}")
+        
+        except Exception as e:
+            operation = self.operations.get(operation_id)
+            if operation:
+                operation.status = "failed"
+                operation.error_message = str(e)
+                operation.completed_at = time.time()
+            logger.error(f"AUR package upgrade thread failed: {e}")
+    
+    def list_aur_updates(self) -> List[Package]:
+        """List available AUR package updates"""
+        try:
+            aur_helper = self._find_aur_helper()
+            if not aur_helper:
+                return []
+            
+            cmd = [aur_helper, '-Qua']
+            exit_code, stdout, stderr = self._run_command(cmd)
+            
+            packages = []
+            if exit_code == 0 and stdout.strip():
+                for line in stdout.strip().split('\\n'):
+                    if line.strip():
+                        parts = line.split()
+                        if len(parts) >= 4:  # name current -> new
+                            name = parts[0]
+                            current_version = parts[1]
+                            new_version = parts[3]
+                            
+                            package = Package(
+                                name=name,
+                                version=f"{current_version} -> {new_version}",
+                                description="",
+                                status=PackageStatus.UPGRADABLE,
+                                source=PackageSource.AUR
+                            )
+                            packages.append(package)
+            
+            logger.info(f"Found {len(packages)} AUR packages with updates")
+            return packages
+        
+        except Exception as e:
+            logger.error(f"Failed to list AUR updates: {e}")
+            return []
+
+
+class ComprehensivePackageManager:
+    """Comprehensive package manager combining pacman and AUR functionality"""
+    
+    def __init__(self):
+        self.pacman = PacmanManager()
+        self.has_aur_helper = self.pacman._find_aur_helper() is not None
+        logger.info(f"Comprehensive package manager initialized (AUR: {self.has_aur_helper})")
+    
+    def search_packages(self, query: str, include_aur: bool = True) -> List[Package]:
+        """Search packages in both official repos and AUR"""
+        return self.pacman.search_packages(query, include_aur and self.has_aur_helper)
+    
+    def get_package_info(self, package_name: str, check_aur: bool = True) -> Optional[Package]:
+        """Get package info from official repos or AUR"""
+        # Try official repos first
+        package = self.pacman.get_package_info(package_name)
+        if package:
+            return package
+        
+        # Try AUR if enabled
+        if check_aur and self.has_aur_helper:
+            return self.pacman.get_aur_package_info(package_name)
+        
+        return None
+    
+    def list_installed_packages(self) -> List[Package]:
+        """List all installed packages"""
+        return self.pacman.list_installed_packages()
+    
+    def list_upgradable_packages(self, include_aur: bool = True) -> List[Package]:
+        """List all upgradable packages from official repos and AUR"""
+        packages = self.pacman.list_upgradable_packages()
+        
+        if include_aur and self.has_aur_helper:
+            aur_packages = self.pacman.list_aur_updates()
+            packages.extend(aur_packages)
+        
+        return packages
+    
+    def install_packages(self, package_names: List[str], from_aur: bool = False, 
+                        no_confirm: bool = False) -> str:
+        """Install packages from official repos or AUR"""
+        if from_aur and self.has_aur_helper:
+            return self.pacman.install_aur_packages(package_names, no_confirm)
+        else:
+            return self.pacman.install_packages(package_names, no_confirm)
+    
+    def remove_packages(self, package_names: List[str], no_confirm: bool = False, 
+                       cascade: bool = False) -> str:
+        """Remove packages"""
+        return self.pacman.remove_packages(package_names, no_confirm, cascade)
+    
+    def upgrade_system(self, include_aur: bool = True, no_confirm: bool = False) -> Dict[str, str]:
+        """Upgrade system packages and optionally AUR packages"""
+        operations = {}
+        
+        # Upgrade official packages
+        operations['official'] = self.pacman.upgrade_system(no_confirm)
+        
+        # Upgrade AUR packages if requested
+        if include_aur and self.has_aur_helper:
+            operations['aur'] = self.pacman.upgrade_aur_packages(no_confirm)
+        
+        return operations
+    
+    def refresh_database(self) -> bool:
+        """Refresh package database"""
+        return self.pacman.refresh_database()
+    
+    def get_operation_status(self, operation_id: str) -> Optional[PackageOperation]:
+        """Get status of a package operation"""
+        return self.pacman.get_operation_status(operation_id)
+    
+    def get_package_stats(self) -> Dict[str, Any]:
+        """Get package statistics"""
+        try:
+            installed = self.list_installed_packages()
+            upgradable = self.list_upgradable_packages()
+            
+            official_upgradable = [p for p in upgradable if p.source == PackageSource.OFFICIAL]
+            aur_upgradable = [p for p in upgradable if p.source == PackageSource.AUR]
+            
+            return {
+                'total_installed': len(installed),
+                'total_upgradable': len(upgradable),
+                'official_upgradable': len(official_upgradable),
+                'aur_upgradable': len(aur_upgradable),
+                'has_aur_helper': self.has_aur_helper,
+                'aur_helper': self.pacman._find_aur_helper()
+            }
+        
+        except Exception as e:
+            logger.error(f"Failed to get package stats: {e}")
+            return {}
 
 
 # Global package manager instance
 _package_manager = None
 
 
-def get_package_manager() -> PacmanManager:
-    """Get global package manager instance"""
+def get_package_manager() -> ComprehensivePackageManager:
+    """Get global comprehensive package manager instance"""
     global _package_manager
     if _package_manager is None:
-        _package_manager = PacmanManager()
+        _package_manager = ComprehensivePackageManager()
     return _package_manager
