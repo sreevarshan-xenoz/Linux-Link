@@ -593,3 +593,348 @@ def get_command_executor() -> SecureCommandExecutor:
     if _command_executor is None:
         _command_executor = SecureCommandExecutor()
     return _command_executor
+
+
+class UserManager:
+    """Manages users and their authentication methods"""
+    
+    def __init__(self):
+        self.users = {}
+        self.cert_manager = get_certificate_manager()
+        self.tfa = get_two_factor_auth()
+        self._load_users()
+        logger.info("User manager initialized")
+    
+    def _load_users(self):
+        """Load users from storage"""
+        try:
+            users_file = os.path.expanduser('~/.linux_link_users.json')
+            if os.path.exists(users_file):
+                with open(users_file, 'r') as f:
+                    data = json.load(f)
+                    for user_data in data.get('users', []):
+                        user = User(
+                            username=user_data['username'],
+                            role=UserRole(user_data['role']),
+                            auth_methods=[AuthMethod(method) for method in user_data['auth_methods']],
+                            created_at=user_data['created_at'],
+                            last_login=user_data.get('last_login'),
+                            password_hash=user_data.get('password_hash'),
+                            certificate_fingerprint=user_data.get('certificate_fingerprint'),
+                            totp_secret=user_data.get('totp_secret'),
+                            api_keys=user_data.get('api_keys', []),
+                            enabled=user_data.get('enabled', True),
+                            failed_attempts=user_data.get('failed_attempts', 0),
+                            locked_until=user_data.get('locked_until')
+                        )
+                        self.users[user.username] = user
+                logger.info(f"Loaded {len(self.users)} users")
+        except Exception as e:
+            logger.debug(f"Could not load users: {e}")
+            self.users = {}
+    
+    def _save_users(self):
+        """Save users to storage"""
+        try:
+            users_file = os.path.expanduser('~/.linux_link_users.json')
+            data = {
+                'version': '1.0',
+                'saved_at': time.time(),
+                'users': []
+            }
+            
+            for user in self.users.values():
+                user_data = {
+                    'username': user.username,
+                    'role': user.role.value,
+                    'auth_methods': [method.value for method in user.auth_methods],
+                    'created_at': user.created_at,
+                    'last_login': user.last_login,
+                    'password_hash': user.password_hash,
+                    'certificate_fingerprint': user.certificate_fingerprint,
+                    'totp_secret': user.totp_secret,
+                    'api_keys': user.api_keys,
+                    'enabled': user.enabled,
+                    'failed_attempts': user.failed_attempts,
+                    'locked_until': user.locked_until
+                }
+                data['users'].append(user_data)
+            
+            with open(users_file, 'w') as f:
+                json.dump(data, f, indent=2)
+            os.chmod(users_file, 0o600)  # Secure permissions
+                
+            logger.debug(f"Saved {len(self.users)} users")
+        except Exception as e:
+            logger.error(f"Failed to save users: {e}")
+    
+    def create_user(self, username: str, role: UserRole, auth_methods: List[AuthMethod]) -> bool:
+        """Create a new user"""
+        try:
+            if username in self.users:
+                raise SecurityError("User already exists", "USER_EXISTS")
+            
+            user = User(
+                username=username,
+                role=role,
+                auth_methods=auth_methods,
+                created_at=time.time(),
+                api_keys=[]
+            )
+            
+            self.users[username] = user
+            self._save_users()
+            
+            logger.info(f"Created user: {username} with role: {role.value}")
+            return True
+        
+        except Exception as e:
+            logger.error(f"Failed to create user {username}: {e}")
+            return False
+    
+    def enable_2fa(self, username: str) -> Optional[Tuple[str, str]]:
+        """Enable 2FA for user and return secret and QR code"""
+        try:
+            user = self.users.get(username)
+            if not user:
+                raise SecurityError("User not found", "USER_NOT_FOUND")
+            
+            # Generate TOTP secret
+            secret = self.tfa.generate_secret(username)
+            qr_code = self.tfa.generate_qr_code(username, secret)
+            
+            # Store secret (will be confirmed when user verifies first token)
+            user.totp_secret = secret
+            
+            # Add 2FA to auth methods if not already present
+            if AuthMethod.TWO_FACTOR not in user.auth_methods:
+                user.auth_methods.append(AuthMethod.TWO_FACTOR)
+            
+            self._save_users()
+            
+            logger.info(f"2FA enabled for user: {username}")
+            return secret, qr_code
+        
+        except Exception as e:
+            logger.error(f"Failed to enable 2FA for {username}: {e}")
+            return None
+    
+    def verify_2fa_setup(self, username: str, token: str) -> bool:
+        """Verify 2FA setup with initial token"""
+        try:
+            user = self.users.get(username)
+            if not user or not user.totp_secret:
+                return False
+            
+            if self.tfa.verify_token(user.totp_secret, token):
+                logger.info(f"2FA setup verified for user: {username}")
+                return True
+            else:
+                # Remove unverified secret
+                user.totp_secret = None
+                user.auth_methods = [m for m in user.auth_methods if m != AuthMethod.TWO_FACTOR]
+                self._save_users()
+                return False
+        
+        except Exception as e:
+            logger.error(f"2FA setup verification failed for {username}: {e}")
+            return False
+    
+    def disable_2fa(self, username: str) -> bool:
+        """Disable 2FA for user"""
+        try:
+            user = self.users.get(username)
+            if not user:
+                return False
+            
+            user.totp_secret = None
+            user.auth_methods = [m for m in user.auth_methods if m != AuthMethod.TWO_FACTOR]
+            self._save_users()
+            
+            logger.info(f"2FA disabled for user: {username}")
+            return True
+        
+        except Exception as e:
+            logger.error(f"Failed to disable 2FA for {username}: {e}")
+            return False
+    
+    def verify_2fa_token(self, username: str, token: str) -> bool:
+        """Verify 2FA token for user"""
+        try:
+            user = self.users.get(username)
+            if not user or not user.totp_secret:
+                return False
+            
+            return self.tfa.verify_token(user.totp_secret, token)
+        
+        except Exception as e:
+            logger.error(f"2FA token verification failed for {username}: {e}")
+            return False
+    
+    def generate_client_certificate(self, username: str) -> Optional[Tuple[str, str]]:
+        """Generate client certificate for user"""
+        try:
+            user = self.users.get(username)
+            if not user:
+                raise SecurityError("User not found", "USER_NOT_FOUND")
+            
+            cert_data = self.cert_manager.generate_client_certificate(username)
+            if cert_data:
+                cert_pem, key_pem = cert_data
+                
+                # Get certificate fingerprint
+                cert = x509.load_pem_x509_certificate(cert_pem.encode('utf-8'))
+                fingerprint = cert.fingerprint(hashes.SHA256()).hex()
+                
+                # Store fingerprint with user
+                user.certificate_fingerprint = fingerprint
+                
+                # Add certificate auth method if not present
+                if AuthMethod.CERTIFICATE not in user.auth_methods:
+                    user.auth_methods.append(AuthMethod.CERTIFICATE)
+                
+                self._save_users()
+                
+                logger.info(f"Generated client certificate for user: {username}")
+                return cert_pem, key_pem
+            
+            return None
+        
+        except Exception as e:
+            logger.error(f"Failed to generate certificate for {username}: {e}")
+            return None
+    
+    def authenticate_user(self, username: str, auth_method: AuthMethod, 
+                         credentials: Dict[str, Any]) -> Optional[User]:
+        """Authenticate user with specified method"""
+        try:
+            user = self.users.get(username)
+            if not user or not user.enabled:
+                return None
+            
+            # Check if user is locked
+            if user.locked_until and time.time() < user.locked_until:
+                logger.warning(f"User account locked: {username}")
+                return None
+            
+            # Check if auth method is enabled for user
+            if auth_method not in user.auth_methods:
+                logger.warning(f"Auth method {auth_method.value} not enabled for user: {username}")
+                return None
+            
+            authenticated = False
+            
+            if auth_method == AuthMethod.PASSWORD:
+                password = credentials.get('password', '')
+                if user.password_hash:
+                    authenticated = self._verify_password(password, user.password_hash)
+            
+            elif auth_method == AuthMethod.CERTIFICATE:
+                cert_pem = credentials.get('certificate', '')
+                cert_info = self.cert_manager.verify_certificate(cert_pem)
+                authenticated = cert_info and cert_info.username == username
+            
+            elif auth_method == AuthMethod.TWO_FACTOR:
+                token = credentials.get('token', '')
+                authenticated = self.verify_2fa_token(username, token)
+            
+            elif auth_method == AuthMethod.API_KEY:
+                api_key = credentials.get('api_key', '')
+                authenticated = api_key in (user.api_keys or [])
+            
+            if authenticated:
+                # Reset failed attempts and update last login
+                user.failed_attempts = 0
+                user.locked_until = None
+                user.last_login = time.time()
+                self._save_users()
+                
+                logger.info(f"User authenticated: {username} via {auth_method.value}")
+                return user
+            else:
+                # Increment failed attempts
+                user.failed_attempts += 1
+                if user.failed_attempts >= 5:  # Lock after 5 failed attempts
+                    user.locked_until = time.time() + 1800  # Lock for 30 minutes
+                    logger.warning(f"User account locked due to failed attempts: {username}")
+                
+                self._save_users()
+                logger.warning(f"Authentication failed for user: {username}")
+                return None
+        
+        except Exception as e:
+            logger.error(f"Authentication error for {username}: {e}")
+            return None
+    
+    def _verify_password(self, password: str, password_hash: str) -> bool:
+        """Verify password against hash"""
+        try:
+            import bcrypt
+            return bcrypt.checkpw(password.encode('utf-8'), password_hash.encode('utf-8'))
+        except Exception:
+            # Fallback to simple hash comparison (not recommended for production)
+            import hashlib
+            return hashlib.sha256(password.encode('utf-8')).hexdigest() == password_hash
+    
+    def set_password(self, username: str, password: str) -> bool:
+        """Set password for user"""
+        try:
+            user = self.users.get(username)
+            if not user:
+                return False
+            
+            try:
+                import bcrypt
+                password_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+            except ImportError:
+                # Fallback to simple hash (not recommended for production)
+                import hashlib
+                password_hash = hashlib.sha256(password.encode('utf-8')).hexdigest()
+            
+            user.password_hash = password_hash
+            
+            # Add password auth method if not present
+            if AuthMethod.PASSWORD not in user.auth_methods:
+                user.auth_methods.append(AuthMethod.PASSWORD)
+            
+            self._save_users()
+            
+            logger.info(f"Password set for user: {username}")
+            return True
+        
+        except Exception as e:
+            logger.error(f"Failed to set password for {username}: {e}")
+            return False
+    
+    def get_user(self, username: str) -> Optional[User]:
+        """Get user by username"""
+        return self.users.get(username)
+    
+    def list_users(self) -> List[User]:
+        """List all users"""
+        return list(self.users.values())
+    
+    def delete_user(self, username: str) -> bool:
+        """Delete user"""
+        try:
+            if username in self.users:
+                del self.users[username]
+                self._save_users()
+                logger.info(f"Deleted user: {username}")
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"Failed to delete user {username}: {e}")
+            return False
+
+
+# Global user manager instance
+_user_manager = None
+
+
+def get_user_manager() -> UserManager:
+    """Get global user manager instance"""
+    global _user_manager
+    if _user_manager is None:
+        _user_manager = UserManager()
+    return _user_manager
