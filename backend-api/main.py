@@ -16,7 +16,7 @@ from voice_processor import get_voice_processor, VoiceProcessorError
 from remote_desktop import get_remote_desktop_controller, RemoteDesktopError
 from automation_engine import get_automation_engine, AutomationError
 from package_manager import get_package_manager, PackageManagerError
-from security import get_user_manager, get_rbac, SecurityError, UserRole
+from security import get_user_manager, get_rbac, get_activity_logger, SecurityError, UserRole
 
 # Enhanced logging configuration
 logging.basicConfig(
@@ -2546,6 +2546,174 @@ async def get_device_stats(user=Depends(verify_token)):
     except Exception as e:
         logging.error(f"DEVICE_STATS_ERROR: user={user['sub']}, error='{str(e)}'")
         raise HTTPException(status_code=500, detail="Failed to get device statistics")
+
+# Activity Logging Endpoints
+
+@app.get("/activity/logs")
+async def get_activity_logs(
+    username: str = None,
+    action: str = None,
+    resource: str = None,
+    start_time: float = None,
+    end_time: float = None,
+    success: bool = None,
+    limit: int = 100,
+    user=Depends(verify_token)
+):
+    """Get activity logs with optional filters."""
+    try:
+        rbac = get_rbac()
+        user_role = UserRole(user.get('role', 'user'))
+        
+        # Check permissions
+        if not rbac.has_permission(user_role, "security", "view"):
+            # Users can only see their own logs
+            if username and username != user['sub']:
+                logging.warning(f"ACTIVITY_LOGS_FORBIDDEN: user={user['sub']}, requested_user={username}")
+                raise HTTPException(status_code=403, detail="Access denied")
+            username = user['sub']  # Force to own logs
+        
+        activity_logger = get_activity_logger()
+        logs = activity_logger.search_logs(
+            username=username,
+            action=action,
+            resource=resource,
+            start_time=start_time,
+            end_time=end_time,
+            success=success,
+            limit=limit
+        )
+        
+        # Convert to dictionaries
+        logs_dict = [log.to_dict() for log in logs]
+        
+        logging.info(f"ACTIVITY_LOGS_SUCCESS: user={user['sub']}, results={len(logs_dict)}")
+        return {
+            "success": True,
+            "logs": logs_dict,
+            "count": len(logs_dict),
+            "filters": {
+                "username": username,
+                "action": action,
+                "resource": resource,
+                "start_time": start_time,
+                "end_time": end_time,
+                "success": success,
+                "limit": limit
+            }
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"ACTIVITY_LOGS_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get activity logs")
+
+@app.get("/activity/summary")
+async def get_activity_summary(days: int = 30, user=Depends(verify_token)):
+    """Get activity summary for the current user."""
+    try:
+        activity_logger = get_activity_logger()
+        summary = activity_logger.get_user_activity_summary(user['sub'], days)
+        
+        logging.info(f"ACTIVITY_SUMMARY_SUCCESS: user={user['sub']}, days={days}")
+        return {
+            "success": True,
+            "summary": summary
+        }
+    
+    except Exception as e:
+        logging.error(f"ACTIVITY_SUMMARY_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get activity summary")
+
+@app.get("/activity/summary/{target_username}")
+async def get_user_activity_summary(target_username: str, days: int = 30, user=Depends(verify_token)):
+    """Get activity summary for a specific user (admin only)."""
+    try:
+        rbac = get_rbac()
+        user_role = UserRole(user.get('role', 'user'))
+        
+        if not rbac.has_permission(user_role, "user_management", "view"):
+            logging.warning(f"USER_ACTIVITY_SUMMARY_FORBIDDEN: user={user['sub']}, target={target_username}")
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        activity_logger = get_activity_logger()
+        summary = activity_logger.get_user_activity_summary(target_username, days)
+        
+        logging.info(f"USER_ACTIVITY_SUMMARY_SUCCESS: user={user['sub']}, target={target_username}, days={days}")
+        return {
+            "success": True,
+            "summary": summary
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"USER_ACTIVITY_SUMMARY_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get user activity summary")
+
+@app.get("/activity/stats")
+async def get_system_activity_stats(days: int = 7, user=Depends(verify_token)):
+    """Get system-wide activity statistics (admin only)."""
+    try:
+        rbac = get_rbac()
+        user_role = UserRole(user.get('role', 'user'))
+        
+        if not rbac.has_permission(user_role, "system_monitoring", "view"):
+            logging.warning(f"SYSTEM_ACTIVITY_STATS_FORBIDDEN: user={user['sub']}")
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        activity_logger = get_activity_logger()
+        stats = activity_logger.get_system_activity_stats(days)
+        
+        logging.info(f"SYSTEM_ACTIVITY_STATS_SUCCESS: user={user['sub']}, days={days}")
+        return {
+            "success": True,
+            "stats": stats
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"SYSTEM_ACTIVITY_STATS_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get system activity statistics")
+
+@app.post("/activity/cleanup")
+async def cleanup_old_logs(days: int = 90, user=Depends(verify_token)):
+    """Clean up old activity logs (admin only)."""
+    try:
+        rbac = get_rbac()
+        user_role = UserRole(user.get('role', 'user'))
+        
+        if not rbac.has_permission(user_role, "security", "configure"):
+            logging.warning(f"LOG_CLEANUP_FORBIDDEN: user={user['sub']}")
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        activity_logger = get_activity_logger()
+        removed_files = activity_logger.cleanup_old_logs(days)
+        
+        # Log the cleanup activity
+        activity_logger.log_activity(
+            username=user['sub'],
+            action="log_cleanup",
+            resource="activity_logs",
+            success=True,
+            details={"days": days, "removed_files": removed_files}
+        )
+        
+        logging.info(f"LOG_CLEANUP_SUCCESS: user={user['sub']}, days={days}, removed={removed_files}")
+        return {
+            "success": True,
+            "removed_files": removed_files,
+            "days": days,
+            "message": f"Cleaned up {removed_files} old log files"
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"LOG_CLEANUP_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to cleanup old logs")
 
 # Authentication Endpoints
 

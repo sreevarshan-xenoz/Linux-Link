@@ -1498,3 +1498,337 @@ def get_device_manager() -> DeviceManager:
     if _device_manager is None:
         _device_manager = DeviceManager()
     return _device_manager
+
+
+@dataclass
+class ActivityLog:
+    """Represents an activity log entry"""
+    log_id: str
+    timestamp: float
+    username: str
+    device_id: Optional[str]
+    ip_address: Optional[str]
+    user_agent: Optional[str]
+    action: str
+    resource: str
+    details: Dict[str, Any]
+    success: bool
+    error_message: Optional[str] = None
+    
+    def to_dict(self) -> Dict:
+        """Convert to dictionary for JSON serialization"""
+        data = asdict(self)
+        data['timestamp_iso'] = datetime.fromtimestamp(self.timestamp).isoformat()
+        return data
+
+
+class ActivityLogger:
+    """Manages activity logging and audit trails"""
+    
+    def __init__(self, log_dir: str = None):
+        self.log_dir = log_dir or os.path.expanduser('~/.linux_link_logs')
+        self.current_log_file = None
+        self.log_rotation_size = 10 * 1024 * 1024  # 10MB
+        self.max_log_files = 10
+        self._ensure_log_dir()
+        self._setup_log_file()
+        logger.info("Activity logger initialized")
+    
+    def _ensure_log_dir(self):
+        """Ensure log directory exists"""
+        os.makedirs(self.log_dir, mode=0o700, exist_ok=True)
+    
+    def _setup_log_file(self):
+        """Setup current log file"""
+        try:
+            timestamp = datetime.now().strftime('%Y%m%d')
+            self.current_log_file = os.path.join(self.log_dir, f'activity_{timestamp}.log')
+            
+            # Create file if it doesn't exist
+            if not os.path.exists(self.current_log_file):
+                with open(self.current_log_file, 'w') as f:
+                    f.write(f"# Linux-Link Activity Log - {datetime.now().isoformat()}\\n")
+                os.chmod(self.current_log_file, 0o600)
+        
+        except Exception as e:
+            logger.error(f"Failed to setup log file: {e}")
+    
+    def log_activity(self, username: str, action: str, resource: str, 
+                    success: bool = True, details: Dict[str, Any] = None,
+                    device_id: str = None, ip_address: str = None, 
+                    user_agent: str = None, error_message: str = None):
+        """Log an activity"""
+        try:
+            log_entry = ActivityLog(
+                log_id=secrets.token_urlsafe(16),
+                timestamp=time.time(),
+                username=username,
+                device_id=device_id,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                action=action,
+                resource=resource,
+                details=details or {},
+                success=success,
+                error_message=error_message
+            )
+            
+            self._write_log_entry(log_entry)
+            
+            # Also log to system logger for critical actions
+            if action in ['login', 'logout', 'failed_login', 'user_created', 'user_deleted', 
+                         'certificate_generated', 'device_registered']:
+                level = logging.INFO if success else logging.WARNING
+                logger.log(level, f"AUDIT: {username} {action} {resource} {'SUCCESS' if success else 'FAILED'}")
+        
+        except Exception as e:
+            logger.error(f"Failed to log activity: {e}")
+    
+    def _write_log_entry(self, log_entry: ActivityLog):
+        """Write log entry to file"""
+        try:
+            # Check if log rotation is needed
+            if (os.path.exists(self.current_log_file) and 
+                os.path.getsize(self.current_log_file) > self.log_rotation_size):
+                self._rotate_logs()
+            
+            # Write log entry as JSON
+            log_line = json.dumps(log_entry.to_dict()) + '\\n'
+            
+            with open(self.current_log_file, 'a') as f:
+                f.write(log_line)
+        
+        except Exception as e:
+            logger.error(f"Failed to write log entry: {e}")
+    
+    def _rotate_logs(self):
+        """Rotate log files"""
+        try:
+            # Find existing log files
+            log_files = []
+            for filename in os.listdir(self.log_dir):
+                if filename.startswith('activity_') and filename.endswith('.log'):
+                    filepath = os.path.join(self.log_dir, filename)
+                    log_files.append((filepath, os.path.getmtime(filepath)))
+            
+            # Sort by modification time (oldest first)
+            log_files.sort(key=lambda x: x[1])
+            
+            # Remove old files if we have too many
+            while len(log_files) >= self.max_log_files:
+                old_file, _ = log_files.pop(0)
+                try:
+                    os.remove(old_file)
+                    logger.info(f"Removed old log file: {old_file}")
+                except Exception as e:
+                    logger.warning(f"Failed to remove old log file {old_file}: {e}")
+            
+            # Setup new log file
+            self._setup_log_file()
+        
+        except Exception as e:
+            logger.error(f"Log rotation failed: {e}")
+    
+    def search_logs(self, username: str = None, action: str = None, 
+                   resource: str = None, start_time: float = None, 
+                   end_time: float = None, success: bool = None,
+                   limit: int = 100) -> List[ActivityLog]:
+        """Search activity logs"""
+        try:
+            logs = []
+            
+            # Get all log files
+            log_files = []
+            for filename in os.listdir(self.log_dir):
+                if filename.startswith('activity_') and filename.endswith('.log'):
+                    filepath = os.path.join(self.log_dir, filename)
+                    log_files.append(filepath)
+            
+            # Sort by modification time (newest first)
+            log_files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+            
+            # Search through log files
+            for log_file in log_files:
+                try:
+                    with open(log_file, 'r') as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line or line.startswith('#'):
+                                continue
+                            
+                            try:
+                                log_data = json.loads(line)
+                                
+                                # Apply filters
+                                if username and log_data.get('username') != username:
+                                    continue
+                                if action and log_data.get('action') != action:
+                                    continue
+                                if resource and log_data.get('resource') != resource:
+                                    continue
+                                if start_time and log_data.get('timestamp', 0) < start_time:
+                                    continue
+                                if end_time and log_data.get('timestamp', 0) > end_time:
+                                    continue
+                                if success is not None and log_data.get('success') != success:
+                                    continue
+                                
+                                # Create ActivityLog object
+                                log_entry = ActivityLog(
+                                    log_id=log_data['log_id'],
+                                    timestamp=log_data['timestamp'],
+                                    username=log_data['username'],
+                                    device_id=log_data.get('device_id'),
+                                    ip_address=log_data.get('ip_address'),
+                                    user_agent=log_data.get('user_agent'),
+                                    action=log_data['action'],
+                                    resource=log_data['resource'],
+                                    details=log_data.get('details', {}),
+                                    success=log_data['success'],
+                                    error_message=log_data.get('error_message')
+                                )
+                                
+                                logs.append(log_entry)
+                                
+                                if len(logs) >= limit:
+                                    return logs
+                            
+                            except json.JSONDecodeError:
+                                continue
+                
+                except Exception as e:
+                    logger.warning(f"Failed to read log file {log_file}: {e}")
+                    continue
+            
+            return logs
+        
+        except Exception as e:
+            logger.error(f"Log search failed: {e}")
+            return []
+    
+    def get_user_activity_summary(self, username: str, days: int = 30) -> Dict[str, Any]:
+        """Get activity summary for a user"""
+        try:
+            end_time = time.time()
+            start_time = end_time - (days * 86400)
+            
+            logs = self.search_logs(username=username, start_time=start_time, end_time=end_time)
+            
+            # Analyze logs
+            total_activities = len(logs)
+            successful_activities = len([log for log in logs if log.success])
+            failed_activities = total_activities - successful_activities
+            
+            # Group by action
+            actions = {}
+            resources = {}
+            devices = {}
+            
+            for log in logs:
+                actions[log.action] = actions.get(log.action, 0) + 1
+                resources[log.resource] = resources.get(log.resource, 0) + 1
+                if log.device_id:
+                    devices[log.device_id] = devices.get(log.device_id, 0) + 1
+            
+            # Recent activity (last 24 hours)
+            recent_cutoff = time.time() - 86400
+            recent_activities = len([log for log in logs if log.timestamp > recent_cutoff])
+            
+            return {
+                'username': username,
+                'period_days': days,
+                'total_activities': total_activities,
+                'successful_activities': successful_activities,
+                'failed_activities': failed_activities,
+                'recent_activities': recent_activities,
+                'top_actions': dict(sorted(actions.items(), key=lambda x: x[1], reverse=True)[:10]),
+                'top_resources': dict(sorted(resources.items(), key=lambda x: x[1], reverse=True)[:10]),
+                'devices_used': len(devices),
+                'last_activity': max([log.timestamp for log in logs]) if logs else None
+            }
+        
+        except Exception as e:
+            logger.error(f"Failed to get user activity summary: {e}")
+            return {}
+    
+    def get_system_activity_stats(self, days: int = 7) -> Dict[str, Any]:
+        """Get system-wide activity statistics"""
+        try:
+            end_time = time.time()
+            start_time = end_time - (days * 86400)
+            
+            logs = self.search_logs(start_time=start_time, end_time=end_time, limit=10000)
+            
+            # Analyze logs
+            total_activities = len(logs)
+            unique_users = len(set(log.username for log in logs))
+            successful_activities = len([log for log in logs if log.success])
+            failed_activities = total_activities - successful_activities
+            
+            # Group by various dimensions
+            users = {}
+            actions = {}
+            resources = {}
+            hourly_activity = {}
+            
+            for log in logs:
+                users[log.username] = users.get(log.username, 0) + 1
+                actions[log.action] = actions.get(log.action, 0) + 1
+                resources[log.resource] = resources.get(log.resource, 0) + 1
+                
+                # Hourly activity
+                hour = datetime.fromtimestamp(log.timestamp).hour
+                hourly_activity[hour] = hourly_activity.get(hour, 0) + 1
+            
+            return {
+                'period_days': days,
+                'total_activities': total_activities,
+                'unique_users': unique_users,
+                'successful_activities': successful_activities,
+                'failed_activities': failed_activities,
+                'success_rate': (successful_activities / total_activities * 100) if total_activities > 0 else 0,
+                'top_users': dict(sorted(users.items(), key=lambda x: x[1], reverse=True)[:10]),
+                'top_actions': dict(sorted(actions.items(), key=lambda x: x[1], reverse=True)[:10]),
+                'top_resources': dict(sorted(resources.items(), key=lambda x: x[1], reverse=True)[:10]),
+                'hourly_activity': hourly_activity
+            }
+        
+        except Exception as e:
+            logger.error(f"Failed to get system activity stats: {e}")
+            return {}
+    
+    def cleanup_old_logs(self, days: int = 90) -> int:
+        """Clean up logs older than specified days"""
+        try:
+            cutoff_time = time.time() - (days * 86400)
+            removed_files = 0
+            
+            for filename in os.listdir(self.log_dir):
+                if filename.startswith('activity_') and filename.endswith('.log'):
+                    filepath = os.path.join(self.log_dir, filename)
+                    
+                    if os.path.getmtime(filepath) < cutoff_time:
+                        try:
+                            os.remove(filepath)
+                            removed_files += 1
+                            logger.info(f"Removed old log file: {filename}")
+                        except Exception as e:
+                            logger.warning(f"Failed to remove old log file {filename}: {e}")
+            
+            return removed_files
+        
+        except Exception as e:
+            logger.error(f"Log cleanup failed: {e}")
+            return 0
+
+
+# Global activity logger instance
+_activity_logger = None
+
+
+def get_activity_logger() -> ActivityLogger:
+    """Get global activity logger instance"""
+    global _activity_logger
+    if _activity_logger is None:
+        _activity_logger = ActivityLogger()
+    return _activity_logger
