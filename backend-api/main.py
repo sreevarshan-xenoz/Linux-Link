@@ -15,6 +15,7 @@ from media_controller import get_media_controller, MediaControllerError
 from voice_processor import get_voice_processor, VoiceProcessorError
 from remote_desktop import get_remote_desktop_controller, RemoteDesktopError
 from automation_engine import get_automation_engine, AutomationError
+from package_manager import get_package_manager, PackageManagerError
 
 # Enhanced logging configuration
 logging.basicConfig(
@@ -219,6 +220,37 @@ class TaskScheduleRequest(BaseModel):
     macro_id: str
     schedule_expr: str
     variables: Dict[str, Any] = {}
+
+# Package Management Models
+class PackageSearchRequest(BaseModel):
+    query: str
+    include_aur: bool = True
+    search_type: str = "name_desc"
+    limit: int = 50
+
+class AdvancedSearchRequest(BaseModel):
+    filters: Dict[str, Any]
+
+class PackageInstallRequest(BaseModel):
+    package_names: List[str]
+    from_aur: bool = False
+    no_confirm: bool = False
+
+class PackageRemoveRequest(BaseModel):
+    package_names: List[str]
+    no_confirm: bool = False
+    cascade: bool = False
+
+class SystemUpgradeRequest(BaseModel):
+    include_aur: bool = True
+    no_confirm: bool = False
+
+class FileSearchRequest(BaseModel):
+    file_path: str
+
+class DependencySearchRequest(BaseModel):
+    package_name: str
+    reverse: bool = False
 
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     try:
@@ -1935,6 +1967,322 @@ async def delete_scheduled_task(task_id: str, user=Depends(verify_token)):
     except Exception as e:
         logging.error(f"DELETE_SCHEDULED_TASK_ERROR: user={user['sub']}, error='{str(e)}'")
         raise HTTPException(status_code=500, detail="Failed to delete scheduled task")
+
+# Package Management Endpoints
+
+@app.get("/packages/stats")
+async def get_package_stats(user=Depends(verify_token)):
+    """Get package management statistics."""
+    try:
+        pm = get_package_manager()
+        stats = pm.get_package_stats()
+        
+        logging.info(f"PACKAGE_STATS_SUCCESS: user={user['sub']}")
+        return {
+            "success": True,
+            "stats": stats
+        }
+    
+    except Exception as e:
+        logging.error(f"PACKAGE_STATS_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get package statistics")
+
+@app.post("/packages/search")
+async def search_packages(request: PackageSearchRequest, user=Depends(verify_token)):
+    """Search for packages."""
+    try:
+        pm = get_package_manager()
+        packages = pm.search_packages(
+            query=request.query,
+            include_aur=request.include_aur,
+            search_type=request.search_type,
+            limit=request.limit
+        )
+        
+        # Convert to dictionaries
+        packages_dict = [package.to_dict() for package in packages]
+        
+        logging.info(f"PACKAGE_SEARCH_SUCCESS: user={user['sub']}, query='{request.query}', results={len(packages_dict)}")
+        return {
+            "success": True,
+            "packages": packages_dict,
+            "count": len(packages_dict),
+            "query": request.query
+        }
+    
+    except PackageManagerError as e:
+        logging.warning(f"PACKAGE_SEARCH_ERROR: user={user['sub']}, error='{e.message}'")
+        raise HTTPException(status_code=400, detail={"error": e.message, "code": e.error_code})
+    except Exception as e:
+        logging.error(f"PACKAGE_SEARCH_CRITICAL: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to search packages")
+
+@app.post("/packages/search/advanced")
+async def advanced_search_packages(request: AdvancedSearchRequest, user=Depends(verify_token)):
+    """Advanced package search with filters."""
+    try:
+        pm = get_package_manager()
+        packages = pm.advanced_search(request.filters)
+        
+        # Convert to dictionaries
+        packages_dict = [package.to_dict() for package in packages]
+        
+        logging.info(f"ADVANCED_SEARCH_SUCCESS: user={user['sub']}, results={len(packages_dict)}")
+        return {
+            "success": True,
+            "packages": packages_dict,
+            "count": len(packages_dict),
+            "filters": request.filters
+        }
+    
+    except PackageManagerError as e:
+        logging.warning(f"ADVANCED_SEARCH_ERROR: user={user['sub']}, error='{e.message}'")
+        raise HTTPException(status_code=400, detail={"error": e.message, "code": e.error_code})
+    except Exception as e:
+        logging.error(f"ADVANCED_SEARCH_CRITICAL: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to perform advanced search")
+
+@app.get("/packages/installed")
+async def get_installed_packages(user=Depends(verify_token)):
+    """Get list of installed packages."""
+    try:
+        pm = get_package_manager()
+        packages = pm.list_installed_packages()
+        
+        # Convert to dictionaries
+        packages_dict = [package.to_dict() for package in packages]
+        
+        logging.info(f"INSTALLED_PACKAGES_SUCCESS: user={user['sub']}, count={len(packages_dict)}")
+        return {
+            "success": True,
+            "packages": packages_dict,
+            "count": len(packages_dict)
+        }
+    
+    except Exception as e:
+        logging.error(f"INSTALLED_PACKAGES_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get installed packages")
+
+@app.get("/packages/upgradable")
+async def get_upgradable_packages(include_aur: bool = True, user=Depends(verify_token)):
+    """Get list of upgradable packages."""
+    try:
+        pm = get_package_manager()
+        packages = pm.list_upgradable_packages(include_aur=include_aur)
+        
+        # Convert to dictionaries
+        packages_dict = [package.to_dict() for package in packages]
+        
+        logging.info(f"UPGRADABLE_PACKAGES_SUCCESS: user={user['sub']}, count={len(packages_dict)}")
+        return {
+            "success": True,
+            "packages": packages_dict,
+            "count": len(packages_dict),
+            "include_aur": include_aur
+        }
+    
+    except Exception as e:
+        logging.error(f"UPGRADABLE_PACKAGES_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get upgradable packages")
+
+@app.get("/packages/info/{package_name}")
+async def get_package_info(package_name: str, check_aur: bool = True, user=Depends(verify_token)):
+    """Get detailed information about a package."""
+    try:
+        pm = get_package_manager()
+        package = pm.get_package_info(package_name, check_aur=check_aur)
+        
+        if package:
+            logging.info(f"PACKAGE_INFO_SUCCESS: user={user['sub']}, package='{package_name}'")
+            return {
+                "success": True,
+                "package": package.to_dict()
+            }
+        else:
+            logging.warning(f"PACKAGE_INFO_NOT_FOUND: user={user['sub']}, package='{package_name}'")
+            raise HTTPException(status_code=404, detail="Package not found")
+    
+    except PackageManagerError as e:
+        logging.warning(f"PACKAGE_INFO_ERROR: user={user['sub']}, error='{e.message}'")
+        raise HTTPException(status_code=400, detail={"error": e.message, "code": e.error_code})
+    except Exception as e:
+        logging.error(f"PACKAGE_INFO_CRITICAL: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get package information")
+
+@app.post("/packages/install")
+async def install_packages(request: PackageInstallRequest, user=Depends(verify_token)):
+    """Install packages."""
+    try:
+        pm = get_package_manager()
+        operation_id = pm.install_packages(
+            package_names=request.package_names,
+            from_aur=request.from_aur,
+            no_confirm=request.no_confirm
+        )
+        
+        logging.info(f"PACKAGE_INSTALL_SUCCESS: user={user['sub']}, packages={request.package_names}, operation_id={operation_id}")
+        return {
+            "success": True,
+            "operation_id": operation_id,
+            "packages": request.package_names,
+            "from_aur": request.from_aur,
+            "message": f"Package installation started: {operation_id}"
+        }
+    
+    except PackageManagerError as e:
+        logging.warning(f"PACKAGE_INSTALL_ERROR: user={user['sub']}, error='{e.message}'")
+        raise HTTPException(status_code=400, detail={"error": e.message, "code": e.error_code})
+    except Exception as e:
+        logging.error(f"PACKAGE_INSTALL_CRITICAL: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to install packages")
+
+@app.post("/packages/remove")
+async def remove_packages(request: PackageRemoveRequest, user=Depends(verify_token)):
+    """Remove packages."""
+    try:
+        pm = get_package_manager()
+        operation_id = pm.remove_packages(
+            package_names=request.package_names,
+            no_confirm=request.no_confirm,
+            cascade=request.cascade
+        )
+        
+        logging.info(f"PACKAGE_REMOVE_SUCCESS: user={user['sub']}, packages={request.package_names}, operation_id={operation_id}")
+        return {
+            "success": True,
+            "operation_id": operation_id,
+            "packages": request.package_names,
+            "cascade": request.cascade,
+            "message": f"Package removal started: {operation_id}"
+        }
+    
+    except PackageManagerError as e:
+        logging.warning(f"PACKAGE_REMOVE_ERROR: user={user['sub']}, error='{e.message}'")
+        raise HTTPException(status_code=400, detail={"error": e.message, "code": e.error_code})
+    except Exception as e:
+        logging.error(f"PACKAGE_REMOVE_CRITICAL: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to remove packages")
+
+@app.post("/packages/upgrade")
+async def upgrade_system(request: SystemUpgradeRequest, user=Depends(verify_token)):
+    """Upgrade system packages."""
+    try:
+        pm = get_package_manager()
+        operations = pm.upgrade_system(
+            include_aur=request.include_aur,
+            no_confirm=request.no_confirm
+        )
+        
+        logging.info(f"SYSTEM_UPGRADE_SUCCESS: user={user['sub']}, operations={operations}")
+        return {
+            "success": True,
+            "operations": operations,
+            "include_aur": request.include_aur,
+            "message": "System upgrade started"
+        }
+    
+    except PackageManagerError as e:
+        logging.warning(f"SYSTEM_UPGRADE_ERROR: user={user['sub']}, error='{e.message}'")
+        raise HTTPException(status_code=400, detail={"error": e.message, "code": e.error_code})
+    except Exception as e:
+        logging.error(f"SYSTEM_UPGRADE_CRITICAL: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to upgrade system")
+
+@app.post("/packages/refresh")
+async def refresh_database(user=Depends(verify_token)):
+    """Refresh package database."""
+    try:
+        pm = get_package_manager()
+        success = pm.refresh_database()
+        
+        if success:
+            logging.info(f"DATABASE_REFRESH_SUCCESS: user={user['sub']}")
+            return {
+                "success": True,
+                "message": "Package database refreshed successfully"
+            }
+        else:
+            logging.warning(f"DATABASE_REFRESH_FAILED: user={user['sub']}")
+            raise HTTPException(status_code=400, detail="Failed to refresh database")
+    
+    except Exception as e:
+        logging.error(f"DATABASE_REFRESH_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to refresh database")
+
+@app.get("/packages/operations/{operation_id}")
+async def get_operation_status(operation_id: str, user=Depends(verify_token)):
+    """Get package operation status."""
+    try:
+        pm = get_package_manager()
+        operation = pm.get_operation_status(operation_id)
+        
+        if operation:
+            logging.info(f"OPERATION_STATUS_SUCCESS: user={user['sub']}, operation_id={operation_id}")
+            return {
+                "success": True,
+                "operation": operation.to_dict()
+            }
+        else:
+            logging.warning(f"OPERATION_STATUS_NOT_FOUND: user={user['sub']}, operation_id={operation_id}")
+            raise HTTPException(status_code=404, detail="Operation not found")
+    
+    except Exception as e:
+        logging.error(f"OPERATION_STATUS_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get operation status")
+
+@app.post("/packages/search/file")
+async def search_by_file(request: FileSearchRequest, user=Depends(verify_token)):
+    """Search for packages that contain a specific file."""
+    try:
+        pm = get_package_manager()
+        packages = pm.search_by_file(request.file_path)
+        
+        # Convert to dictionaries
+        packages_dict = [package.to_dict() for package in packages]
+        
+        logging.info(f"FILE_SEARCH_SUCCESS: user={user['sub']}, file='{request.file_path}', results={len(packages_dict)}")
+        return {
+            "success": True,
+            "packages": packages_dict,
+            "count": len(packages_dict),
+            "file_path": request.file_path
+        }
+    
+    except PackageManagerError as e:
+        logging.warning(f"FILE_SEARCH_ERROR: user={user['sub']}, error='{e.message}'")
+        raise HTTPException(status_code=400, detail={"error": e.message, "code": e.error_code})
+    except Exception as e:
+        logging.error(f"FILE_SEARCH_CRITICAL: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to search by file")
+
+@app.post("/packages/dependencies")
+async def search_dependencies(request: DependencySearchRequest, user=Depends(verify_token)):
+    """Search package dependencies."""
+    try:
+        pm = get_package_manager()
+        packages = pm.search_dependencies(
+            package_name=request.package_name,
+            reverse=request.reverse
+        )
+        
+        # Convert to dictionaries
+        packages_dict = [package.to_dict() for package in packages]
+        
+        logging.info(f"DEPENDENCY_SEARCH_SUCCESS: user={user['sub']}, package='{request.package_name}', reverse={request.reverse}, results={len(packages_dict)}")
+        return {
+            "success": True,
+            "packages": packages_dict,
+            "count": len(packages_dict),
+            "package_name": request.package_name,
+            "reverse": request.reverse
+        }
+    
+    except PackageManagerError as e:
+        logging.warning(f"DEPENDENCY_SEARCH_ERROR: user={user['sub']}, error='{e.message}'")
+        raise HTTPException(status_code=400, detail={"error": e.message, "code": e.error_code})
+    except Exception as e:
+        logging.error(f"DEPENDENCY_SEARCH_CRITICAL: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to search dependencies")
 
 # Authentication Endpoints
 
