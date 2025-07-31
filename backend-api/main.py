@@ -14,6 +14,7 @@ from desktop_controller import get_desktop_controller, DesktopControllerError
 from media_controller import get_media_controller, MediaControllerError
 from voice_processor import get_voice_processor, VoiceProcessorError
 from remote_desktop import get_remote_desktop_controller, RemoteDesktopError
+from automation_engine import get_automation_engine, AutomationError
 
 # Enhanced logging configuration
 logging.basicConfig(
@@ -201,6 +202,23 @@ class InputSimulationRequest(BaseModel):
 class ApplicationLaunchRequest(BaseModel):
     application: str
     display: str = None
+
+# Automation Models
+class MacroCreateRequest(BaseModel):
+    macro_id: str
+    name: str
+    description: str
+    actions: List[Dict[str, Any]]
+
+class MacroExecuteRequest(BaseModel):
+    macro_id: str
+    variables: Dict[str, Any] = {}
+
+class TaskScheduleRequest(BaseModel):
+    task_id: str
+    macro_id: str
+    schedule_expr: str
+    variables: Dict[str, Any] = {}
 
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     try:
@@ -1697,6 +1715,226 @@ async def get_wayland_outputs(user=Depends(verify_token)):
     except Exception as e:
         logging.error(f"WAYLAND_OUTPUTS_ERROR: user={user['sub']}, error='{str(e)}'")
         raise HTTPException(status_code=500, detail="Failed to get Wayland outputs")
+
+# Automation Endpoints
+
+@app.get("/automation/stats")
+async def get_automation_stats(user=Depends(verify_token)):
+    """Get automation engine statistics."""
+    try:
+        ae = get_automation_engine()
+        stats = ae.get_automation_stats()
+        
+        logging.info(f"AUTOMATION_STATS_SUCCESS: user={user['sub']}")
+        return {
+            "success": True,
+            "stats": stats
+        }
+    
+    except Exception as e:
+        logging.error(f"AUTOMATION_STATS_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get automation statistics")
+
+@app.get("/automation/macros")
+async def get_macros(user=Depends(verify_token)):
+    """Get list of all macros."""
+    try:
+        ae = get_automation_engine()
+        macros = ae.get_macros()
+        
+        logging.info(f"GET_MACROS_SUCCESS: user={user['sub']}, count={len(macros)}")
+        return {
+            "success": True,
+            "macros": macros,
+            "count": len(macros)
+        }
+    
+    except Exception as e:
+        logging.error(f"GET_MACROS_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get macros")
+
+@app.post("/automation/macros")
+async def create_macro(request: MacroCreateRequest, user=Depends(verify_token)):
+    """Create a new macro."""
+    try:
+        ae = get_automation_engine()
+        success = ae.create_macro(
+            macro_id=request.macro_id,
+            name=request.name,
+            description=request.description,
+            actions=request.actions
+        )
+        
+        if success:
+            logging.info(f"CREATE_MACRO_SUCCESS: user={user['sub']}, macro_id={request.macro_id}")
+            return {
+                "success": True,
+                "macro_id": request.macro_id,
+                "message": f"Macro '{request.name}' created successfully"
+            }
+        else:
+            logging.warning(f"CREATE_MACRO_FAILED: user={user['sub']}, macro_id={request.macro_id}")
+            raise HTTPException(status_code=400, detail="Failed to create macro")
+    
+    except Exception as e:
+        logging.error(f"CREATE_MACRO_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to create macro")
+
+@app.delete("/automation/macros/{macro_id}")
+async def delete_macro(macro_id: str, user=Depends(verify_token)):
+    """Delete a macro."""
+    try:
+        ae = get_automation_engine()
+        success = ae.delete_macro(macro_id)
+        
+        if success:
+            logging.info(f"DELETE_MACRO_SUCCESS: user={user['sub']}, macro_id={macro_id}")
+            return {
+                "success": True,
+                "macro_id": macro_id,
+                "message": f"Macro '{macro_id}' deleted successfully"
+            }
+        else:
+            logging.warning(f"DELETE_MACRO_FAILED: user={user['sub']}, macro_id={macro_id}")
+            raise HTTPException(status_code=404, detail="Macro not found")
+    
+    except Exception as e:
+        logging.error(f"DELETE_MACRO_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to delete macro")
+
+@app.post("/automation/macros/execute")
+async def execute_macro(request: MacroExecuteRequest, user=Depends(verify_token)):
+    """Execute a macro."""
+    try:
+        ae = get_automation_engine()
+        execution_id = ae.execute_macro(
+            macro_id=request.macro_id,
+            variables=request.variables
+        )
+        
+        logging.info(f"EXECUTE_MACRO_SUCCESS: user={user['sub']}, macro_id={request.macro_id}, execution_id={execution_id}")
+        return {
+            "success": True,
+            "execution_id": execution_id,
+            "macro_id": request.macro_id,
+            "message": f"Macro execution started: {execution_id}"
+        }
+    
+    except Exception as e:
+        logging.error(f"EXECUTE_MACRO_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to execute macro")
+
+@app.get("/automation/executions/{execution_id}")
+async def get_macro_status(execution_id: str, user=Depends(verify_token)):
+    """Get macro execution status."""
+    try:
+        ae = get_automation_engine()
+        status = ae.get_macro_status(execution_id)
+        
+        if status:
+            logging.info(f"MACRO_STATUS_SUCCESS: user={user['sub']}, execution_id={execution_id}")
+            return {
+                "success": True,
+                "execution": status.to_dict()
+            }
+        else:
+            logging.warning(f"MACRO_STATUS_NOT_FOUND: user={user['sub']}, execution_id={execution_id}")
+            raise HTTPException(status_code=404, detail="Execution not found")
+    
+    except Exception as e:
+        logging.error(f"MACRO_STATUS_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get macro status")
+
+@app.post("/automation/executions/{execution_id}/stop")
+async def stop_macro(execution_id: str, user=Depends(verify_token)):
+    """Stop macro execution."""
+    try:
+        ae = get_automation_engine()
+        success = ae.stop_macro(execution_id)
+        
+        if success:
+            logging.info(f"STOP_MACRO_SUCCESS: user={user['sub']}, execution_id={execution_id}")
+            return {
+                "success": True,
+                "execution_id": execution_id,
+                "message": "Macro execution stopped"
+            }
+        else:
+            logging.warning(f"STOP_MACRO_FAILED: user={user['sub']}, execution_id={execution_id}")
+            raise HTTPException(status_code=404, detail="Execution not found")
+    
+    except Exception as e:
+        logging.error(f"STOP_MACRO_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to stop macro")
+
+@app.get("/automation/scheduled-tasks")
+async def get_scheduled_tasks(user=Depends(verify_token)):
+    """Get list of scheduled tasks."""
+    try:
+        ae = get_automation_engine()
+        tasks = ae.get_scheduled_tasks()
+        
+        logging.info(f"GET_SCHEDULED_TASKS_SUCCESS: user={user['sub']}, count={len(tasks)}")
+        return {
+            "success": True,
+            "tasks": tasks,
+            "count": len(tasks)
+        }
+    
+    except Exception as e:
+        logging.error(f"GET_SCHEDULED_TASKS_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get scheduled tasks")
+
+@app.post("/automation/scheduled-tasks")
+async def schedule_macro(request: TaskScheduleRequest, user=Depends(verify_token)):
+    """Schedule a macro to run on a schedule."""
+    try:
+        ae = get_automation_engine()
+        success = ae.schedule_macro(
+            task_id=request.task_id,
+            macro_id=request.macro_id,
+            schedule_expr=request.schedule_expr,
+            variables=request.variables
+        )
+        
+        if success:
+            logging.info(f"SCHEDULE_MACRO_SUCCESS: user={user['sub']}, task_id={request.task_id}, macro_id={request.macro_id}")
+            return {
+                "success": True,
+                "task_id": request.task_id,
+                "macro_id": request.macro_id,
+                "schedule": request.schedule_expr,
+                "message": f"Macro scheduled successfully: {request.task_id}"
+            }
+        else:
+            logging.warning(f"SCHEDULE_MACRO_FAILED: user={user['sub']}, task_id={request.task_id}")
+            raise HTTPException(status_code=400, detail="Failed to schedule macro")
+    
+    except Exception as e:
+        logging.error(f"SCHEDULE_MACRO_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to schedule macro")
+
+@app.delete("/automation/scheduled-tasks/{task_id}")
+async def delete_scheduled_task(task_id: str, user=Depends(verify_token)):
+    """Delete a scheduled task."""
+    try:
+        ae = get_automation_engine()
+        success = ae.delete_scheduled_task(task_id)
+        
+        if success:
+            logging.info(f"DELETE_SCHEDULED_TASK_SUCCESS: user={user['sub']}, task_id={task_id}")
+            return {
+                "success": True,
+                "task_id": task_id,
+                "message": f"Scheduled task '{task_id}' deleted successfully"
+            }
+        else:
+            logging.warning(f"DELETE_SCHEDULED_TASK_FAILED: user={user['sub']}, task_id={task_id}")
+            raise HTTPException(status_code=404, detail="Scheduled task not found")
+    
+    except Exception as e:
+        logging.error(f"DELETE_SCHEDULED_TASK_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to delete scheduled task")
 
 # Authentication Endpoints
 
