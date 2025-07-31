@@ -938,3 +938,285 @@ def get_user_manager() -> UserManager:
     if _user_manager is None:
         _user_manager = UserManager()
     return _user_manager
+
+
+class RoleBasedAccessControl:
+    """Manages role-based access control and permissions"""
+    
+    def __init__(self):
+        self.permissions = self._load_permissions()
+        logger.info("Role-based access control initialized")
+    
+    def _load_permissions(self) -> Dict[UserRole, Dict[str, List[str]]]:
+        """Load role permissions configuration"""
+        return {
+            UserRole.ADMIN: {
+                "file_management": ["read", "write", "delete", "execute", "upload", "download"],
+                "desktop_control": ["view", "control", "configure"],
+                "media_control": ["view", "control", "configure"],
+                "voice_commands": ["use", "create", "modify", "delete"],
+                "remote_desktop": ["view", "control", "configure"],
+                "automation": ["view", "create", "execute", "modify", "delete"],
+                "package_management": ["view", "install", "remove", "upgrade"],
+                "system_monitoring": ["view", "configure", "alerts"],
+                "user_management": ["view", "create", "modify", "delete"],
+                "security": ["view", "configure", "certificates", "2fa"]
+            },
+            UserRole.USER: {
+                "file_management": ["read", "write", "upload", "download"],
+                "desktop_control": ["view", "control"],
+                "media_control": ["view", "control"],
+                "voice_commands": ["use", "create", "modify"],
+                "remote_desktop": ["view", "control"],
+                "automation": ["view", "create", "execute", "modify"],
+                "package_management": ["view", "install"],
+                "system_monitoring": ["view"],
+                "user_management": [],
+                "security": ["view", "2fa"]
+            },
+            UserRole.READONLY: {
+                "file_management": ["read", "download"],
+                "desktop_control": ["view"],
+                "media_control": ["view"],
+                "voice_commands": ["use"],
+                "remote_desktop": ["view"],
+                "automation": ["view"],
+                "package_management": ["view"],
+                "system_monitoring": ["view"],
+                "user_management": [],
+                "security": ["view"]
+            },
+            UserRole.GUEST: {
+                "file_management": ["read"],
+                "desktop_control": ["view"],
+                "media_control": ["view"],
+                "voice_commands": [],
+                "remote_desktop": ["view"],
+                "automation": ["view"],
+                "package_management": ["view"],
+                "system_monitoring": [],
+                "user_management": [],
+                "security": []
+            }
+        }
+    
+    def has_permission(self, user_role: UserRole, resource: str, action: str) -> bool:
+        """Check if user role has permission for resource action"""
+        try:
+            role_permissions = self.permissions.get(user_role, {})
+            resource_permissions = role_permissions.get(resource, [])
+            
+            has_perm = action in resource_permissions
+            
+            if not has_perm:
+                logger.warning(f"Permission denied: {user_role.value} -> {resource}:{action}")
+            
+            return has_perm
+        
+        except Exception as e:
+            logger.error(f"Permission check failed: {e}")
+            return False
+    
+    def get_user_permissions(self, user_role: UserRole) -> Dict[str, List[str]]:
+        """Get all permissions for a user role"""
+        return self.permissions.get(user_role, {})
+    
+    def can_access_endpoint(self, user_role: UserRole, endpoint: str, method: str) -> bool:
+        """Check if user can access specific API endpoint"""
+        try:
+            # Map endpoints to resources and actions
+            endpoint_permissions = {
+                # File Management
+                "/files/browse": ("file_management", "read"),
+                "/files/upload": ("file_management", "upload"),
+                "/files/download": ("file_management", "download"),
+                "/files/operations/delete": ("file_management", "delete"),
+                "/files/operations/rename": ("file_management", "write"),
+                "/files/operations/copy": ("file_management", "write"),
+                "/files/operations/move": ("file_management", "write"),
+                
+                # Desktop Control
+                "/desktop/info": ("desktop_control", "view"),
+                "/desktop/workspaces": ("desktop_control", "view"),
+                "/desktop/workspace": ("desktop_control", "control"),
+                "/desktop/windows": ("desktop_control", "view"),
+                "/desktop/window/focus": ("desktop_control", "control"),
+                "/desktop/window/close": ("desktop_control", "control"),
+                
+                # Media Control
+                "/media/players": ("media_control", "view"),
+                "/media/play": ("media_control", "control"),
+                "/media/pause": ("media_control", "control"),
+                "/media/volume": ("media_control", "control"),
+                
+                # Voice Commands
+                "/voice/process": ("voice_commands", "use"),
+                "/voice/commands": ("voice_commands", "view"),
+                "/voice/commands/custom": ("voice_commands", "create"),
+                
+                # Remote Desktop
+                "/remote/vnc/start": ("remote_desktop", "control"),
+                "/remote/vnc/stop": ("remote_desktop", "control"),
+                "/remote/screen": ("remote_desktop", "view"),
+                
+                # Automation
+                "/automation/macros": ("automation", "view" if method == "GET" else "create"),
+                "/automation/macros/execute": ("automation", "execute"),
+                
+                # Package Management
+                "/packages/search": ("package_management", "view"),
+                "/packages/install": ("package_management", "install"),
+                "/packages/remove": ("package_management", "remove"),
+                "/packages/upgrade": ("package_management", "upgrade"),
+                
+                # System Monitoring
+                "/system/stats": ("system_monitoring", "view"),
+                "/system/alerts": ("system_monitoring", "view"),
+                
+                # User Management
+                "/users": ("user_management", "view" if method == "GET" else "create"),
+                "/users/roles": ("user_management", "modify"),
+                
+                # Security
+                "/security/certificates": ("security", "certificates"),
+                "/security/2fa": ("security", "2fa"),
+            }
+            
+            # Check for exact match first
+            if endpoint in endpoint_permissions:
+                resource, action = endpoint_permissions[endpoint]
+                return self.has_permission(user_role, resource, action)
+            
+            # Check for pattern matches
+            for pattern, (resource, action) in endpoint_permissions.items():
+                if endpoint.startswith(pattern.rstrip('*')):
+                    return self.has_permission(user_role, resource, action)
+            
+            # Default deny for unknown endpoints
+            logger.warning(f"Unknown endpoint access attempt: {endpoint}")
+            return user_role == UserRole.ADMIN  # Only admin can access unknown endpoints
+        
+        except Exception as e:
+            logger.error(f"Endpoint access check failed: {e}")
+            return False
+    
+    def filter_data_by_role(self, data: Dict[str, Any], user_role: UserRole, 
+                           data_type: str) -> Dict[str, Any]:
+        """Filter sensitive data based on user role"""
+        try:
+            if user_role == UserRole.ADMIN:
+                return data  # Admin sees everything
+            
+            filtered_data = data.copy()
+            
+            # Remove sensitive fields based on data type and role
+            if data_type == "user_info":
+                if user_role not in [UserRole.ADMIN]:
+                    filtered_data.pop('password_hash', None)
+                    filtered_data.pop('totp_secret', None)
+                    filtered_data.pop('api_keys', None)
+                    filtered_data.pop('failed_attempts', None)
+                    filtered_data.pop('locked_until', None)
+            
+            elif data_type == "system_info":
+                if user_role == UserRole.GUEST:
+                    # Guests see limited system info
+                    allowed_fields = ['hostname', 'uptime', 'load_average']
+                    filtered_data = {k: v for k, v in filtered_data.items() 
+                                   if k in allowed_fields}
+            
+            elif data_type == "package_info":
+                if user_role == UserRole.READONLY:
+                    # Remove installation/removal capabilities
+                    filtered_data.pop('install_command', None)
+                    filtered_data.pop('remove_command', None)
+            
+            return filtered_data
+        
+        except Exception as e:
+            logger.error(f"Data filtering failed: {e}")
+            return data
+    
+    def get_allowed_commands(self, user_role: UserRole) -> List[str]:
+        """Get list of allowed commands for user role"""
+        command_permissions = {
+            UserRole.ADMIN: [
+                # System administration
+                'systemctl', 'journalctl', 'mount', 'umount', 'fdisk',
+                'useradd', 'usermod', 'userdel', 'passwd', 'chown', 'chmod',
+                # Package management
+                'pacman', 'yay', 'paru', 'apt', 'yum', 'dnf',
+                # Network
+                'iptables', 'ufw', 'netstat', 'ss', 'tcpdump',
+                # File operations
+                'cp', 'mv', 'rm', 'mkdir', 'rmdir', 'tar', 'gzip',
+                # Process management
+                'kill', 'killall', 'pkill', 'nohup',
+                # System info
+                'ps', 'top', 'htop', 'df', 'du', 'free', 'lscpu', 'lsblk'
+            ],
+            UserRole.USER: [
+                # Basic file operations
+                'ls', 'cat', 'less', 'head', 'tail', 'grep', 'find',
+                'cp', 'mv', 'mkdir', 'tar', 'gzip',
+                # System info (read-only)
+                'ps', 'top', 'df', 'du', 'free', 'uptime',
+                # Development tools
+                'git', 'make', 'gcc', 'python', 'node', 'npm',
+                # Package management (limited)
+                'pacman -S', 'pacman -Q', 'yay -S'
+            ],
+            UserRole.READONLY: [
+                # Read-only operations
+                'ls', 'cat', 'less', 'head', 'tail', 'grep', 'find',
+                'ps', 'top', 'df', 'du', 'free', 'uptime',
+                'pacman -Q', 'pacman -Ss'
+            ],
+            UserRole.GUEST: [
+                # Very limited operations
+                'ls', 'cat', 'less', 'head', 'tail',
+                'ps', 'uptime'
+            ]
+        }
+        
+        return command_permissions.get(user_role, [])
+    
+    def validate_command_for_role(self, command: str, user_role: UserRole) -> bool:
+        """Validate if command is allowed for user role"""
+        try:
+            allowed_commands = self.get_allowed_commands(user_role)
+            
+            # Check if command or command prefix is allowed
+            cmd_parts = command.strip().split()
+            if not cmd_parts:
+                return False
+            
+            base_command = cmd_parts[0]
+            
+            # Check exact matches
+            if base_command in allowed_commands:
+                return True
+            
+            # Check prefix matches (e.g., "pacman -S" matches "pacman -S package")
+            for allowed_cmd in allowed_commands:
+                if command.startswith(allowed_cmd):
+                    return True
+            
+            logger.warning(f"Command not allowed for role {user_role.value}: {command}")
+            return False
+        
+        except Exception as e:
+            logger.error(f"Command validation failed: {e}")
+            return False
+
+
+# Global RBAC instance
+_rbac = None
+
+
+def get_rbac() -> RoleBasedAccessControl:
+    """Get global RBAC instance"""
+    global _rbac
+    if _rbac is None:
+        _rbac = RoleBasedAccessControl()
+    return _rbac
