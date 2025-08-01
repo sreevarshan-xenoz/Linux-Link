@@ -19,6 +19,7 @@ from package_manager import get_package_manager, PackageManagerError
 from security import get_user_manager, get_rbac, get_activity_logger, SecurityError, UserRole
 from monitoring import get_system_monitor, MonitoringError, MetricType, AlertLevel
 from error_handler import get_error_handler, api_error_handler, ErrorContext, ErrorCategory, ErrorSeverity
+from performance import get_performance_optimizer, get_security_hardening, monitor_performance
 
 # Enhanced logging configuration
 logging.basicConfig(
@@ -38,6 +39,87 @@ app = FastAPI(
 
 # Add global error handler
 app.add_exception_handler(Exception, api_error_handler)
+
+# Security and Performance Middleware
+@app.middleware("http")
+async def security_middleware(request: Request, call_next):
+    """Security middleware for request validation and protection"""
+    try:
+        security = get_security_hardening()
+        
+        # Get client IP
+        client_ip = request.client.host if request.client else "unknown"
+        
+        # Check if IP is blocked
+        if security.is_ip_blocked(client_ip):
+            return JSONResponse(
+                status_code=429,
+                content={"error": "IP address is temporarily blocked"}
+            )
+        
+        # Rate limiting
+        endpoint_type = "api_general"
+        if request.url.path.startswith("/auth/login"):
+            endpoint_type = "login"
+        elif request.url.path.startswith("/files/upload"):
+            endpoint_type = "file_upload"
+        elif request.url.path.startswith("/packages/install"):
+            endpoint_type = "package_install"
+        
+        if not security.check_rate_limit(client_ip, endpoint_type):
+            return JSONResponse(
+                status_code=429,
+                content={"error": "Rate limit exceeded"}
+            )
+        
+        # Process request
+        start_time = time.time()
+        response = await call_next(request)
+        processing_time = time.time() - start_time
+        
+        # Add security headers
+        for header, value in security.get_security_headers().items():
+            response.headers[header] = value
+        
+        # Add performance headers
+        response.headers["X-Response-Time"] = f"{processing_time:.3f}s"
+        
+        return response
+    
+    except Exception as e:
+        logger.error(f"Security middleware error: {e}")
+        return await call_next(request)
+
+@app.middleware("http")
+async def performance_middleware(request: Request, call_next):
+    """Performance monitoring middleware"""
+    try:
+        optimizer = get_performance_optimizer()
+        
+        # Collect metrics before request
+        start_metrics = optimizer.collect_performance_metrics()
+        
+        # Process request
+        start_time = time.time()
+        response = await call_next(request)
+        processing_time = time.time() - start_time
+        
+        # Update performance metrics
+        if start_metrics:
+            start_metrics.response_times[request.url.path] = processing_time
+            
+            # Check for errors
+            if response.status_code >= 400:
+                error_key = f"{response.status_code}xx"
+                if error_key not in start_metrics.error_rates:
+                    start_metrics.error_rates[error_key] = 0
+                start_metrics.error_rates[error_key] += 1
+        
+        return response
+    
+    except Exception as e:
+        logger.error(f"Performance middleware error: {e}")
+        return await call_next(request)
 
 # CORS middleware for mobile app
 app.add_middleware(
@@ -3284,6 +3366,226 @@ async def clear_error_log(user=Depends(verify_token)):
     except Exception as e:
         logging.error(f"CLEAR_ERRORS_ERROR: user={user['sub']}, error='{str(e)}'")
         raise HTTPException(status_code=500, detail="Failed to clear error log")
+
+# Performance and Security Endpoints
+
+@app.get("/system/performance")
+async def get_performance_metrics(hours: int = 24, user=Depends(verify_token)):
+    """Get system performance metrics."""
+    try:
+        rbac = get_rbac()
+        user_role = UserRole(user.get('role', 'user'))
+        
+        if not rbac.has_permission(user_role, "system_monitoring", "view"):
+            logging.warning(f"PERFORMANCE_METRICS_FORBIDDEN: user={user['sub']}")
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        optimizer = get_performance_optimizer()
+        summary = optimizer.get_performance_summary(hours)
+        current_metrics = optimizer.collect_performance_metrics()
+        
+        logging.info(f"PERFORMANCE_METRICS_SUCCESS: user={user['sub']}")
+        return {
+            "success": True,
+            "summary": summary,
+            "current": current_metrics.to_dict() if current_metrics else None
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"PERFORMANCE_METRICS_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get performance metrics")
+
+@app.get("/system/security/status")
+async def get_security_status(user=Depends(verify_token)):
+    """Get security status and statistics."""
+    try:
+        rbac = get_rbac()
+        user_role = UserRole(user.get('role', 'user'))
+        
+        if not rbac.has_permission(user_role, "security", "view"):
+            logging.warning(f"SECURITY_STATUS_FORBIDDEN: user={user['sub']}")
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        security = get_security_hardening()
+        
+        # Get security statistics
+        current_time = time.time()
+        blocked_ips_count = len([
+            ip for ip, expiry in security.blocked_ips.items()
+            if current_time < expiry
+        ])
+        
+        recent_failed_attempts = 0
+        hour_ago = current_time - 3600
+        for attempts in security.failed_attempts.values():
+            recent_failed_attempts += len([
+                attempt for attempt in attempts
+                if attempt > hour_ago
+            ])
+        
+        status = {
+            "blocked_ips": blocked_ips_count,
+            "recent_failed_attempts": recent_failed_attempts,
+            "rate_limit_rules": len(security.rate_limits),
+            "security_headers_enabled": len(security.security_headers)
+        }
+        
+        logging.info(f"SECURITY_STATUS_SUCCESS: user={user['sub']}")
+        return {
+            "success": True,
+            "status": status
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"SECURITY_STATUS_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get security status")
+
+@app.post("/system/security/unblock-ip")
+async def unblock_ip(ip_address: str, user=Depends(verify_token)):
+    """Unblock an IP address (admin only)."""
+    try:
+        rbac = get_rbac()
+        user_role = UserRole(user.get('role', 'user'))
+        
+        if not rbac.has_permission(user_role, "security", "configure"):
+            logging.warning(f"UNBLOCK_IP_FORBIDDEN: user={user['sub']}")
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        security = get_security_hardening()
+        
+        if ip_address in security.blocked_ips:
+            del security.blocked_ips[ip_address]
+            
+            # Audit the action
+            security.audit_security_event("ip_unblocked", {
+                "ip_address": ip_address,
+                "admin_user": user['sub']
+            })
+            
+            logging.info(f"UNBLOCK_IP_SUCCESS: user={user['sub']}, ip={ip_address}")
+            return {
+                "success": True,
+                "message": f"IP address {ip_address} has been unblocked"
+            }
+        else:
+            logging.warning(f"UNBLOCK_IP_NOT_FOUND: user={user['sub']}, ip={ip_address}")
+            raise HTTPException(status_code=404, detail="IP address not found in blocked list")
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"UNBLOCK_IP_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to unblock IP address")
+
+@app.post("/system/performance/optimize")
+async def trigger_optimization(user=Depends(verify_token)):
+    """Trigger manual performance optimization (admin only)."""
+    try:
+        rbac = get_rbac()
+        user_role = UserRole(user.get('role', 'user'))
+        
+        if not rbac.has_permission(user_role, "security", "configure"):
+            logging.warning(f"TRIGGER_OPTIMIZATION_FORBIDDEN: user={user['sub']}")
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        optimizer = get_performance_optimizer()
+        
+        # Collect current metrics
+        current_metrics = optimizer.collect_performance_metrics()
+        
+        if current_metrics:
+            # Force optimization checks
+            optimizer._check_optimization_rules(current_metrics)
+            
+            # Manual cleanup
+            optimizer._cleanup_cache()
+            
+            logging.info(f"TRIGGER_OPTIMIZATION_SUCCESS: user={user['sub']}")
+            return {
+                "success": True,
+                "message": "Performance optimization triggered",
+                "current_metrics": current_metrics.to_dict()
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Failed to collect performance metrics")
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"TRIGGER_OPTIMIZATION_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to trigger optimization")
+
+@app.get("/system/health")
+async def health_check():
+    """System health check endpoint."""
+    try:
+        # Basic health checks
+        health_status = {
+            "status": "healthy",
+            "timestamp": time.time(),
+            "checks": {}
+        }
+        
+        # Check system resources
+        try:
+            cpu_usage = psutil.cpu_percent(interval=1)
+            memory = psutil.virtual_memory()
+            disk = psutil.disk_usage('/')
+            
+            health_status["checks"]["system"] = {
+                "cpu_usage": cpu_usage,
+                "memory_usage": memory.percent,
+                "disk_usage": (disk.used / disk.total) * 100,
+                "status": "ok" if cpu_usage < 90 and memory.percent < 90 else "warning"
+            }
+        except Exception as e:
+            health_status["checks"]["system"] = {"status": "error", "error": str(e)}
+        
+        # Check database connectivity
+        try:
+            from monitoring import get_system_monitor
+            monitor = get_system_monitor()
+            # Simple database check
+            monitor.get_monitoring_stats()
+            health_status["checks"]["database"] = {"status": "ok"}
+        except Exception as e:
+            health_status["checks"]["database"] = {"status": "error", "error": str(e)}
+        
+        # Check error handler
+        try:
+            error_handler = get_error_handler()
+            error_stats = error_handler.get_error_statistics()
+            health_status["checks"]["error_handler"] = {
+                "status": "ok",
+                "recent_errors": error_stats.get("recent_errors", 0)
+            }
+        except Exception as e:
+            health_status["checks"]["error_handler"] = {"status": "error", "error": str(e)}
+        
+        # Determine overall status
+        check_statuses = [check.get("status", "error") for check in health_status["checks"].values()]
+        if "error" in check_statuses:
+            health_status["status"] = "unhealthy"
+        elif "warning" in check_statuses:
+            health_status["status"] = "degraded"
+        
+        status_code = 200 if health_status["status"] == "healthy" else 503
+        return JSONResponse(content=health_status, status_code=status_code)
+    
+    except Exception as e:
+        logging.error(f"HEALTH_CHECK_ERROR: error='{str(e)}'")
+        return JSONResponse(
+            content={
+                "status": "unhealthy",
+                "timestamp": time.time(),
+                "error": "Health check failed"
+            },
+            status_code=503
+        )
 
 # Authentication Endpoints
 
