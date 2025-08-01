@@ -631,6 +631,415 @@ class SystemMonitor:
         except Exception as e:
             logger.error(f"Failed to retrieve metrics: {e}")
             return []
+    
+    def create_alert_threshold(self, metric_type: MetricType, metric_name: str,
+                              operator: str, warning_value: float = None,
+                              critical_value: float = None) -> str:
+        """Create a new alert threshold"""
+        try:
+            import secrets
+            threshold_id = secrets.token_urlsafe(16)
+            
+            threshold = AlertThreshold(
+                threshold_id=threshold_id,
+                metric_type=metric_type,
+                metric_name=metric_name,
+                operator=operator,
+                warning_value=warning_value,
+                critical_value=critical_value,
+                enabled=True
+            )
+            
+            # Store in database
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                INSERT INTO alert_thresholds 
+                (threshold_id, metric_type, metric_name, operator, warning_value, critical_value, enabled, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                threshold.threshold_id,
+                threshold.metric_type.value,
+                threshold.metric_name,
+                threshold.operator,
+                threshold.warning_value,
+                threshold.critical_value,
+                1 if threshold.enabled else 0,
+                threshold.created_at
+            ))
+            
+            conn.commit()
+            conn.close()
+            
+            # Add to memory
+            self.alert_thresholds[threshold_id] = threshold
+            
+            logger.info(f"Created alert threshold: {threshold_id} for {metric_name}")
+            return threshold_id
+        
+        except Exception as e:
+            logger.error(f"Failed to create alert threshold: {e}")
+            raise MonitoringError("Failed to create alert threshold", "THRESHOLD_CREATE_FAILED")
+    
+    def update_alert_threshold(self, threshold_id: str, **kwargs) -> bool:
+        """Update an alert threshold"""
+        try:
+            threshold = self.alert_thresholds.get(threshold_id)
+            if not threshold:
+                return False
+            
+            # Update allowed fields
+            allowed_fields = ['operator', 'warning_value', 'critical_value', 'enabled']
+            for field, value in kwargs.items():
+                if field in allowed_fields and hasattr(threshold, field):
+                    setattr(threshold, field, value)
+            
+            # Update in database
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                UPDATE alert_thresholds 
+                SET operator = ?, warning_value = ?, critical_value = ?, enabled = ?
+                WHERE threshold_id = ?
+            ''', (
+                threshold.operator,
+                threshold.warning_value,
+                threshold.critical_value,
+                1 if threshold.enabled else 0,
+                threshold_id
+            ))
+            
+            conn.commit()
+            conn.close()
+            
+            logger.info(f"Updated alert threshold: {threshold_id}")
+            return True
+        
+        except Exception as e:
+            logger.error(f"Failed to update alert threshold {threshold_id}: {e}")
+            return False
+    
+    def delete_alert_threshold(self, threshold_id: str) -> bool:
+        """Delete an alert threshold"""
+        try:
+            if threshold_id not in self.alert_thresholds:
+                return False
+            
+            # Remove from database
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute('DELETE FROM alert_thresholds WHERE threshold_id = ?', (threshold_id,))
+            
+            conn.commit()
+            conn.close()
+            
+            # Remove from memory
+            del self.alert_thresholds[threshold_id]
+            
+            logger.info(f"Deleted alert threshold: {threshold_id}")
+            return True
+        
+        except Exception as e:
+            logger.error(f"Failed to delete alert threshold {threshold_id}: {e}")
+            return False
+    
+    def get_alert_thresholds(self) -> List[AlertThreshold]:
+        """Get all alert thresholds"""
+        return list(self.alert_thresholds.values())
+    
+    def check_alert_thresholds(self, metrics: List[SystemMetric]):
+        """Check metrics against alert thresholds"""
+        try:
+            for metric in metrics:
+                # Find matching thresholds
+                matching_thresholds = [
+                    threshold for threshold in self.alert_thresholds.values()
+                    if (threshold.enabled and 
+                        threshold.metric_type == metric.metric_type and
+                        threshold.metric_name == metric.name)
+                ]
+                
+                for threshold in matching_thresholds:
+                    self._evaluate_threshold(metric, threshold)
+        
+        except Exception as e:
+            logger.error(f"Failed to check alert thresholds: {e}")
+    
+    def _evaluate_threshold(self, metric: SystemMetric, threshold: AlertThreshold):
+        """Evaluate a metric against a threshold"""
+        try:
+            current_value = float(metric.value)
+            alert_level = None
+            threshold_value = None
+            
+            # Check critical threshold first
+            if threshold.critical_value is not None:
+                if self._compare_values(current_value, threshold.critical_value, threshold.operator):
+                    alert_level = AlertLevel.CRITICAL
+                    threshold_value = threshold.critical_value
+            
+            # Check warning threshold if no critical alert
+            if alert_level is None and threshold.warning_value is not None:
+                if self._compare_values(current_value, threshold.warning_value, threshold.operator):
+                    alert_level = AlertLevel.WARNING
+                    threshold_value = threshold.warning_value
+            
+            # Create alert if threshold exceeded
+            if alert_level is not None:
+                self._create_alert(metric, threshold, alert_level, threshold_value, current_value)
+        
+        except Exception as e:
+            logger.error(f"Failed to evaluate threshold: {e}")
+    
+    def _compare_values(self, current: float, threshold: float, operator: str) -> bool:
+        """Compare values based on operator"""
+        if operator == '>':
+            return current > threshold
+        elif operator == '<':
+            return current < threshold
+        elif operator == '>=':
+            return current >= threshold
+        elif operator == '<=':
+            return current <= threshold
+        elif operator == '==':
+            return current == threshold
+        elif operator == '!=':
+            return current != threshold
+        else:
+            return False
+    
+    def _create_alert(self, metric: SystemMetric, threshold: AlertThreshold,
+                     level: AlertLevel, threshold_value: float, current_value: float):
+        """Create a new alert"""
+        try:
+            import secrets
+            alert_id = secrets.token_urlsafe(16)
+            
+            # Check if similar alert already exists and is not resolved
+            existing_alerts = [
+                alert for alert in self.alerts.values()
+                if (alert.metric_type == metric.metric_type and
+                    alert.metric_name == metric.name and
+                    alert.level == level and
+                    not alert.resolved and
+                    time.time() - alert.created_at < 3600)  # Within last hour
+            ]
+            
+            if existing_alerts:
+                # Don't create duplicate alerts
+                return
+            
+            alert = Alert(
+                alert_id=alert_id,
+                level=level,
+                title=f"{level.value.title()} Alert: {metric.name}",
+                message=f"{metric.name} is {current_value} {metric.unit}, exceeding {level.value} threshold of {threshold_value} {metric.unit}",
+                metric_type=metric.metric_type,
+                metric_name=metric.name,
+                threshold_value=threshold_value,
+                current_value=current_value,
+                created_at=time.time()
+            )
+            
+            # Store in database
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                INSERT INTO alerts 
+                (alert_id, level, title, message, metric_type, metric_name, threshold_value, current_value, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                alert.alert_id,
+                alert.level.value,
+                alert.title,
+                alert.message,
+                alert.metric_type.value,
+                alert.metric_name,
+                alert.threshold_value,
+                alert.current_value,
+                alert.created_at
+            ))
+            
+            conn.commit()
+            conn.close()
+            
+            # Add to memory
+            self.alerts[alert_id] = alert
+            
+            logger.warning(f"Created {level.value} alert: {alert.title}")
+        
+        except Exception as e:
+            logger.error(f"Failed to create alert: {e}")
+    
+    def get_alerts(self, level: AlertLevel = None, resolved: bool = None,
+                  acknowledged: bool = None, limit: int = 100) -> List[Alert]:
+        """Get alerts with optional filters"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            query = 'SELECT * FROM alerts WHERE 1=1'
+            params = []
+            
+            if level:
+                query += ' AND level = ?'
+                params.append(level.value)
+            
+            if resolved is not None:
+                query += ' AND resolved = ?'
+                params.append(1 if resolved else 0)
+            
+            if acknowledged is not None:
+                query += ' AND acknowledged = ?'
+                params.append(1 if acknowledged else 0)
+            
+            query += ' ORDER BY created_at DESC LIMIT ?'
+            params.append(limit)
+            
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+            
+            alerts = []
+            for row in rows:
+                alert = Alert(
+                    alert_id=row[0],
+                    level=AlertLevel(row[1]),
+                    title=row[2],
+                    message=row[3],
+                    metric_type=MetricType(row[4]),
+                    metric_name=row[5],
+                    threshold_value=row[6],
+                    current_value=row[7],
+                    created_at=row[8],
+                    acknowledged=bool(row[9]),
+                    resolved=bool(row[10]),
+                    acknowledged_by=row[11],
+                    acknowledged_at=row[12],
+                    resolved_at=row[13]
+                )
+                alerts.append(alert)
+            
+            conn.close()
+            return alerts
+        
+        except Exception as e:
+            logger.error(f"Failed to get alerts: {e}")
+            return []
+    
+    def acknowledge_alert(self, alert_id: str, username: str) -> bool:
+        """Acknowledge an alert"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            acknowledged_at = time.time()
+            
+            cursor.execute('''
+                UPDATE alerts 
+                SET acknowledged = 1, acknowledged_by = ?, acknowledged_at = ?
+                WHERE alert_id = ?
+            ''', (username, acknowledged_at, alert_id))
+            
+            conn.commit()
+            conn.close()
+            
+            # Update in memory if exists
+            if alert_id in self.alerts:
+                alert = self.alerts[alert_id]
+                alert.acknowledged = True
+                alert.acknowledged_by = username
+                alert.acknowledged_at = acknowledged_at
+            
+            logger.info(f"Alert acknowledged: {alert_id} by {username}")
+            return True
+        
+        except Exception as e:
+            logger.error(f"Failed to acknowledge alert {alert_id}: {e}")
+            return False
+    
+    def resolve_alert(self, alert_id: str) -> bool:
+        """Resolve an alert"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            resolved_at = time.time()
+            
+            cursor.execute('''
+                UPDATE alerts 
+                SET resolved = 1, resolved_at = ?
+                WHERE alert_id = ?
+            ''', (resolved_at, alert_id))
+            
+            conn.commit()
+            conn.close()
+            
+            # Update in memory if exists
+            if alert_id in self.alerts:
+                alert = self.alerts[alert_id]
+                alert.resolved = True
+                alert.resolved_at = resolved_at
+            
+            logger.info(f"Alert resolved: {alert_id}")
+            return True
+        
+        except Exception as e:
+            logger.error(f"Failed to resolve alert {alert_id}: {e}")
+            return False
+    
+    def get_monitoring_stats(self) -> Dict[str, Any]:
+        """Get monitoring statistics"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Get metrics count
+            cursor.execute('SELECT COUNT(*) FROM metrics')
+            total_metrics = cursor.fetchone()[0]
+            
+            # Get recent metrics (last hour)
+            recent_cutoff = time.time() - 3600
+            cursor.execute('SELECT COUNT(*) FROM metrics WHERE timestamp > ?', (recent_cutoff,))
+            recent_metrics = cursor.fetchone()[0]
+            
+            # Get alerts count
+            cursor.execute('SELECT COUNT(*) FROM alerts')
+            total_alerts = cursor.fetchone()[0]
+            
+            cursor.execute('SELECT COUNT(*) FROM alerts WHERE resolved = 0')
+            active_alerts = cursor.fetchone()[0]
+            
+            cursor.execute('SELECT COUNT(*) FROM alerts WHERE acknowledged = 0 AND resolved = 0')
+            unacknowledged_alerts = cursor.fetchone()[0]
+            
+            # Get alert counts by level
+            cursor.execute('SELECT level, COUNT(*) FROM alerts WHERE resolved = 0 GROUP BY level')
+            alert_levels = dict(cursor.fetchall())
+            
+            # Get threshold count
+            cursor.execute('SELECT COUNT(*) FROM alert_thresholds WHERE enabled = 1')
+            active_thresholds = cursor.fetchone()[0]
+            
+            conn.close()
+            
+            return {
+                'total_metrics': total_metrics,
+                'recent_metrics': recent_metrics,
+                'total_alerts': total_alerts,
+                'active_alerts': active_alerts,
+                'unacknowledged_alerts': unacknowledged_alerts,
+                'alert_levels': alert_levels,
+                'active_thresholds': active_thresholds,
+                'monitoring_active': self.metrics_collector.running
+            }
+        
+        except Exception as e:
+            logger.error(f"Failed to get monitoring stats: {e}")
+            return {}
 
 
 # Global system monitor instance
