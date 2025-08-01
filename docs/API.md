@@ -13,8 +13,8 @@ Authenticate and receive a JWT token.
 **Request:**
 ```json
 {
-  "username": "serrvarshan-xenoz",
-  "password": "linuxlink123"
+  "username": "your-username",
+  "password": "your-password"
 }
 ```
 **Response:**
@@ -136,7 +136,7 @@ Get a one-tap health check (CPU, RAM, disk, uptime, running services, recent err
 ## Example Usage (cURL)
 ```sh
 # Login
-curl -X POST http://localhost:8000/auth/login -H "Content-Type: application/json" -d '{"username":"serrvarshan-xenoz","password":"linuxlink123"}'
+curl -X POST http://localhost:8000/auth/login -H "Content-Type: application/json" -d '{"username":"your-username","password":"your-password"}'
 
 # Execute command
 curl -X POST http://localhost:8000/exec -H "Authorization: Bearer <JWT>" -H "Content-Type: application/json" -d '{"cmd":"ls -la"}'

@@ -122,3 +122,36 @@ local.properties
 # Logs
 audit.log
 *.log
+
+# Security & Secrets
+.env
+.env.local
+.env.production
+.env.staging
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+secrets/
+config/secrets.json
+**/secrets.json
+**/*secret*
+**/*password*
+**/*token*
+**/api_keys.json
+.linux_link_certs/
+.linux_link_users.json
+.linux_link_devices.json
+.linux_link_logs/
+.linux_link_monitoring.db
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Configuration files with potential secrets
+config.json
+settings.json
+local_settings.py

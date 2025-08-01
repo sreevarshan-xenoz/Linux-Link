@@ -131,7 +131,9 @@ app.add_middleware(
 )
 
 security = HTTPBearer()
-SECRET_KEY = os.getenv("JWT_SECRET", "your-secret-key-change-this")
+SECRET_KEY = os.getenv("JWT_SECRET", None)
+if not SECRET_KEY:
+    raise ValueError("JWT_SECRET environment variable is required. Please set it to a secure random string.")
 executor = SecureCommandExecutor(safe_mode=os.getenv("SAFE_MODE", "true").lower() == "true")
 
 class LoginRequest(BaseModel):

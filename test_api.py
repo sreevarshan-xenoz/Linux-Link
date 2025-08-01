@@ -13,7 +13,7 @@ def test_login():
     print("Testing login...")
     response = requests.post(f"{BASE_URL}/auth/login", json={
         "username": "admin",
-        "password": "linuxlink123"
+        "password": "test_password_123"
     })
     
     if response.status_code == 200:

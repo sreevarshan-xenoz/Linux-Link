@@ -97,7 +97,7 @@ docker-compose up --build
 
 4. **Set Environment Variables**
    ```bash
-   export JWT_SECRET="your-super-secret-jwt-key-change-this-in-production"
+   export JWT_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
    export SAFE_MODE="true"
    ```
 
@@ -118,7 +118,7 @@ docker-compose up --build
    Edit `docker-compose.yml` and change the `JWT_SECRET`:
    ```yaml
    environment:
-     - JWT_SECRET=your-production-secret-key
+     - JWT_SECRET=${JWT_SECRET}
      - SAFE_MODE=true
    ```
 

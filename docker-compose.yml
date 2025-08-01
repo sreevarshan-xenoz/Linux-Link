@@ -5,7 +5,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - JWT_SECRET=your-secret-key-change-this
+      - JWT_SECRET=${JWT_SECRET:-please-set-jwt-secret-in-env-file}
       - SAFE_MODE=true
     volumes:
       - ./backend-api/audit.log:/app/audit.log
