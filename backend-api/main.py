@@ -18,6 +18,7 @@ from automation_engine import get_automation_engine, AutomationError
 from package_manager import get_package_manager, PackageManagerError
 from security import get_user_manager, get_rbac, get_activity_logger, SecurityError, UserRole
 from monitoring import get_system_monitor, MonitoringError, MetricType, AlertLevel
+from error_handler import get_error_handler, api_error_handler, ErrorContext, ErrorCategory, ErrorSeverity
 
 # Enhanced logging configuration
 logging.basicConfig(
@@ -34,6 +35,9 @@ app = FastAPI(
     version="0.1.0",
     description="Secure remote Linux administration API"
 )
+
+# Add global error handler
+app.add_exception_handler(Exception, api_error_handler)
 
 # CORS middleware for mobile app
 app.add_middleware(
@@ -3194,6 +3198,92 @@ def _get_log_level_from_priority(priority: str) -> str:
         '7': 'debug'
     }
     return priority_map.get(priority, 'info')
+
+# Error Management Endpoints
+
+@app.get("/errors/statistics")
+async def get_error_statistics(user=Depends(verify_token)):
+    """Get error statistics and trends."""
+    try:
+        rbac = get_rbac()
+        user_role = UserRole(user.get('role', 'user'))
+        
+        if not rbac.has_permission(user_role, "system_monitoring", "view"):
+            logging.warning(f"ERROR_STATS_FORBIDDEN: user={user['sub']}")
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        error_handler = get_error_handler()
+        stats = error_handler.get_error_statistics()
+        
+        logging.info(f"ERROR_STATS_SUCCESS: user={user['sub']}")
+        return {
+            "success": True,
+            "statistics": stats
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"ERROR_STATS_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get error statistics")
+
+@app.get("/errors/recent")
+async def get_recent_errors(limit: int = 50, user=Depends(verify_token)):
+    """Get recent error entries."""
+    try:
+        rbac = get_rbac()
+        user_role = UserRole(user.get('role', 'user'))
+        
+        if not rbac.has_permission(user_role, "system_monitoring", "view"):
+            logging.warning(f"RECENT_ERRORS_FORBIDDEN: user={user['sub']}")
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        error_handler = get_error_handler()
+        errors = error_handler.get_recent_errors(limit)
+        
+        # Convert to dictionaries
+        errors_dict = [error.to_dict() for error in errors]
+        
+        logging.info(f"RECENT_ERRORS_SUCCESS: user={user['sub']}, count={len(errors_dict)}")
+        return {
+            "success": True,
+            "errors": errors_dict,
+            "count": len(errors_dict),
+            "limit": limit
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"RECENT_ERRORS_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get recent errors")
+
+@app.post("/errors/clear")
+async def clear_error_log(user=Depends(verify_token)):
+    """Clear error log (admin only)."""
+    try:
+        rbac = get_rbac()
+        user_role = UserRole(user.get('role', 'user'))
+        
+        if not rbac.has_permission(user_role, "security", "configure"):
+            logging.warning(f"CLEAR_ERRORS_FORBIDDEN: user={user['sub']}")
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        error_handler = get_error_handler()
+        cleared_count = error_handler.clear_error_log()
+        
+        logging.info(f"CLEAR_ERRORS_SUCCESS: user={user['sub']}, cleared={cleared_count}")
+        return {
+            "success": True,
+            "cleared_count": cleared_count,
+            "message": f"Cleared {cleared_count} errors from log"
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"CLEAR_ERRORS_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to clear error log")
 
 # Authentication Endpoints
 
