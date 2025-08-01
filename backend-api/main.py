@@ -17,6 +17,7 @@ from remote_desktop import get_remote_desktop_controller, RemoteDesktopError
 from automation_engine import get_automation_engine, AutomationError
 from package_manager import get_package_manager, PackageManagerError
 from security import get_user_manager, get_rbac, get_activity_logger, SecurityError, UserRole
+from monitoring import get_system_monitor, MonitoringError, MetricType, AlertLevel
 
 # Enhanced logging configuration
 logging.basicConfig(
@@ -265,6 +266,21 @@ class DeviceUpdateRequest(BaseModel):
     device_name: str = None
     enabled: bool = None
     trusted: bool = None
+
+# Log Management Models
+class LogSearchRequest(BaseModel):
+    log_type: str = "system"  # system, application, security
+    level: str = None  # debug, info, warning, error, critical
+    start_time: float = None
+    end_time: float = None
+    search_query: str = None
+    limit: int = 100
+
+class LogExportRequest(BaseModel):
+    log_type: str = "system"
+    start_time: float = None
+    end_time: float = None
+    format: str = "json"  # json, csv, txt
 
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     try:
@@ -2714,6 +2730,470 @@ async def cleanup_old_logs(days: int = 90, user=Depends(verify_token)):
     except Exception as e:
         logging.error(f"LOG_CLEANUP_ERROR: user={user['sub']}, error='{str(e)}'")
         raise HTTPException(status_code=500, detail="Failed to cleanup old logs")
+
+# Log Management Endpoints
+
+@app.post("/logs/search")
+async def search_logs(request: LogSearchRequest, user=Depends(verify_token)):
+    """Search system logs with filters."""
+    try:
+        rbac = get_rbac()
+        user_role = UserRole(user.get('role', 'user'))
+        
+        if not rbac.has_permission(user_role, "system_monitoring", "view"):
+            logging.warning(f"LOG_SEARCH_FORBIDDEN: user={user['sub']}")
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        # Search system logs using journalctl or log files
+        logs = await _search_system_logs(request)
+        
+        logging.info(f"LOG_SEARCH_SUCCESS: user={user['sub']}, results={len(logs)}")
+        return {
+            "success": True,
+            "logs": logs,
+            "count": len(logs),
+            "filters": {
+                "log_type": request.log_type,
+                "level": request.level,
+                "start_time": request.start_time,
+                "end_time": request.end_time,
+                "search_query": request.search_query,
+                "limit": request.limit
+            }
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"LOG_SEARCH_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to search logs")
+
+@app.get("/logs/recent")
+async def get_recent_logs(
+    log_type: str = "system",
+    level: str = None,
+    limit: int = 50,
+    user=Depends(verify_token)
+):
+    """Get recent log entries."""
+    try:
+        rbac = get_rbac()
+        user_role = UserRole(user.get('role', 'user'))
+        
+        if not rbac.has_permission(user_role, "system_monitoring", "view"):
+            logging.warning(f"RECENT_LOGS_FORBIDDEN: user={user['sub']}")
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        # Get recent logs
+        logs = await _get_recent_logs(log_type, level, limit)
+        
+        logging.info(f"RECENT_LOGS_SUCCESS: user={user['sub']}, count={len(logs)}")
+        return {
+            "success": True,
+            "logs": logs,
+            "count": len(logs),
+            "log_type": log_type,
+            "level": level,
+            "limit": limit
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"RECENT_LOGS_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get recent logs")
+
+@app.get("/logs/stats")
+async def get_log_stats(user=Depends(verify_token)):
+    """Get log statistics."""
+    try:
+        rbac = get_rbac()
+        user_role = UserRole(user.get('role', 'user'))
+        
+        if not rbac.has_permission(user_role, "system_monitoring", "view"):
+            logging.warning(f"LOG_STATS_FORBIDDEN: user={user['sub']}")
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        # Get log statistics
+        stats = await _get_log_stats()
+        
+        logging.info(f"LOG_STATS_SUCCESS: user={user['sub']}")
+        return {
+            "success": True,
+            "stats": stats
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"LOG_STATS_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get log statistics")
+
+@app.post("/logs/export")
+async def export_logs(request: LogExportRequest, user=Depends(verify_token)):
+    """Export logs in specified format."""
+    try:
+        rbac = get_rbac()
+        user_role = UserRole(user.get('role', 'user'))
+        
+        if not rbac.has_permission(user_role, "system_monitoring", "view"):
+            logging.warning(f"LOG_EXPORT_FORBIDDEN: user={user['sub']}")
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        # Export logs
+        exported_data = await _export_logs(request)
+        
+        logging.info(f"LOG_EXPORT_SUCCESS: user={user['sub']}, format={request.format}")
+        return {
+            "success": True,
+            "data": exported_data,
+            "format": request.format,
+            "log_type": request.log_type
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"LOG_EXPORT_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to export logs")
+
+@app.get("/logs/files")
+async def get_log_files(user=Depends(verify_token)):
+    """Get list of available log files."""
+    try:
+        rbac = get_rbac()
+        user_role = UserRole(user.get('role', 'user'))
+        
+        if not rbac.has_permission(user_role, "system_monitoring", "view"):
+            logging.warning(f"LOG_FILES_FORBIDDEN: user={user['sub']}")
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        # Get available log files
+        log_files = await _get_log_files()
+        
+        logging.info(f"LOG_FILES_SUCCESS: user={user['sub']}, count={len(log_files)}")
+        return {
+            "success": True,
+            "log_files": log_files,
+            "count": len(log_files)
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"LOG_FILES_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to get log files")
+
+@app.get("/logs/tail/{log_file}")
+async def tail_log_file(log_file: str, lines: int = 50, user=Depends(verify_token)):
+    """Get tail of a specific log file."""
+    try:
+        rbac = get_rbac()
+        user_role = UserRole(user.get('role', 'user'))
+        
+        if not rbac.has_permission(user_role, "system_monitoring", "view"):
+            logging.warning(f"LOG_TAIL_FORBIDDEN: user={user['sub']}")
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        # Get tail of log file
+        log_content = await _tail_log_file(log_file, lines)
+        
+        logging.info(f"LOG_TAIL_SUCCESS: user={user['sub']}, file={log_file}, lines={lines}")
+        return {
+            "success": True,
+            "log_file": log_file,
+            "lines": lines,
+            "content": log_content
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"LOG_TAIL_ERROR: user={user['sub']}, error='{str(e)}'")
+        raise HTTPException(status_code=500, detail="Failed to tail log file")
+
+# Helper functions for log management
+
+async def _search_system_logs(request: LogSearchRequest) -> List[Dict[str, Any]]:
+    """Search system logs using journalctl or log files"""
+    try:
+        import subprocess
+        import json
+        from datetime import datetime
+        
+        logs = []
+        
+        if request.log_type == "system":
+            # Use journalctl for systemd logs
+            cmd = ["journalctl", "--output=json", "--no-pager"]
+            
+            if request.level:
+                priority_map = {
+                    "debug": "7",
+                    "info": "6", 
+                    "warning": "4",
+                    "error": "3",
+                    "critical": "2"
+                }
+                if request.level in priority_map:
+                    cmd.extend(["-p", priority_map[request.level]])
+            
+            if request.start_time:
+                start_date = datetime.fromtimestamp(request.start_time).strftime('%Y-%m-%d %H:%M:%S')
+                cmd.extend(["--since", start_date])
+            
+            if request.end_time:
+                end_date = datetime.fromtimestamp(request.end_time).strftime('%Y-%m-%d %H:%M:%S')
+                cmd.extend(["--until", end_date])
+            
+            cmd.extend(["-n", str(request.limit)])
+            
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                if result.returncode == 0:
+                    for line in result.stdout.strip().split('\\n'):
+                        if line:
+                            try:
+                                log_entry = json.loads(line)
+                                
+                                # Filter by search query if provided
+                                if request.search_query:
+                                    message = log_entry.get('MESSAGE', '').lower()
+                                    if request.search_query.lower() not in message:
+                                        continue
+                                
+                                logs.append({
+                                    'timestamp': float(log_entry.get('__REALTIME_TIMESTAMP', 0)) / 1000000,
+                                    'timestamp_iso': datetime.fromtimestamp(float(log_entry.get('__REALTIME_TIMESTAMP', 0)) / 1000000).isoformat(),
+                                    'level': _get_log_level_from_priority(log_entry.get('PRIORITY', '6')),
+                                    'service': log_entry.get('_SYSTEMD_UNIT', log_entry.get('SYSLOG_IDENTIFIER', 'unknown')),
+                                    'message': log_entry.get('MESSAGE', ''),
+                                    'hostname': log_entry.get('_HOSTNAME', 'localhost'),
+                                    'pid': log_entry.get('_PID'),
+                                    'uid': log_entry.get('_UID')
+                                })
+                            except json.JSONDecodeError:
+                                continue
+            except subprocess.TimeoutExpired:
+                logger.warning("journalctl command timed out")
+        
+        return logs[:request.limit]
+    
+    except Exception as e:
+        logger.error(f"Failed to search system logs: {e}")
+        return []
+
+async def _get_recent_logs(log_type: str, level: str, limit: int) -> List[Dict[str, Any]]:
+    """Get recent log entries"""
+    try:
+        request = LogSearchRequest(
+            log_type=log_type,
+            level=level,
+            limit=limit
+        )
+        return await _search_system_logs(request)
+    
+    except Exception as e:
+        logger.error(f"Failed to get recent logs: {e}")
+        return []
+
+async def _get_log_stats() -> Dict[str, Any]:
+    """Get log statistics"""
+    try:
+        import subprocess
+        
+        stats = {
+            'total_entries': 0,
+            'entries_by_level': {},
+            'entries_by_service': {},
+            'recent_errors': 0,
+            'disk_usage': 0
+        }
+        
+        # Get total log entries from journalctl
+        try:
+            result = subprocess.run(
+                ["journalctl", "--no-pager", "--output=cat", "|", "wc", "-l"],
+                shell=True, capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0:
+                stats['total_entries'] = int(result.stdout.strip())
+        except Exception:
+            pass
+        
+        # Get recent error count (last 24 hours)
+        try:
+            result = subprocess.run(
+                ["journalctl", "--since", "24 hours ago", "-p", "3", "--no-pager", "--output=cat", "|", "wc", "-l"],
+                shell=True, capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0:
+                stats['recent_errors'] = int(result.stdout.strip())
+        except Exception:
+            pass
+        
+        # Get journal disk usage
+        try:
+            result = subprocess.run(
+                ["journalctl", "--disk-usage"],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0:
+                # Parse disk usage from output
+                output = result.stdout.strip()
+                if "Archived and active journals take up" in output:
+                    # Extract size (e.g., "123.4M")
+                    import re
+                    match = re.search(r'take up ([0-9.]+[KMGT]?) on disk', output)
+                    if match:
+                        stats['disk_usage'] = match.group(1)
+        except Exception:
+            pass
+        
+        return stats
+    
+    except Exception as e:
+        logger.error(f"Failed to get log stats: {e}")
+        return {}
+
+async def _export_logs(request: LogExportRequest) -> str:
+    """Export logs in specified format"""
+    try:
+        search_request = LogSearchRequest(
+            log_type=request.log_type,
+            start_time=request.start_time,
+            end_time=request.end_time,
+            limit=10000
+        )
+        
+        logs = await _search_system_logs(search_request)
+        
+        if request.format.lower() == 'json':
+            import json
+            return json.dumps(logs, indent=2)
+        
+        elif request.format.lower() == 'csv':
+            import csv
+            import io
+            
+            output = io.StringIO()
+            writer = csv.writer(output)
+            
+            # Write header
+            writer.writerow(['timestamp', 'timestamp_iso', 'level', 'service', 'message', 'hostname'])
+            
+            # Write data
+            for log in logs:
+                writer.writerow([
+                    log.get('timestamp', ''),
+                    log.get('timestamp_iso', ''),
+                    log.get('level', ''),
+                    log.get('service', ''),
+                    log.get('message', ''),
+                    log.get('hostname', '')
+                ])
+            
+            return output.getvalue()
+        
+        elif request.format.lower() == 'txt':
+            lines = []
+            for log in logs:
+                line = f"{log.get('timestamp_iso', '')} [{log.get('level', '').upper()}] {log.get('service', '')}: {log.get('message', '')}"
+                lines.append(line)
+            return '\\n'.join(lines)
+        
+        else:
+            raise ValueError(f"Unsupported format: {request.format}")
+    
+    except Exception as e:
+        logger.error(f"Failed to export logs: {e}")
+        raise
+
+async def _get_log_files() -> List[Dict[str, Any]]:
+    """Get list of available log files"""
+    try:
+        import os
+        import stat
+        from datetime import datetime
+        
+        log_directories = ['/var/log', '/var/log/journal']
+        log_files = []
+        
+        for log_dir in log_directories:
+            if os.path.exists(log_dir):
+                try:
+                    for root, dirs, files in os.walk(log_dir):
+                        for file in files:
+                            if file.endswith(('.log', '.log.1', '.log.gz')):
+                                file_path = os.path.join(root, file)
+                                try:
+                                    file_stat = os.stat(file_path)
+                                    log_files.append({
+                                        'name': file,
+                                        'path': file_path,
+                                        'size': file_stat.st_size,
+                                        'modified': file_stat.st_mtime,
+                                        'modified_iso': datetime.fromtimestamp(file_stat.st_mtime).isoformat(),
+                                        'readable': os.access(file_path, os.R_OK)
+                                    })
+                                except (OSError, PermissionError):
+                                    continue
+                except PermissionError:
+                    continue
+        
+        # Sort by modification time (newest first)
+        log_files.sort(key=lambda x: x['modified'], reverse=True)
+        
+        return log_files[:100]  # Limit to 100 files
+    
+    except Exception as e:
+        logger.error(f"Failed to get log files: {e}")
+        return []
+
+async def _tail_log_file(log_file: str, lines: int) -> List[str]:
+    """Get tail of a specific log file"""
+    try:
+        import subprocess
+        import os
+        
+        # Security check - only allow files in /var/log
+        if not log_file.startswith('/var/log/'):
+            raise ValueError("Access denied - invalid log file path")
+        
+        if not os.path.exists(log_file):
+            raise FileNotFoundError(f"Log file not found: {log_file}")
+        
+        if not os.access(log_file, os.R_OK):
+            raise PermissionError(f"Cannot read log file: {log_file}")
+        
+        # Use tail command to get last N lines
+        result = subprocess.run(
+            ["tail", "-n", str(lines), log_file],
+            capture_output=True, text=True, timeout=30
+        )
+        
+        if result.returncode == 0:
+            return result.stdout.strip().split('\\n') if result.stdout.strip() else []
+        else:
+            raise RuntimeError(f"Failed to read log file: {result.stderr}")
+    
+    except Exception as e:
+        logger.error(f"Failed to tail log file {log_file}: {e}")
+        raise
+
+def _get_log_level_from_priority(priority: str) -> str:
+    """Convert syslog priority to log level"""
+    priority_map = {
+        '0': 'emergency',
+        '1': 'alert', 
+        '2': 'critical',
+        '3': 'error',
+        '4': 'warning',
+        '5': 'notice',
+        '6': 'info',
+        '7': 'debug'
+    }
+    return priority_map.get(priority, 'info')
 
 # Authentication Endpoints
 
