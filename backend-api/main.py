@@ -1,13 +1,18 @@
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Union, List, Dict, Any
 import logging
 from datetime import datetime, timedelta
 import os
 import jwt
+from dotenv import load_dotenv
 from security import SecureCommandExecutor
+
+# Load environment variables from .env file
+load_dotenv()
 from monitoring import monitor
 from file_manager import get_file_manager, FileManagerError, PermissionError as FilePermissionError
 from desktop_controller import get_desktop_controller, DesktopControllerError
