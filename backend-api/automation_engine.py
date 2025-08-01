@@ -233,9 +233,9 @@ class MacroEngine:
         
         except Exception as e:
             logger.error(f"Failed to create macro {macro_id}: {e}")
-            return False    
-    de
-f execute_macro(self, macro_id: str, variables: Dict[str, Any] = None) -> str:
+            return False
+    
+    def execute_macro(self, macro_id: str, variables: Dict[str, Any] = None) -> str:
         """Execute a macro and return execution ID"""
         try:
             if macro_id not in self.macros:

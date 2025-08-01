@@ -326,7 +326,6 @@ class NaturalLanguageParser:
                     'confidence': 0.8
                 }
             ]
-            ]
         }
     
     def parse_command(self, text: str) -> Dict[str, Any]:
