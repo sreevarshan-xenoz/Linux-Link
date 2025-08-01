@@ -1040,6 +1040,213 @@ class SystemMonitor:
         except Exception as e:
             logger.error(f"Failed to get monitoring stats: {e}")
             return {}
+    
+    def cleanup_old_data(self, days: int = 30) -> Dict[str, int]:
+        """Clean up old metrics and alerts data"""
+        try:
+            cutoff_time = time.time() - (days * 86400)
+            
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Clean up old metrics
+            cursor.execute('SELECT COUNT(*) FROM metrics WHERE timestamp < ?', (cutoff_time,))
+            old_metrics_count = cursor.fetchone()[0]
+            
+            cursor.execute('DELETE FROM metrics WHERE timestamp < ?', (cutoff_time,))
+            
+            # Clean up old resolved alerts
+            cursor.execute('SELECT COUNT(*) FROM alerts WHERE resolved = 1 AND created_at < ?', (cutoff_time,))
+            old_alerts_count = cursor.fetchone()[0]
+            
+            cursor.execute('DELETE FROM alerts WHERE resolved = 1 AND created_at < ?', (cutoff_time,))
+            
+            conn.commit()
+            conn.close()
+            
+            logger.info(f"Cleaned up {old_metrics_count} old metrics and {old_alerts_count} old alerts")
+            
+            return {
+                'metrics_removed': old_metrics_count,
+                'alerts_removed': old_alerts_count,
+                'cutoff_days': days
+            }
+        
+        except Exception as e:
+            logger.error(f"Failed to cleanup old data: {e}")
+            return {}
+    
+    def aggregate_metrics(self, metric_type: MetricType, metric_name: str,
+                         start_time: float, end_time: float, 
+                         interval_minutes: int = 60) -> List[Dict[str, Any]]:
+        """Aggregate metrics over time intervals"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Calculate interval in seconds
+            interval_seconds = interval_minutes * 60
+            
+            # Query for aggregated data
+            cursor.execute('''
+                SELECT 
+                    CAST(timestamp / ? AS INTEGER) * ? as time_bucket,
+                    AVG(value) as avg_value,
+                    MIN(value) as min_value,
+                    MAX(value) as max_value,
+                    COUNT(*) as count
+                FROM metrics 
+                WHERE metric_type = ? AND name = ? AND timestamp >= ? AND timestamp <= ?
+                GROUP BY time_bucket
+                ORDER BY time_bucket
+            ''', (interval_seconds, interval_seconds, metric_type.value, metric_name, start_time, end_time))
+            
+            rows = cursor.fetchall()
+            conn.close()
+            
+            aggregated_data = []
+            for row in rows:
+                aggregated_data.append({
+                    'timestamp': row[0],
+                    'timestamp_iso': datetime.fromtimestamp(row[0]).isoformat(),
+                    'avg_value': row[1],
+                    'min_value': row[2],
+                    'max_value': row[3],
+                    'count': row[4],
+                    'interval_minutes': interval_minutes
+                })
+            
+            return aggregated_data
+        
+        except Exception as e:
+            logger.error(f"Failed to aggregate metrics: {e}")
+            return []
+    
+    def get_metric_summary(self, metric_type: MetricType, metric_name: str,
+                          hours: int = 24) -> Dict[str, Any]:
+        """Get summary statistics for a metric over time period"""
+        try:
+            end_time = time.time()
+            start_time = end_time - (hours * 3600)
+            
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT 
+                    COUNT(*) as count,
+                    AVG(value) as avg_value,
+                    MIN(value) as min_value,
+                    MAX(value) as max_value,
+                    MIN(timestamp) as first_timestamp,
+                    MAX(timestamp) as last_timestamp
+                FROM metrics 
+                WHERE metric_type = ? AND name = ? AND timestamp >= ? AND timestamp <= ?
+            ''', (metric_type.value, metric_name, start_time, end_time))
+            
+            row = cursor.fetchone()
+            conn.close()
+            
+            if row and row[0] > 0:
+                return {
+                    'metric_type': metric_type.value,
+                    'metric_name': metric_name,
+                    'period_hours': hours,
+                    'data_points': row[0],
+                    'avg_value': row[1],
+                    'min_value': row[2],
+                    'max_value': row[3],
+                    'first_timestamp': row[4],
+                    'last_timestamp': row[5],
+                    'first_timestamp_iso': datetime.fromtimestamp(row[4]).isoformat() if row[4] else None,
+                    'last_timestamp_iso': datetime.fromtimestamp(row[5]).isoformat() if row[5] else None
+                }
+            else:
+                return {
+                    'metric_type': metric_type.value,
+                    'metric_name': metric_name,
+                    'period_hours': hours,
+                    'data_points': 0,
+                    'message': 'No data available for the specified period'
+                }
+        
+        except Exception as e:
+            logger.error(f"Failed to get metric summary: {e}")
+            return {}
+    
+    def export_metrics(self, metric_type: MetricType = None, 
+                      start_time: float = None, end_time: float = None,
+                      format: str = 'json') -> str:
+        """Export metrics data in specified format"""
+        try:
+            metrics = self.get_metrics(
+                metric_type=metric_type,
+                start_time=start_time,
+                end_time=end_time,
+                limit=10000
+            )
+            
+            if format.lower() == 'json':
+                return json.dumps([metric.to_dict() for metric in metrics], indent=2)
+            
+            elif format.lower() == 'csv':
+                import csv
+                import io
+                
+                output = io.StringIO()
+                writer = csv.writer(output)
+                
+                # Write header
+                writer.writerow(['timestamp', 'timestamp_iso', 'metric_type', 'name', 'value', 'unit', 'hostname'])
+                
+                # Write data
+                for metric in metrics:
+                    writer.writerow([
+                        metric.timestamp,
+                        datetime.fromtimestamp(metric.timestamp).isoformat(),
+                        metric.metric_type.value,
+                        metric.name,
+                        metric.value,
+                        metric.unit,
+                        metric.hostname
+                    ])
+                
+                return output.getvalue()
+            
+            else:
+                raise MonitoringError(f"Unsupported export format: {format}", "UNSUPPORTED_FORMAT")
+        
+        except Exception as e:
+            logger.error(f"Failed to export metrics: {e}")
+            raise MonitoringError(f"Export failed: {str(e)}", "EXPORT_FAILED")
+    
+    def create_data_retention_policy(self, metric_type: MetricType = None,
+                                   retention_days: int = 30) -> bool:
+        """Create or update data retention policy"""
+        try:
+            # This would typically be stored in a configuration table
+            # For now, we'll implement it as a scheduled cleanup
+            
+            def cleanup_job():
+                while True:
+                    try:
+                        self.cleanup_old_data(retention_days)
+                        time.sleep(86400)  # Run daily
+                    except Exception as e:
+                        logger.error(f"Retention cleanup failed: {e}")
+                        time.sleep(3600)  # Retry in 1 hour
+            
+            # Start cleanup thread
+            cleanup_thread = threading.Thread(target=cleanup_job)
+            cleanup_thread.daemon = True
+            cleanup_thread.start()
+            
+            logger.info(f"Data retention policy created: {retention_days} days")
+            return True
+        
+        except Exception as e:
+            logger.error(f"Failed to create retention policy: {e}")
+            return False
 
 
 # Global system monitor instance
