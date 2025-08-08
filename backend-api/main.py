@@ -3541,7 +3541,9 @@ async def health_check():
         try:
             cpu_usage = psutil.cpu_percent(interval=1)
             memory = psutil.virtual_memory()
-            disk = psutil.disk_usage('/')
+            # Use appropriate disk path for the platform
+            disk_path = 'C:\\' if os.name == 'nt' else '/'
+            disk = psutil.disk_usage(disk_path)
             
             health_status["checks"]["system"] = {
                 "cpu_usage": cpu_usage,
@@ -3593,6 +3595,21 @@ async def health_check():
             },
             status_code=503
         )
+
+# Root endpoint
+@app.get("/")
+async def root():
+    """Root endpoint - API status"""
+    return {
+        "message": "Linux-Link API is running",
+        "version": "1.0.0",
+        "status": "healthy",
+        "endpoints": {
+            "health": "/system/health",
+            "docs": "/docs",
+            "auth": "/auth/login"
+        }
+    }
 
 # Authentication Endpoints
 
