@@ -1064,6 +1064,7 @@ async fn handle_discovery_event(event: DiscoveryEvent) {
 - [x] Basic connection established (handshake)
 
 Current validation: local end-to-end handshake verified with `start` + `connect 127.0.0.1 --port 1716` + `stop`.
+Two-device discovery validation command: `linux-link watch --interval 10` (run on one node while toggling peer availability on another tailnet device).
 
 ---
 

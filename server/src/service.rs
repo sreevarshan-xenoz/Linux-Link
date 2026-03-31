@@ -129,6 +129,55 @@ pub async fn list_peers() -> Result<()> {
     Ok(())
 }
 
+pub async fn watch_peers(interval_secs: u64) -> Result<()> {
+    let tailscale = TailscaleClient::new().context("failed to initialize Tailscale client")?;
+    tailscale
+        .wait_for_ready(Duration::from_secs(30))
+        .await
+        .context("tailscale is not ready")?;
+
+    let discovery = DiscoveryService::new(tailscale);
+    let mut rx = discovery.subscribe();
+    let poll = Duration::from_secs(interval_secs.max(1));
+
+    tokio::spawn(async move {
+        discovery.run(poll).await;
+    });
+
+    println!(
+        "Watching peers (interval={}s). Press Ctrl+C to stop.",
+        poll.as_secs()
+    );
+
+    loop {
+        tokio::select! {
+            event = rx.recv() => {
+                match event {
+                    Ok(DiscoveryEvent::PeerDiscovered(peer)) => {
+                        let ip = peer.ips.first().map_or("n/a", |v| v.as_str());
+                        println!("ONLINE  {}  {}", peer.name, ip);
+                    }
+                    Ok(DiscoveryEvent::PeerOffline(name)) => {
+                        println!("OFFLINE {}", name);
+                    }
+                    Ok(DiscoveryEvent::ServiceReady) => {
+                        println!("READY");
+                    }
+                    Err(error) => {
+                        tracing::warn!("Discovery channel error: {}", error);
+                    }
+                }
+            }
+            _ = tokio::signal::ctrl_c() => {
+                println!("Stopped watching peers");
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 pub async fn connect_peer(peer: String, port: u16) -> Result<()> {
     let tailscale = TailscaleClient::new().context("failed to initialize Tailscale client")?;
     let address = resolve_peer_address(&tailscale, &peer).await?;

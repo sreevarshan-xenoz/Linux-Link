@@ -21,6 +21,12 @@ pub enum Commands {
     Status,
     /// List peers currently visible on the tailnet
     List,
+    /// Continuously watch peer discovery events
+    Watch {
+        /// Poll interval in seconds
+        #[arg(short, long, default_value_t = 10)]
+        interval: u64,
+    },
     /// Connect to a peer and perform a basic control-channel handshake
     Connect {
         /// Peer hostname, MagicDNS name, or Tailscale IP
