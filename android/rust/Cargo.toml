@@ -1,0 +1,12 @@
+[package]
+name = "linux-link-android"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+anyhow.workspace = true
+linux-link-core = { path = "../../core" }
+serde.workspace = true

@@ -1,0 +1,18 @@
+[package]
+name = "linux-link-server"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "linux-link"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+linux-link-core = { path = "../core" }
+serde.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+dirs = "5"
+toml = "0.8"

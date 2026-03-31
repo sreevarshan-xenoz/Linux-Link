@@ -661,11 +661,11 @@ jobs:
 
 **Deliverables Checklist - Phase 0:**
 
-- [ ] Cargo workspace with core, server, android crates
+- [x] Cargo workspace with core, server, android crates
 - [ ] Flutter project with FRB integration
-- [ ] Basic CI/CD pipeline
-- [ ] Development environment documented
-- [ ] `cargo build` succeeds for all targets
+- [x] Basic CI/CD pipeline
+- [x] Development environment documented
+- [x] `cargo build` succeeds for all targets
 - [ ] Flutter app runs on Android emulator
 
 ---
