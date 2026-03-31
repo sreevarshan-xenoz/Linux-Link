@@ -4,9 +4,15 @@
 
 **Target Platforms:** Arch Linux + Hyprland (server), Android (client)
 
-**Project Status:** Planning Phase
+**Project Status:** Active Development (Phase 2 in progress)
 
 **Estimated Timeline:** 4-6 months for MVP
+
+**Execution Snapshot (March 31, 2026):**
+- Phase 0 completed (workspace scaffold, CI, docs, build/test baseline)
+- Phase 1 largely completed (CLI + handshake + discovery watch); two-device discovery validation still pending
+- Phase 2 kicked off with compile-ready KDE protocol scaffolding and server plugin metadata stubs
+- Quality gates currently pass (`cargo fmt`, `cargo check`, `cargo clippy -D warnings`, `cargo test`)
 
 ---
 
@@ -1079,6 +1085,10 @@ Phase 2 kickoff status (implemented):
 - Server plugin metadata stubs added under `server/src/plugins/`
 - CLI inspection command added: `linux-link capabilities`
 
+Implementation note:
+- Current repository implementation uses an internal KDE Connect-compatible scaffold (`NetworkPacket`, `PluginRegistry`, `TrustStore`) as a stepping stone.
+- Direct integration via `kdeconnect-proto` remains planned work.
+
 ```rust
 // core/src/protocol/kdeconnect.rs
 use kdeconnect_proto::{
@@ -1616,11 +1626,14 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
 
 **Deliverables Checklist - Phase 2:**
 
+- [x] Core KDE protocol scaffolding (`NetworkPacket`, identity, plugin registry, trust store)
+- [x] Server plugin metadata stubs (`battery`, `clipboard`, `notification`, `share`, `input`)
+- [x] CLI capabilities inspection (`linux-link capabilities`)
 - [ ] KDE Connect protocol integration via `kdeconnect-proto`
-- [ ] Battery plugin (reports desktop power status)
-- [ ] Clipboard plugin (bidirectional sync)
-- [ ] Notification plugin (DBus integration)
-- [ ] Share plugin (file transfer with progress)
+- [ ] Battery plugin runtime behavior (packet handling)
+- [ ] Clipboard plugin runtime behavior (bidirectional sync)
+- [ ] Notification plugin runtime behavior (DBus forwarding)
+- [ ] Share plugin runtime behavior (file transfer with progress)
 - [ ] Android connection screen with peer list
 - [ ] File transfer UI in Flutter
 - [ ] Clipboard sync working bidirectionally
