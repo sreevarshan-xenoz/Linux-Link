@@ -8,6 +8,8 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod cli;
 mod config;
+mod kde;
+mod plugins;
 mod service;
 
 #[tokio::main]
@@ -28,6 +30,7 @@ async fn main() -> Result<()> {
         cli::Commands::Status => service::print_status().await,
         cli::Commands::List => service::list_peers().await,
         cli::Commands::Watch { interval } => service::watch_peers(interval).await,
+        cli::Commands::Capabilities => service::print_capabilities().await,
         cli::Commands::Connect { peer, port } => service::connect_peer(peer, port).await,
         cli::Commands::Pair { pin } => service::pair(pin).await,
     }

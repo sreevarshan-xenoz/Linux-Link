@@ -1074,6 +1074,11 @@ Two-device discovery validation command: `linux-link watch --interval 10` (run o
 
 #### Step 2.1: KDE Connect Protocol Integration
 
+Phase 2 kickoff status (implemented):
+- Core packet model and trust store scaffold added in `core/src/protocol/kdeconnect.rs`
+- Server plugin metadata stubs added under `server/src/plugins/`
+- CLI inspection command added: `linux-link capabilities`
+
 ```rust
 // core/src/protocol/kdeconnect.rs
 use kdeconnect_proto::{

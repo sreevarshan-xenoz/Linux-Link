@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::kde;
 use anyhow::{Context, Result, bail};
 use linux_link_core::protocol::connection::ConnectionManager;
 use linux_link_core::tailscale::{DiscoveryEvent, DiscoveryService, TailscaleClient};
@@ -24,6 +25,19 @@ pub async fn run(config: Config) -> Result<()> {
 
     let self_ip = tailscale.get_self_ip().await?;
     tracing::info!("Tailscale online at {}", self_ip);
+
+    let kde_service = kde::build_default_service().context("failed to initialize KDE service")?;
+    let plugin_count = kde_service.registry.plugin_names().len();
+    let trusted_count = kde_service
+        .trust_store
+        .as_ref()
+        .map(|s| s.trusted_devices().len())
+        .unwrap_or(0);
+    tracing::info!(
+        "KDE service initialized (plugins={}, trusted_devices={})",
+        plugin_count,
+        trusted_count
+    );
 
     let discovery = DiscoveryService::new(tailscale.clone());
     let mut discovery_rx = discovery.subscribe();
@@ -208,6 +222,39 @@ pub async fn connect_peer(peer: String, port: u16) -> Result<()> {
     Ok(())
 }
 
+pub async fn print_capabilities() -> Result<()> {
+    let kde_service = kde::build_default_service().context("failed to initialize KDE service")?;
+    let plugin_names = kde_service.registry.plugin_names();
+    let (incoming, outgoing) = kde_service.registry.capability_sets();
+    let trusted = kde_service
+        .trust_store
+        .as_ref()
+        .map(|s| s.trusted_devices())
+        .unwrap_or_default();
+
+    println!(
+        "Plugins ({}): {}",
+        plugin_names.len(),
+        plugin_names.join(", ")
+    );
+    println!("Incoming capabilities ({}):", incoming.len());
+    for cap in incoming {
+        println!("  - {}", cap);
+    }
+
+    println!("Outgoing capabilities ({}):", outgoing.len());
+    for cap in outgoing {
+        println!("  - {}", cap);
+    }
+
+    println!("Trusted devices ({}):", trusted.len());
+    for device in trusted {
+        println!("  - {}", device);
+    }
+
+    Ok(())
+}
+
 pub async fn pair(pin: Option<String>) -> Result<()> {
     let pin_value = match pin {
         Some(value) => {
@@ -283,17 +330,16 @@ async fn resolve_peer_address(client: &TailscaleClient, peer_hint: &str) -> Resu
     let peers = client.get_peers().await?;
 
     for peer in peers {
-        if peer.name == peer_hint
+        if (peer.name == peer_hint
             || peer.dns_name == peer_hint
             || peer
                 .dns_name
                 .trim_end_matches('.')
                 .eq_ignore_ascii_case(peer_hint)
-            || peer.ips.iter().any(|ip| ip == peer_hint)
+            || peer.ips.iter().any(|ip| ip == peer_hint))
+            && let Some(ip) = peer.ips.first()
         {
-            if let Some(ip) = peer.ips.first() {
-                return Ok(ip.clone());
-            }
+            return Ok(ip.clone());
         }
     }
 

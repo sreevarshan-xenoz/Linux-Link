@@ -27,6 +27,8 @@ pub enum Commands {
         #[arg(short, long, default_value_t = 10)]
         interval: u64,
     },
+    /// Show configured KDE Connect capability sets
+    Capabilities,
     /// Connect to a peer and perform a basic control-channel handshake
     Connect {
         /// Peer hostname, MagicDNS name, or Tailscale IP
