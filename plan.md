@@ -1055,13 +1055,15 @@ async fn handle_discovery_event(event: DiscoveryEvent) {
 
 **Deliverables Checklist - Phase 1:**
 
-- [ ] TailscaleClient with status, peer discovery
-- [ ] DiscoveryService with event broadcasting
-- [ ] ConnectionManager for TCP connections
+- [x] TailscaleClient with status, peer discovery
+- [x] DiscoveryService with event broadcasting
+- [x] ConnectionManager for TCP connections
 - [ ] CLI with start/stop/status/list/connect/pair commands
-- [ ] Server listens for incoming connections
+- [x] Server listens for incoming connections
 - [ ] Two devices can discover each other over Tailscale
 - [ ] Basic connection established (handshake)
+
+Current CLI coverage: `start`, `status`, and `list` are implemented; `stop`, `connect`, and `pair` are pending.
 
 ---
 
