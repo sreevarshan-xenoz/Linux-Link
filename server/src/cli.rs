@@ -15,8 +15,23 @@ pub struct Cli {
 pub enum Commands {
     /// Start the server daemon
     Start,
+    /// Stop a running server process started with `linux-link start`
+    Stop,
     /// Print local tailscale status
     Status,
     /// List peers currently visible on the tailnet
     List,
+    /// Connect to a peer and perform a basic control-channel handshake
+    Connect {
+        /// Peer hostname, MagicDNS name, or Tailscale IP
+        peer: String,
+        /// Control port to connect to
+        #[arg(short, long, default_value_t = linux_link_core::DEFAULT_CONTROL_PORT)]
+        port: u16,
+    },
+    /// Set or generate a temporary pairing PIN
+    Pair {
+        /// Optional 6-digit PIN
+        pin: Option<String>,
+    },
 }

@@ -24,7 +24,10 @@ async fn main() -> Result<()> {
 
     match cli.command.unwrap_or(cli::Commands::Start) {
         cli::Commands::Start => service::run(config).await,
+        cli::Commands::Stop => service::stop().await,
         cli::Commands::Status => service::print_status().await,
         cli::Commands::List => service::list_peers().await,
+        cli::Commands::Connect { peer, port } => service::connect_peer(peer, port).await,
+        cli::Commands::Pair { pin } => service::pair(pin).await,
     }
 }

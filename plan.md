@@ -1058,12 +1058,12 @@ async fn handle_discovery_event(event: DiscoveryEvent) {
 - [x] TailscaleClient with status, peer discovery
 - [x] DiscoveryService with event broadcasting
 - [x] ConnectionManager for TCP connections
-- [ ] CLI with start/stop/status/list/connect/pair commands
+- [x] CLI with start/stop/status/list/connect/pair commands
 - [x] Server listens for incoming connections
 - [ ] Two devices can discover each other over Tailscale
-- [ ] Basic connection established (handshake)
+- [x] Basic connection established (handshake)
 
-Current CLI coverage: `start`, `status`, and `list` are implemented; `stop`, `connect`, and `pair` are pending.
+Current validation: local end-to-end handshake verified with `start` + `connect 127.0.0.1 --port 1716` + `stop`.
 
 ---
 
