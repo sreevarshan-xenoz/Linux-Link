@@ -2,11 +2,14 @@ use crate::config::Config;
 use crate::kde;
 use anyhow::{Context, Result, bail};
 use linux_link_core::protocol::connection::ConnectionManager;
+use linux_link_core::protocol::kdeconnect::{NetworkPacket, PluginRegistry, TcpDeviceSender};
 use linux_link_core::tailscale::{DiscoveryEvent, DiscoveryService, TailscaleClient};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
+use tokio::sync::Mutex;
 use tokio::time::timeout;
 
 const HANDSHAKE_HELLO: &str = "LINUX_LINK_HELLO 1";
@@ -59,8 +62,13 @@ pub async fn run(config: Config) -> Result<()> {
                 match accepted {
                     Ok((stream, peer_addr)) => {
                         tracing::info!("Incoming connection from {}", peer_addr);
+                        let identity_packet = kde_service.identity_packet().clone();
+                        let registry: Arc<PluginRegistry> =
+                            Arc::new(kde_service.registry.clone_for_dispatch());
                         tokio::spawn(async move {
-                            if let Err(error) = handle_connection(stream).await {
+                            if let Err(error) =
+                                handle_connection_with_kde(stream, identity_packet, &registry).await
+                            {
                                 tracing::warn!("connection handler failed: {}", error);
                             }
                         });
@@ -222,6 +230,98 @@ pub async fn connect_peer(peer: String, port: u16) -> Result<()> {
     Ok(())
 }
 
+/// Handle a TCP connection with KDE Connect protocol support.
+///
+/// After the initial handshake, this sends our identity packet and then
+/// enters a loop reading JSON packets and dispatching them to plugins.
+async fn handle_connection_with_kde(
+    stream: TcpStream,
+    identity_packet: Option<NetworkPacket>,
+    registry: &Arc<PluginRegistry>,
+) -> Result<()> {
+    use tokio::io::AsyncWriteExt;
+
+    let (reader_half, writer_half) = stream.into_split();
+    let mut reader = BufReader::new(reader_half);
+
+    // Wrap writer in Arc<Mutex> so both handshake and TcpDeviceSender can use it
+    let writer = Arc::new(Mutex::new(writer_half));
+
+    // Step 1: LINUX_LINK_HELLO handshake
+    let mut line = String::new();
+    let bytes = timeout(Duration::from_secs(8), reader.read_line(&mut line))
+        .await
+        .context("connection handshake timeout")?
+        .context("failed to read incoming handshake")?;
+
+    if bytes == 0 {
+        bail!("connection closed before handshake")
+    }
+
+    if line.trim() != HANDSHAKE_HELLO {
+        let mut w = writer.lock().await;
+        w.write_all(b"LINUX_LINK_ERR 1\n")
+            .await
+            .context("failed writing error handshake")?;
+        bail!("invalid handshake preface")
+    }
+
+    // Step 2: Send identity packet
+    if let Some(ref identity) = identity_packet {
+        let mut w = writer.lock().await;
+        let wire_bytes = identity.to_wire()?;
+        w.write_all(&wire_bytes).await?;
+        w.flush().await?;
+        drop(w);
+        tracing::debug!("Sent identity packet to peer");
+    }
+
+    // Step 3: Enter KDE Connect packet loop
+    let sender = TcpDeviceSender::from_arc(writer);
+    let sender_ref = &sender;
+
+    loop {
+        let mut line = String::new();
+        let read_result = timeout(Duration::from_secs(30), reader.read_line(&mut line)).await;
+
+        match read_result {
+            Ok(Ok(0)) => {
+                // Connection closed
+                tracing::debug!("Peer disconnected");
+                break;
+            }
+            Ok(Ok(_)) => {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+
+                match NetworkPacket::from_wire(trimmed) {
+                    Ok(packet) => {
+                        tracing::debug!("Received packet: type={}", packet.packet_type);
+                        if let Err(e) = registry.dispatch_packet(&packet, sender_ref).await {
+                            tracing::warn!("Packet dispatch failed: {}", e);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Invalid packet: {}", e);
+                    }
+                }
+            }
+            Ok(Err(e)) => {
+                tracing::warn!("Read error: {}", e);
+                break;
+            }
+            Err(_) => {
+                // Timeout - peer is idle
+                tracing::debug!("Peer idle - connection still alive");
+            }
+        }
+    }
+
+    Ok(())
+}
+
 pub async fn print_capabilities() -> Result<()> {
     let kde_service = kde::build_default_service().context("failed to initialize KDE service")?;
     let plugin_names = kde_service.registry.plugin_names();
@@ -291,35 +391,6 @@ fn handle_discovery_event(event: DiscoveryEvent) {
             tracing::info!("Discovery service ready");
         }
     }
-}
-
-async fn handle_connection(stream: TcpStream) -> Result<()> {
-    let (reader_half, mut writer_half) = stream.into_split();
-    let mut reader = BufReader::new(reader_half);
-    let mut line = String::new();
-
-    let bytes = timeout(Duration::from_secs(8), reader.read_line(&mut line))
-        .await
-        .context("connection handshake timeout")?
-        .context("failed to read incoming handshake")?;
-
-    if bytes == 0 {
-        bail!("connection closed before handshake")
-    }
-
-    if line.trim() != HANDSHAKE_HELLO {
-        writer_half
-            .write_all(b"LINUX_LINK_ERR 1\n")
-            .await
-            .context("failed writing error handshake")?;
-        bail!("invalid handshake preface")
-    }
-
-    writer_half
-        .write_all(format!("{}\n", HANDSHAKE_OK).as_bytes())
-        .await
-        .context("failed writing handshake ack")?;
-    Ok(())
 }
 
 async fn resolve_peer_address(client: &TailscaleClient, peer_hint: &str) -> Result<String> {

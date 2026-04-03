@@ -4,9 +4,11 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tokio::sync::Mutex;
 
 use crate::PROTOCOL_VERSION;
 
+/// A KDE Connect network packet (JSON, newline-terminated on wire).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkPacket {
     #[serde(rename = "type")]
@@ -32,6 +34,27 @@ impl NetworkPacket {
     pub fn with_body(mut self, body: Value) -> Self {
         self.body = body;
         self
+    }
+
+    pub fn with_payload_size(mut self, size: u64) -> Self {
+        self.payload_size = Some(size);
+        self
+    }
+
+    /// Serialize to JSON bytes with a trailing newline (wire format).
+    pub fn to_wire(&self) -> Result<Vec<u8>> {
+        let mut bytes = serde_json::to_vec(self)?;
+        bytes.push(b'\n');
+        Ok(bytes)
+    }
+
+    /// Parse from a single wire-format line (trailing newline optional).
+    pub fn from_wire(line: &str) -> Result<Self> {
+        let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
+        if trimmed.is_empty() {
+            anyhow::bail!("empty packet line");
+        }
+        serde_json::from_str(trimmed).context("failed to parse NetworkPacket")
     }
 }
 
@@ -69,10 +92,60 @@ impl DeviceIdentity {
     }
 }
 
+/// Trait for KDE Connect plugins.
+///
+/// Plugins declare capability strings and handle incoming packets asynchronously.
+/// To send packets back to the peer, plugins use the `DeviceSender` passed at runtime.
+#[async_trait::async_trait]
 pub trait Plugin: Send + Sync {
     fn name(&self) -> &'static str;
     fn incoming_capabilities(&self) -> &'static [&'static str];
     fn outgoing_capabilities(&self) -> &'static [&'static str];
+
+    /// Handle an incoming packet. `sender` can be used to reply to the peer.
+    async fn handle_packet(&self, packet: &NetworkPacket, sender: &dyn DeviceSender) -> Result<()>;
+}
+
+/// Abstraction for sending packets back to the connected peer.
+/// Implemented per-connection so plugins can reply without owning the socket.
+#[async_trait::async_trait]
+pub trait DeviceSender: Send + Sync {
+    async fn send_packet(&self, packet: &NetworkPacket) -> Result<()>;
+}
+
+/// Concrete sender that wraps the per-connection TCP write half.
+pub struct TcpDeviceSender<W> {
+    writer: Arc<Mutex<W>>,
+}
+
+impl<W> TcpDeviceSender<W>
+where
+    W: tokio::io::AsyncWrite + Unpin + Send,
+{
+    pub fn new(writer: W) -> Self {
+        Self {
+            writer: Arc::new(Mutex::new(writer)),
+        }
+    }
+
+    pub fn from_arc(writer: Arc<Mutex<W>>) -> Self {
+        Self { writer }
+    }
+}
+
+#[async_trait::async_trait]
+impl<W> DeviceSender for TcpDeviceSender<W>
+where
+    W: tokio::io::AsyncWrite + Unpin + Send,
+{
+    async fn send_packet(&self, packet: &NetworkPacket) -> Result<()> {
+        use tokio::io::AsyncWriteExt;
+        let bytes = packet.to_wire()?;
+        let mut guard = self.writer.lock().await;
+        guard.write_all(&bytes).await?;
+        guard.flush().await?;
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -81,9 +154,23 @@ pub struct PluginRegistry {
     incoming_map: HashMap<String, Vec<String>>,
 }
 
+impl Clone for PluginRegistry {
+    fn clone(&self) -> Self {
+        Self {
+            plugins: self.plugins.clone(),
+            incoming_map: self.incoming_map.clone(),
+        }
+    }
+}
+
 impl PluginRegistry {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Clone the registry for sharing across tasks via Arc.
+    pub fn clone_for_dispatch(&self) -> Self {
+        self.clone()
     }
 
     pub fn register<P>(&mut self, plugin: P)
@@ -141,6 +228,31 @@ impl PluginRegistry {
         outgoing.dedup();
 
         (incoming, outgoing)
+    }
+
+    /// Dispatch an incoming packet to all registered plugins that handle this packet type.
+    /// Errors from individual plugins are logged but don't stop dispatch to others.
+    pub async fn dispatch_packet(
+        &self,
+        packet: &NetworkPacket,
+        sender: &dyn DeviceSender,
+    ) -> Result<()> {
+        let plugin_names = self.plugins_for_packet(&packet.packet_type);
+
+        if plugin_names.is_empty() {
+            tracing::debug!("no plugin handles packet type: {}", packet.packet_type);
+            return Ok(());
+        }
+
+        for name in &plugin_names {
+            if let Some(plugin) = self.plugins.get(name) {
+                if let Err(e) = plugin.handle_packet(packet, sender).await {
+                    tracing::warn!("plugin '{}' failed to handle packet: {}", name, e);
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -256,6 +368,7 @@ mod tests {
 
     struct ClipboardPlugin;
 
+    #[async_trait::async_trait]
     impl Plugin for ClipboardPlugin {
         fn name(&self) -> &'static str {
             "clipboard"
@@ -267,6 +380,14 @@ mod tests {
 
         fn outgoing_capabilities(&self) -> &'static [&'static str] {
             &["kdeconnect.clipboard"]
+        }
+
+        async fn handle_packet(
+            &self,
+            _packet: &NetworkPacket,
+            _sender: &dyn DeviceSender,
+        ) -> Result<()> {
+            Ok(())
         }
     }
 

@@ -8,11 +8,11 @@
 
 **Estimated Timeline:** 4-6 months for MVP
 
-**Execution Snapshot (March 31, 2026):**
+**Execution Snapshot (April 3, 2026):**
 - Phase 0 completed (workspace scaffold, CI, docs, build/test baseline)
-- Phase 1 largely completed (CLI + handshake + discovery watch); two-device discovery validation still pending
-- Phase 2 kicked off with compile-ready KDE protocol scaffolding and server plugin metadata stubs
-- Quality gates currently pass (`cargo fmt`, `cargo check`, `cargo clippy -D warnings`, `cargo test`)
+- Phase 1 completed (CLI + handshake + discovery watch + two-device discovery)
+- Phase 2 largely completed (KDE protocol runtime, all 5 plugins with real behavior, KDE Connect TCP packet loop)
+- Quality gates pass (`cargo fmt`, `cargo check`, `cargo clippy -D warnings`, `cargo test`)
 
 ---
 
@@ -1629,15 +1629,18 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
 - [x] Core KDE protocol scaffolding (`NetworkPacket`, identity, plugin registry, trust store)
 - [x] Server plugin metadata stubs (`battery`, `clipboard`, `notification`, `share`, `input`)
 - [x] CLI capabilities inspection (`linux-link capabilities`)
-- [ ] KDE Connect protocol integration via `kdeconnect-proto`
-- [ ] Battery plugin runtime behavior (packet handling)
-- [ ] Clipboard plugin runtime behavior (bidirectional sync)
-- [ ] Notification plugin runtime behavior (DBus forwarding)
-- [ ] Share plugin runtime behavior (file transfer with progress)
-- [ ] Android connection screen with peer list
+- [x] KDE Connect protocol runtime (packet parsing, wire format, dispatch loop)
+- [x] `Plugin` trait with async `handle_packet` + `DeviceSender` abstraction
+- [x] `TcpDeviceSender` for per-connection packet replies
+- [x] `PluginRegistry::dispatch_packet()` routing packets to registered plugins
+- [x] Battery plugin runtime (UPower via `gdbus`, fallback to 100%)
+- [x] Clipboard plugin runtime (bidirectional sync via `wl-clipboard` / `xclip`)
+- [x] Notification plugin runtime (desktop notifications via `notify-send`)
+- [x] Share plugin runtime (file transfer over TCP, URL sharing)
+- [x] Input plugin runtime (mouse/keyboard via `xdotool`, presenter remote)
+- [ ] Android connection screen with peer list (Flutter)
 - [ ] File transfer UI in Flutter
-- [ ] Clipboard sync working bidirectionally
-- [ ] Notifications forwarded between devices
+- [ ] End-to-end KDE Connect packet exchange validated between two devices
 
 ---
 
