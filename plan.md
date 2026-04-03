@@ -4,7 +4,7 @@
 
 **Target Platforms:** Arch Linux + Hyprland (server), Android (client)
 
-**Project Status:** Active Development (Phase 2 in progress)
+**Project Status:** Active Development (Phase 2 complete; Phase 3 pending)
 
 **Estimated Timeline:** 4-6 months for MVP
 
@@ -1080,22 +1080,83 @@ Two-device discovery validation command: `linux-link watch --interval 10` (run o
 
 #### Step 2.1: KDE Connect Protocol Integration
 
-Phase 2 kickoff status (implemented):
-- Core packet model and trust store scaffold added in `core/src/protocol/kdeconnect.rs`
-- Server plugin metadata stubs added under `server/src/plugins/`
-- CLI inspection command added: `linux-link capabilities`
+**Status: COMPLETE (April 3, 2026)**
 
-Implementation note:
-- Current repository implementation uses an internal KDE Connect-compatible scaffold (`NetworkPacket`, `PluginRegistry`, `TrustStore`) as a stepping stone.
-- Direct integration via `kdeconnect-proto` remains planned work.
+The KDE Connect protocol runtime is fully implemented with an internal scaffold — no external `kdeconnect-proto` dependency needed for MVP.
 
-```rust
-// core/src/protocol/kdeconnect.rs
-use kdeconnect_proto::{
-    Device, DeviceConfig, NetworkPacket, TokioIoImpl,
-    plugin::PluginRegistry,
-    trust::TrustHandler,
-};
+**Implemented architecture:**
+
+| Component | Location | Description |
+|-----------|----------|-------------|
+| `NetworkPacket` | `core/src/protocol/kdeconnect.rs` | Serde-based JSON packet model with `to_wire()` / `from_wire()` for newline-terminated transport |
+| `DeviceIdentity` | `core/src/protocol/kdeconnect.rs` | Device metadata (name, type, capabilities) serialized as `kdeconnect.identity` packet |
+| `Plugin` trait | `core/src/protocol/kdeconnect.rs` | Async trait with `handle_packet(&self, packet, sender)` — plugins reply via `DeviceSender` |
+| `DeviceSender` / `TcpDeviceSender` | `core/src/protocol/kdeconnect.rs` | Per-connection sender wrapping `Arc<Mutex<WriteHalf>>` for concurrent plugin replies |
+| `PluginRegistry` | `core/src/protocol/kdeconnect.rs` | Capability-indexed registry with `dispatch_packet()` routing + `clone_for_dispatch()` |
+| `TrustStore` | `core/src/protocol/kdeconnect.rs` | Persisted trusted-device list (JSON file) with `trust_device()` / `untrust_device()` |
+| `KdeConnectService` | `core/src/protocol/kdeconnect.rs` | Facade assembling identity + registry + trust store |
+| `build_default_service()` | `server/src/kde.rs` | Constructs service with all 5 plugins registered |
+
+**Connection handler (`server/src/service.rs`):**
+
+```
+TCP Connection
+    │
+    ▼
+┌─────────────────────────┐
+│ 1. LINUX_LINK_HELLO     │  ← Custom handshake (8s timeout)
+│    → LINUX_LINK_OK      │
+├─────────────────────────┤
+│ 2. Send identity packet │  ← kdeconnect.identity (JSON)
+├─────────────────────────┤
+│ 3. Packet loop          │  ← Read lines, parse NetworkPacket,
+│    dispatch → plugins   │    route via PluginRegistry::dispatch_packet()
+│    (30s idle timeout)   │
+└─────────────────────────┘
+```
+
+#### Step 2.2: Plugin Implementations
+
+**Status: COMPLETE — all 5 plugins have runtime behavior**
+
+**Battery Plugin (`server/src/plugins/battery.rs`):**
+- Handles `kdeconnect.battery.request` → responds with `kdeconnect.battery`
+- Reads real battery data via `gdbus` querying UPower's DisplayDevice
+- Falls back to 100% / isCharging=true for desktops without batteries
+
+**Clipboard Plugin (`server/src/plugins/clipboard.rs`):**
+- Handles `kdeconnect.clipboard` → sets local clipboard
+- Handles `kdeconnect.clipboard.connect` → sends current clipboard to peer
+- Uses `wl-clipboard` (Wayland native) with `xclip` fallback (X11 compat)
+
+**Notification Plugin (`server/src/plugins/notification.rs`):**
+- Handles `kdeconnect.notification` → shows desktop notification via `notify-send`
+- Handles `kdeconnect.notification.request` → acknowledges support
+- Extracts title, text, and app name from packet body
+
+**Share Plugin (`server/src/plugins/share.rs`):**
+- Handles `kdeconnect.share.request` with `payloadTransferInfo` → binds port, receives file over TCP in background task
+- Handles `kdeconnect.share.request` with `url` → logs URL and sends notification
+- Saves files to `~/Downloads` (or `dirs::download_dir()`)
+- Streams in 64KB chunks with progress logging
+
+**Input Plugin (`server/src/plugins/input.rs`):**
+- Handles `kdeconnect.mousepad.request` → mouse movement, button press/release, text typing, special keys
+- Handles `kdeconnect.presenter` → play/pause/next/previous via key simulation
+- Uses `xdotool` for all input injection
+- Responds with `kdeconnect.mousepad.echo`
+
+**Plugin runtime summary:**
+
+| Plugin | Packet Types Handled | System Integration | Reply Sent |
+|--------|---------------------|-------------------|------------|
+| Battery | `kdeconnect.battery.request` | UPower via `gdbus` | `kdeconnect.battery` |
+| Clipboard | `kdeconnect.clipboard`, `.connect` | `wl-clipboard` / `xclip` | `kdeconnect.clipboard` |
+| Notification | `kdeconnect.notification`, `.request` | `notify-send` | (none) |
+| Share | `kdeconnect.share.request` | TCP listener + `~/Downloads` | `kdeconnect.notification` (URL) |
+| Input | `kdeconnect.mousepad.request`, `kdeconnect.presenter` | `xdotool` | `kdeconnect.mousepad.echo` |
+
+#### Step 2.3: Android Client - Basic UI
 use anyhow::{Context, Result};
 use std::path::Path;
 
