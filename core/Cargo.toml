@@ -9,5 +9,18 @@ serde.workspace = true
 tokio.workspace = true
 serde_json = "1"
 tracing.workspace = true
-uuid = { version = "1", features = ["v4"] }
-async-trait = "0.1"
+uuid.workspace = true
+async-trait.workspace = true
+
+# Screen capture
+ashpd.workspace = true
+
+# Video encoding
+ffmpeg-sidecar.workspace = true
+
+# QUIC streaming
+quinn.workspace = true
+
+# TLS and certificates for QUIC
+rcgen.workspace = true
+rustls.workspace = true

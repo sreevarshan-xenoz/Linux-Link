@@ -36,56 +36,52 @@ impl Plugin for SharePlugin {
     }
 
     async fn handle_packet(&self, packet: &NetworkPacket, sender: &dyn DeviceSender) -> Result<()> {
-        match packet.packet_type.as_str() {
-            "kdeconnect.share.request" => {
-                let body = &packet.body;
+        if packet.packet_type.as_str() == "kdeconnect.share.request" {
+            let body = &packet.body;
 
-                // Extract transfer metadata
-                let filename = body
-                    .get("filename")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("shared_file")
-                    .to_string();
+            // Extract transfer metadata
+            let filename = body
+                .get("filename")
+                .and_then(|v| v.as_str())
+                .unwrap_or("shared_file")
+                .to_string();
 
-                let total_size = packet.payload_size.unwrap_or(0);
+            let total_size = packet.payload_size.unwrap_or(0);
 
-                // Check if there's port info for direct TCP transfer
-                if let Some(transfer_info) = body.get("payloadTransferInfo") {
-                    if let Some(port) = transfer_info.get("port").and_then(|v| v.as_u64()) {
-                        let port = port as u16;
-                        let filepath = self.download_dir.join(&filename);
+            // Check if there's port info for direct TCP transfer
+            if let Some(transfer_info) = body.get("payloadTransferInfo") {
+                if let Some(port) = transfer_info.get("port").and_then(|v| v.as_u64()) {
+                    let port = port as u16;
+                    let filepath = self.download_dir.join(&filename);
 
-                        // Spawn a task to receive the file
-                        tokio::spawn(async move {
-                            match receive_file(filepath, port, total_size).await {
-                                Ok(bytes_received) => {
-                                    tracing::info!(
-                                        "File received: {} ({} bytes)",
-                                        filename,
-                                        bytes_received
-                                    );
-                                }
-                                Err(e) => {
-                                    tracing::warn!("File transfer failed: {}", e);
-                                }
+                    // Spawn a task to receive the file
+                    tokio::spawn(async move {
+                        match receive_file(filepath, port, total_size).await {
+                            Ok(bytes_received) => {
+                                tracing::info!(
+                                    "File received: {} ({} bytes)",
+                                    filename,
+                                    bytes_received
+                                );
                             }
-                        });
-                    }
-                } else if let Some(url) = body.get("url").and_then(|v| v.as_str()) {
-                    // URL share - just log it (could be enhanced to auto-download)
-                    tracing::info!("URL shared: {}", url);
-                    // Send a notification about the URL
-                    let notification = NetworkPacket::new("kdeconnect.notification").with_body(
-                        serde_json::json!({
-                            "title": "URL Received",
-                            "text": url,
-                            "app": "Linux Link",
-                        }),
-                    );
-                    sender.send_packet(&notification).await?;
+                            Err(e) => {
+                                tracing::warn!("File transfer failed: {}", e);
+                            }
+                        }
+                    });
                 }
+            } else if let Some(url) = body.get("url").and_then(|v| v.as_str()) {
+                // URL share - just log it (could be enhanced to auto-download)
+                tracing::info!("URL shared: {}", url);
+                // Send a notification about the URL
+                let notification =
+                    NetworkPacket::new("kdeconnect.notification").with_body(serde_json::json!({
+                        "title": "URL Received",
+                        "text": url,
+                        "app": "Linux Link",
+                    }));
+                sender.send_packet(&notification).await?;
             }
-            _ => {}
         }
         Ok(())
     }
@@ -142,7 +138,7 @@ async fn receive_file(filepath: PathBuf, port: u16, expected_size: u64) -> Resul
         received += n as u64;
 
         // Progress logging every MB
-        if received % (1024 * 1024) == 0 {
+        if received.is_multiple_of(1024 * 1024) {
             tracing::debug!("Received {} MB", received / (1024 * 1024));
         }
 

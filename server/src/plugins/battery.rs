@@ -29,17 +29,14 @@ impl Plugin for BatteryPlugin {
         packet: &NetworkPacket,
         sender: &dyn DeviceSender,
     ) -> anyhow::Result<()> {
-        match packet.packet_type.as_str() {
-            "kdeconnect.battery.request" => {
-                let charge = read_battery_charge().await;
-                let is_charging = read_is_charging().await;
-                let response = NetworkPacket::new("kdeconnect.battery").with_body(json!({
-                    "currentCharge": charge,
-                    "isCharging": is_charging,
-                }));
-                sender.send_packet(&response).await?;
-            }
-            _ => {}
+        if packet.packet_type.as_str() == "kdeconnect.battery.request" {
+            let charge = read_battery_charge().await;
+            let is_charging = read_is_charging().await;
+            let response = NetworkPacket::new("kdeconnect.battery").with_body(json!({
+                "currentCharge": charge,
+                "isCharging": is_charging,
+            }));
+            sender.send_packet(&response).await?;
         }
         Ok(())
     }
@@ -95,10 +92,10 @@ fn parse_gdbus_variant(output: &str) -> Option<String> {
         let inner = &trimmed[start + 8..];
         let inner = inner.trim().trim_matches(|c| c == '(' || c == ')');
         // For string variants like <'Charging'>, extract the quoted part
-        if let Some(q_start) = inner.find('\'') {
-            if let Some(q_end) = inner[q_start + 1..].find('\'') {
-                return Some(inner[q_start + 1..q_start + 1 + q_end].to_string());
-            }
+        if let Some(q_start) = inner.find('\'')
+            && let Some(q_end) = inner[q_start + 1..].find('\'')
+        {
+            return Some(inner[q_start + 1..q_start + 1 + q_end].to_string());
         }
         // For numeric variants, take the last token
         return inner.split_whitespace().last().map(String::from);
