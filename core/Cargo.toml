@@ -14,9 +14,15 @@ async-trait.workspace = true
 
 # Screen capture
 ashpd.workspace = true
+pipewire.workspace = true
+libspa.workspace = true
+tokio-util.workspace = true
 
 # Video encoding
 ffmpeg-sidecar.workspace = true
+
+# Unix-specific utilities
+libc.workspace = true
 
 # QUIC streaming
 quinn.workspace = true

@@ -3,9 +3,14 @@
 //! Provides screen capture via PipeWire/XDG Desktop Portal,
 //! video encoding via FFmpeg, and QUIC-based streaming transport.
 
+pub mod bitrate;
 pub mod capture;
 pub mod encoder;
+pub mod streamer;
 pub mod transport;
+
+pub use bitrate::AdaptiveBitrate;
+pub use streamer::{StreamingClient, StreamingServer};
 
 use serde::{Deserialize, Serialize};
 

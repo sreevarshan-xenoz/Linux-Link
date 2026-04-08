@@ -5,7 +5,9 @@
 
 #[cfg(test)]
 mod tests {
-    use super::super::kdeconnect::{DeviceSender, KdeConnectService, NetworkPacket, Plugin, PluginRegistry};
+    use super::super::kdeconnect::{
+        DeviceSender, KdeConnectService, NetworkPacket, Plugin, PluginRegistry,
+    };
     use anyhow::Result;
     use serde_json::json;
     use std::sync::Arc;
@@ -172,8 +174,8 @@ mod tests {
             ) -> Result<()> {
                 match packet.packet_type.as_str() {
                     "kdeconnect.clipboard.connect" => {
-                        let response = NetworkPacket::new("kdeconnect.clipboard")
-                            .with_body(json!({
+                        let response =
+                            NetworkPacket::new("kdeconnect.clipboard").with_body(json!({
                                 "content": "test clipboard content",
                             }));
                         sender.send_packet(&response).await?;
@@ -206,10 +208,7 @@ mod tests {
             assert_eq!(sent.len(), 1);
             assert_eq!(sent[0].packet_type, "kdeconnect.clipboard");
             assert_eq!(
-                sent[0]
-                    .body
-                    .get("content")
-                    .and_then(|v| v.as_str()),
+                sent[0].body.get("content").and_then(|v| v.as_str()),
                 Some("test clipboard content")
             );
         }
@@ -290,13 +289,12 @@ mod tests {
             let mut service = KdeConnectService::new();
             service.register_plugin(TestInputPlugin);
 
-            let request = NetworkPacket::new("kdeconnect.mousepad.request")
-                .with_body(json!({
-                    "dx": 10.0,
-                    "dy": -5.0,
-                    "isPressed": true,
-                    "button": 1,
-                }));
+            let request = NetworkPacket::new("kdeconnect.mousepad.request").with_body(json!({
+                "dx": 10.0,
+                "dy": -5.0,
+                "isPressed": true,
+                "button": 1,
+            }));
             service
                 .registry
                 .dispatch_packet(&request, &sender)
@@ -316,11 +314,10 @@ mod tests {
             let mut service = KdeConnectService::new();
             service.register_plugin(TestInputPlugin);
 
-            let request = NetworkPacket::new("kdeconnect.mousepad.request")
-                .with_body(json!({
-                    "text": "Hello World",
-                    "key": "Enter",
-                }));
+            let request = NetworkPacket::new("kdeconnect.mousepad.request").with_body(json!({
+                "text": "Hello World",
+                "key": "Enter",
+            }));
             service
                 .registry
                 .dispatch_packet(&request, &sender)
@@ -426,12 +423,11 @@ mod tests {
             let mut service = KdeConnectService::new();
             service.register_plugin(TestNotificationPlugin);
 
-            let request = NetworkPacket::new("kdeconnect.notification")
-                .with_body(json!({
-                    "title": "Test",
-                    "text": "Body",
-                    "app": "TestApp",
-                }));
+            let request = NetworkPacket::new("kdeconnect.notification").with_body(json!({
+                "title": "Test",
+                "text": "Body",
+                "app": "TestApp",
+            }));
             service
                 .registry
                 .dispatch_packet(&request, &sender)
@@ -478,8 +474,8 @@ mod tests {
                 if packet.packet_type == "kdeconnect.share.request" {
                     // If the packet contains a URL, respond with a notification
                     if let Some(url) = packet.body.get("url").and_then(|v| v.as_str()) {
-                        let notification = NetworkPacket::new("kdeconnect.notification")
-                            .with_body(json!({
+                        let notification =
+                            NetworkPacket::new("kdeconnect.notification").with_body(json!({
                                 "title": "URL Received",
                                 "text": url,
                                 "app": "Linux Link",
@@ -570,19 +566,43 @@ mod tests {
             struct PluginA;
             #[async_trait::async_trait]
             impl Plugin for PluginA {
-                fn name(&self) -> &'static str { "plugin_a" }
-                fn incoming_capabilities(&self) -> &'static [&'static str] { &["cap.a.in"] }
-                fn outgoing_capabilities(&self) -> &'static [&'static str] { &["cap.a.out"] }
-                async fn handle_packet(&self, _packet: &NetworkPacket, _sender: &dyn DeviceSender) -> Result<()> { Ok(()) }
+                fn name(&self) -> &'static str {
+                    "plugin_a"
+                }
+                fn incoming_capabilities(&self) -> &'static [&'static str] {
+                    &["cap.a.in"]
+                }
+                fn outgoing_capabilities(&self) -> &'static [&'static str] {
+                    &["cap.a.out"]
+                }
+                async fn handle_packet(
+                    &self,
+                    _packet: &NetworkPacket,
+                    _sender: &dyn DeviceSender,
+                ) -> Result<()> {
+                    Ok(())
+                }
             }
 
             struct PluginB;
             #[async_trait::async_trait]
             impl Plugin for PluginB {
-                fn name(&self) -> &'static str { "plugin_b" }
-                fn incoming_capabilities(&self) -> &'static [&'static str] { &["cap.b.in"] }
-                fn outgoing_capabilities(&self) -> &'static [&'static str] { &["cap.b.out"] }
-                async fn handle_packet(&self, _packet: &NetworkPacket, _sender: &dyn DeviceSender) -> Result<()> { Ok(()) }
+                fn name(&self) -> &'static str {
+                    "plugin_b"
+                }
+                fn incoming_capabilities(&self) -> &'static [&'static str] {
+                    &["cap.b.in"]
+                }
+                fn outgoing_capabilities(&self) -> &'static [&'static str] {
+                    &["cap.b.out"]
+                }
+                async fn handle_packet(
+                    &self,
+                    _packet: &NetworkPacket,
+                    _sender: &dyn DeviceSender,
+                ) -> Result<()> {
+                    Ok(())
+                }
             }
 
             let mut registry = PluginRegistry::new();
@@ -590,8 +610,14 @@ mod tests {
             registry.register(PluginB);
 
             let (incoming, outgoing) = registry.capability_sets();
-            assert_eq!(incoming, vec!["cap.a.in".to_string(), "cap.b.in".to_string()]);
-            assert_eq!(outgoing, vec!["cap.a.out".to_string(), "cap.b.out".to_string()]);
+            assert_eq!(
+                incoming,
+                vec!["cap.a.in".to_string(), "cap.b.in".to_string()]
+            );
+            assert_eq!(
+                outgoing,
+                vec!["cap.a.out".to_string(), "cap.b.out".to_string()]
+            );
         }
 
         #[test]
@@ -599,19 +625,43 @@ mod tests {
             struct PluginA;
             #[async_trait::async_trait]
             impl Plugin for PluginA {
-                fn name(&self) -> &'static str { "plugin_a" }
-                fn incoming_capabilities(&self) -> &'static [&'static str] { &["shared.cap"] }
-                fn outgoing_capabilities(&self) -> &'static [&'static str] { &["shared.out"] }
-                async fn handle_packet(&self, _packet: &NetworkPacket, _sender: &dyn DeviceSender) -> Result<()> { Ok(()) }
+                fn name(&self) -> &'static str {
+                    "plugin_a"
+                }
+                fn incoming_capabilities(&self) -> &'static [&'static str] {
+                    &["shared.cap"]
+                }
+                fn outgoing_capabilities(&self) -> &'static [&'static str] {
+                    &["shared.out"]
+                }
+                async fn handle_packet(
+                    &self,
+                    _packet: &NetworkPacket,
+                    _sender: &dyn DeviceSender,
+                ) -> Result<()> {
+                    Ok(())
+                }
             }
 
             struct PluginB;
             #[async_trait::async_trait]
             impl Plugin for PluginB {
-                fn name(&self) -> &'static str { "plugin_b" }
-                fn incoming_capabilities(&self) -> &'static [&'static str] { &["shared.cap"] }
-                fn outgoing_capabilities(&self) -> &'static [&'static str] { &["shared.out"] }
-                async fn handle_packet(&self, _packet: &NetworkPacket, _sender: &dyn DeviceSender) -> Result<()> { Ok(()) }
+                fn name(&self) -> &'static str {
+                    "plugin_b"
+                }
+                fn incoming_capabilities(&self) -> &'static [&'static str] {
+                    &["shared.cap"]
+                }
+                fn outgoing_capabilities(&self) -> &'static [&'static str] {
+                    &["shared.out"]
+                }
+                async fn handle_packet(
+                    &self,
+                    _packet: &NetworkPacket,
+                    _sender: &dyn DeviceSender,
+                ) -> Result<()> {
+                    Ok(())
+                }
             }
 
             let mut registry = PluginRegistry::new();
@@ -628,10 +678,22 @@ mod tests {
             struct CapPlugin;
             #[async_trait::async_trait]
             impl Plugin for CapPlugin {
-                fn name(&self) -> &'static str { "cap_plugin" }
-                fn incoming_capabilities(&self) -> &'static [&'static str] { &["cap.in"] }
-                fn outgoing_capabilities(&self) -> &'static [&'static str] { &["cap.out"] }
-                async fn handle_packet(&self, _packet: &NetworkPacket, _sender: &dyn DeviceSender) -> Result<()> { Ok(()) }
+                fn name(&self) -> &'static str {
+                    "cap_plugin"
+                }
+                fn incoming_capabilities(&self) -> &'static [&'static str] {
+                    &["cap.in"]
+                }
+                fn outgoing_capabilities(&self) -> &'static [&'static str] {
+                    &["cap.out"]
+                }
+                async fn handle_packet(
+                    &self,
+                    _packet: &NetworkPacket,
+                    _sender: &dyn DeviceSender,
+                ) -> Result<()> {
+                    Ok(())
+                }
             }
 
             let mut service = KdeConnectService::new();
@@ -809,7 +871,11 @@ mod tests {
             }
 
             fn outgoing_capabilities(&self) -> &'static [&'static str] {
-                &["kdeconnect.battery", "kdeconnect.clipboard", "kdeconnect.mousepad.echo"]
+                &[
+                    "kdeconnect.battery",
+                    "kdeconnect.clipboard",
+                    "kdeconnect.mousepad.echo",
+                ]
             }
 
             async fn handle_packet(
@@ -858,20 +924,14 @@ mod tests {
             // Clipboard connect
             service
                 .registry
-                .dispatch_packet(
-                    &NetworkPacket::new("kdeconnect.clipboard.connect"),
-                    &sender,
-                )
+                .dispatch_packet(&NetworkPacket::new("kdeconnect.clipboard.connect"), &sender)
                 .await
                 .unwrap();
 
             // Mousepad request
             service
                 .registry
-                .dispatch_packet(
-                    &NetworkPacket::new("kdeconnect.mousepad.request"),
-                    &sender,
-                )
+                .dispatch_packet(&NetworkPacket::new("kdeconnect.mousepad.request"), &sender)
                 .await
                 .unwrap();
 

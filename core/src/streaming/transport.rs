@@ -262,14 +262,14 @@ pub async fn receive_packets(
 
 /// Packet header for streaming transport
 #[derive(Debug, Clone, Copy)]
-struct PacketHeader {
-    sequence: u64,
-    is_keyframe: bool,
-    timestamp_us: u64,
+pub struct PacketHeader {
+    pub sequence: u64,
+    pub is_keyframe: bool,
+    pub timestamp_us: u64,
 }
 
 impl PacketHeader {
-    fn as_bytes(&self) -> [u8; 17] {
+    pub fn as_bytes(&self) -> [u8; 17] {
         let mut bytes = [0u8; 17];
         bytes[0..8].copy_from_slice(&self.sequence.to_le_bytes());
         bytes[8] = if self.is_keyframe { 1 } else { 0 };
