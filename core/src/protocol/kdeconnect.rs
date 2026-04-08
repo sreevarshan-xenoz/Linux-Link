@@ -245,10 +245,10 @@ impl PluginRegistry {
         }
 
         for name in &plugin_names {
-            if let Some(plugin) = self.plugins.get(name) {
-                if let Err(e) = plugin.handle_packet(packet, sender).await {
-                    tracing::warn!("plugin '{}' failed to handle packet: {}", name, e);
-                }
+            if let Some(plugin) = self.plugins.get(name)
+                && let Err(e) = plugin.handle_packet(packet, sender).await
+            {
+                tracing::warn!("plugin '{}' failed to handle packet: {}", name, e);
             }
         }
 
