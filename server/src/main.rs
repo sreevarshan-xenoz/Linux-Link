@@ -8,6 +8,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod cli;
 mod config;
+mod input_injector;
 mod kde;
 mod plugins;
 mod service;

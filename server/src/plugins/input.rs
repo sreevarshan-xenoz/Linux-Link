@@ -1,12 +1,37 @@
 use anyhow::{Context, Result};
 use linux_link_core::protocol::kdeconnect::{DeviceSender, NetworkPacket, Plugin};
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tracing::{debug, warn};
 
-#[derive(Debug, Default)]
-pub struct InputPlugin;
+use crate::input_injector::{InputInjector, button_id_to_mouse, key_name_to_enigo_key};
+
+/// Input plugin with native input injection via enigo
+pub struct InputPlugin {
+    injector: Arc<Mutex<Option<InputInjector>>>,
+}
 
 impl InputPlugin {
     pub fn new() -> Self {
-        Self
+        Self {
+            injector: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Lazily initialize the injector
+    async fn get_injector(&self) -> Result<Arc<Mutex<Option<InputInjector>>>> {
+        let mut opt = self.injector.lock().await;
+        if opt.is_none() {
+            *opt = Some(InputInjector::new().context("Failed to create input injector")?);
+            debug!("Input injector initialized on first use");
+        }
+        Ok(self.injector.clone())
+    }
+}
+
+impl Default for InputPlugin {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -29,44 +54,46 @@ impl Plugin for InputPlugin {
             "kdeconnect.mousepad.request" => {
                 let body = &packet.body;
 
+                // Handle keyboard input first (text)
+                if let Some(text) = body.get("text").and_then(|v| v.as_str())
+                    && let Err(e) = self.type_text(text).await
+                {
+                    warn!("Failed to type text: {}", e);
+                }
+
+                // Handle special key
+                if let Some(key) = body.get("key").and_then(|v| v.as_str())
+                    && let Err(e) = self.press_key(key).await
+                {
+                    warn!("Failed to press key '{}': {}", key, e);
+                }
+
                 // Handle mouse movement
                 if let (Some(x), Some(y)) = (
                     body.get("dx").and_then(|v| v.as_f64()),
                     body.get("dy").and_then(|v| v.as_f64()),
-                ) {
-                    if x != 0.0 || y != 0.0 {
-                        move_mouse(x, y).await?;
-                    }
+                ) && (x != 0.0 || y != 0.0)
+                    && let Err(e) = self.move_mouse(x as i32, y as i32).await
+                {
+                    warn!("Failed to move mouse: {}", e);
                 }
 
                 // Handle mouse button events
-                if let Some(is_pressed) = body.get("isPressed").and_then(|v| v.as_bool()) {
-                    if let Some(button) = body.get("button").and_then(|v| v.as_i64()) {
-                        mouse_button(button as i32, is_pressed).await?;
-                    }
+                if let Some(is_pressed) = body.get("isPressed").and_then(|v| v.as_bool())
+                    && let Some(button) = body.get("button").and_then(|v| v.as_i64())
+                    && let Err(e) = self.mouse_button(button as i32, is_pressed).await
+                {
+                    warn!("Failed to handle mouse button: {}", e);
                 }
 
-                // Handle scroll events
+                // Handle scroll events (small deltas are movement, larger ones are scroll)
                 if let (Some(x), Some(y)) = (
                     body.get("dx").and_then(|v| v.as_f64()),
                     body.get("dy").and_then(|v| v.as_f64()),
-                ) {
-                    if x != 0.0 || y != 0.0 {
-                        // Small deltas are mouse movement, larger ones are scroll
-                        if x.abs() > 10.0 || y.abs() > 10.0 {
-                            // Already handled as mouse movement above
-                        }
-                    }
-                }
-
-                // Handle keyboard input
-                if let Some(key) = body.get("key").and_then(|v| v.as_str()) {
-                    // Special key handling
-                    handle_special_key(key).await?;
-                }
-
-                if let Some(text) = body.get("text").and_then(|v| v.as_str()) {
-                    type_text(text).await?;
+                ) && (x != 0.0 || y != 0.0)
+                    && (x.abs() > 10.0 || y.abs() > 10.0)
+                {
+                    // Already handled as mouse movement above
                 }
 
                 // Echo back for mousepad protocol
@@ -75,8 +102,10 @@ impl Plugin for InputPlugin {
             }
             "kdeconnect.presenter" => {
                 // Presenter remote - handle play/pause/next/previous
-                if let Some(action) = packet.body.get("action").and_then(|v| v.as_str()) {
-                    handle_presenter_action(action).await?;
+                if let Some(action) = packet.body.get("action").and_then(|v| v.as_str())
+                    && let Err(e) = self.handle_presenter_action(action).await
+                {
+                    warn!("Failed to handle presenter action '{}': {}", action, e);
                 }
             }
             _ => {}
@@ -85,97 +114,80 @@ impl Plugin for InputPlugin {
     }
 }
 
-/// Move the mouse by relative amounts.
-async fn move_mouse(dx: f64, dy: f64) -> Result<()> {
-    let xdotool_args = format!("{:.0} {:.0}", dx, dy);
-    tokio::process::Command::new("xdotool")
-        .args(["mouse_relative", "--", &xdotool_args])
-        .output()
-        .await
-        .context("failed to execute xdotool for mouse movement")?;
-    Ok(())
-}
-
-/// Press or release a mouse button.
-async fn mouse_button(button: i32, pressed: bool) -> Result<()> {
-    let action = if pressed { "mousedown" } else { "mouseup" };
-    let btn = button.to_string();
-    tokio::process::Command::new("xdotool")
-        .args([action, &btn])
-        .output()
-        .await
-        .context("failed to execute xdotool for mouse button")?;
-    Ok(())
-}
-
-/// Type text using xdotool.
-async fn type_text(text: &str) -> Result<()> {
-    tokio::process::Command::new("xdotool")
-        .args(["type", "--", text])
-        .output()
-        .await
-        .context("failed to execute xdotool for typing")?;
-    Ok(())
-}
-
-/// Handle special keys (Enter, Escape, arrows, etc.).
-async fn handle_special_key(key: &str) -> Result<()> {
-    let xdotool_key = match key {
-        "Enter" | "\n" | "\r" => "Return",
-        "Escape" => "Escape",
-        "BackSpace" => "BackSpace",
-        "Tab" => "Tab",
-        "Delete" => "Delete",
-        "Insert" => "Insert",
-        "Home" => "Home",
-        "End" => "End",
-        "PageUp" => "Page_Up",
-        "PageDown" => "Page_Down",
-        "ArrowUp" | "Up" => "Up",
-        "ArrowDown" | "Down" => "Down",
-        "ArrowLeft" | "Left" => "Left",
-        "ArrowRight" | "Right" => "Right",
-        "F1" => "F1",
-        "F2" => "F2",
-        "F3" => "F3",
-        "F4" => "F4",
-        "F5" => "F5",
-        "F6" => "F6",
-        "F7" => "F7",
-        "F8" => "F8",
-        "F9" => "F9",
-        "F10" => "F10",
-        "F11" => "F11",
-        "F12" => "F12",
-        other => other, // Pass through as-is
-    };
-
-    tokio::process::Command::new("xdotool")
-        .args(["key", xdotool_key])
-        .output()
-        .await
-        .context("failed to execute xdotool for key press")?;
-    Ok(())
-}
-
-/// Handle presenter remote actions.
-async fn handle_presenter_action(action: &str) -> Result<()> {
-    match action {
-        "play" | "pause" | "next" | "prev" | "previous" => {
-            let key = match action {
-                "next" | "previous" | "prev" => "Next",
-                "play" | "pause" => "space",
-                _ => action,
-            };
-            tokio::process::Command::new("xdotool")
-                .args(["key", key])
-                .output()
-                .await
-                .context("failed to execute xdotool for presenter action")?;
-        }
-        other => {
-            tracing::debug!("Unknown presenter action: {}", other);
+impl InputPlugin {
+    /// Move the mouse by relative amounts.
+    async fn move_mouse(&self, dx: i32, dy: i32) -> Result<()> {
+        let injector = self.get_injector().await?;
+        let mut inj = injector.lock().await;
+        if let Some(ref mut injector) = *inj {
+            injector.move_mouse_relative(dx, dy)
+        } else {
+            unreachable!()
         }
     }
-    Ok(())
+
+    /// Press or release a mouse button.
+    async fn mouse_button(&self, button: i32, pressed: bool) -> Result<()> {
+        let injector = self.get_injector().await?;
+        let mut inj = injector.lock().await;
+        if let Some(ref mut injector) = *inj {
+            let mouse_key = button_id_to_mouse(button);
+            injector.mouse_button(mouse_key, pressed)
+        } else {
+            unreachable!()
+        }
+    }
+
+    /// Type text using native input.
+    async fn type_text(&self, text: &str) -> Result<()> {
+        let injector = self.get_injector().await?;
+        let mut inj = injector.lock().await;
+        if let Some(ref mut injector) = *inj {
+            injector.text(text)
+        } else {
+            unreachable!()
+        }
+    }
+
+    /// Handle special keys (Enter, Escape, arrows, etc.).
+    async fn press_key(&self, key: &str) -> Result<()> {
+        let injector = self.get_injector().await?;
+        let mut inj = injector.lock().await;
+        if let Some(ref mut injector) = *inj {
+            let enigo_key = key_name_to_enigo_key(key);
+            injector.key(enigo_key, true)?;
+            injector.key(enigo_key, false)
+        } else {
+            unreachable!()
+        }
+    }
+
+    /// Handle presenter remote actions.
+    async fn handle_presenter_action(&self, action: &str) -> Result<()> {
+        let injector = self.get_injector().await?;
+        let mut inj = injector.lock().await;
+        if let Some(ref mut injector) = *inj {
+            match action {
+                "next" | "previous" | "prev" => {
+                    let key = if action == "next" {
+                        Key::RightArrow
+                    } else {
+                        Key::LeftArrow
+                    };
+                    injector.key(key, true)?;
+                    injector.key(key, false)?;
+                }
+                "play" | "pause" => {
+                    injector.key(Key::Space, true)?;
+                    injector.key(Key::Space, false)?;
+                }
+                other => {
+                    warn!("Unknown presenter action: {}", other);
+                }
+            }
+        }
+        Ok(())
+    }
 }
+
+use enigo::Key;
