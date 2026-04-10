@@ -12,9 +12,15 @@
 - Phase 0 completed (workspace scaffold, CI, docs, build/test baseline)
 - Phase 1 completed (CLI + handshake + discovery watch + two-device discovery)
 - Phase 2 completed (KDE protocol runtime, all 5 plugins with real behavior, KDE Connect TCP packet loop)
-- Phase 3 completed (full streaming pipeline: PipeWire capture → persistent FFmpeg encoder → QUIC transport → adaptive bitrate; 50 integration tests)
-- Phase 4 foundation completed (Android Rust FFI: clipboard, file transfer, mouse/keyboard input, streaming stubs; Flutter app scaffold: 4 screens, Riverpod state, GoRouter, Android native shell)
-- Quality gates pass (`cargo fmt`, `cargo check`, `cargo clippy -D warnings`, `cargo test` — 50 tests)
+- Phase 3 completed (full streaming pipeline: PipeWire capture → persistent FFmpeg encoder → QUIC transport → adaptive bitrate; 49 integration tests)
+- Phase 4 in progress:
+  - ✅ Rust FFI: clipboard, file transfer, mouse/keyboard input, QUIC streaming (connect_streaming/stop_streaming/get_streaming_rtt)
+  - ✅ QUIC StreamingClient: core/src/streaming/client.rs with frame receiver + stats feedback tasks
+  - ✅ Flutter screens wired: connection (real peer discovery), remote desktop (gesture → FFI → input), file browser (sendFile), settings (SharedPreferences persistence)
+  - ✅ MediaCodec integration: native Android H.264 decoder via Flutter platform channels (MethodChannel + SurfaceTexture)
+  - ✅ RemoteDesktopScreen: Texture widget rendering from MediaCodec, periodic streaming status polling
+  - ⏳ Remaining: FRB codegen, background service, flutter build verification, E2E testing
+- Quality gates pass (`cargo fmt`, `cargo check`, `cargo clippy -D warnings`, `cargo test` — 49 tests)
 
 ---
 
