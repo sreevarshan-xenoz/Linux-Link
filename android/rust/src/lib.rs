@@ -282,8 +282,23 @@ pub async fn send_file(address: String, port: u16, file_path: String) -> Result<
 /// Streaming session state
 static STREAMING_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Last known RTT in microseconds, updated by the streaming stats task.
+/// Read atomically from the main thread (no mutex lock needed).
+static STREAMING_RTT_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Global handle for the active streaming client session.
 static STREAMING_HANDLE: Mutex<Option<StreamingHandle>> = Mutex::new(None);
+
+/// Frame data transfer object for Flutter/MediaCodec.
+#[frb]
+pub struct FrameDto {
+    /// H.264 NAL unit data (including start codes).
+    pub data: Vec<u8>,
+    /// Whether this is a keyframe (IDR).
+    pub is_keyframe: bool,
+    /// Sequence number for ordering.
+    pub sequence: u64,
+}
 
 /// Holds the live streaming client and its packet receiver.
 struct StreamingHandle {
@@ -295,8 +310,6 @@ struct StreamingHandle {
     /// Accessed via FFI bridge for MediaCodec integration.
     #[allow(dead_code)]
     packet_rx: tokio::sync::mpsc::Receiver<linux_link_core::streaming::EncodedPacket>,
-    /// Clone of the QUIC connection for RTT queries.
-    connection: quinn::Connection,
 }
 
 /// Request remote screen streaming.
@@ -336,7 +349,18 @@ pub async fn connect_streaming(address: String, port: u16) -> Result<(), String>
         cancel: client_cancel,
         task,
         packet_rx,
-        connection,
+    });
+
+    // Spawn a task to periodically poll RTT and update the atomic
+    let rtt_connection = connection.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(1));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            let rtt_us = rtt_connection.stats().path.rtt.as_micros() as u64;
+            update_streaming_rtt(rtt_us);
+        }
     });
 
     STREAMING_ACTIVE.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -370,21 +394,68 @@ pub fn is_streaming_active() -> bool {
     STREAMING_ACTIVE.load(std::sync::atomic::Ordering::SeqCst)
 }
 
-/// Get the current RTT to the streaming server in milliseconds.
+/// Update the global streaming RTT value (called from the stats task).
+pub fn update_streaming_rtt(rtt_us: u64) {
+    STREAMING_RTT_US.store(rtt_us, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Get the current RTT to the streaming server in microseconds.
 ///
 /// Returns 0 if no streaming session is active.
-#[frb]
+/// This is a synchronous, lock-free read safe for the main thread.
+#[frb(sync)]
 pub fn get_streaming_rtt() -> u64 {
-    let guard = match STREAMING_HANDLE.lock() {
-        Ok(g) => g,
-        Err(_) => return 0,
-    };
+    STREAMING_RTT_US.load(std::sync::atomic::Ordering::Relaxed)
+}
 
-    let Some(handle) = guard.as_ref() else {
-        return 0;
-    };
+/// Receive queued H.264 frames from the streaming client.
+///
+/// Polls the frame receiver channel with the given timeout (in milliseconds).
+/// Returns up to 16 frames per call. Returns an empty list if no streaming
+/// session is active or no frames are available.
+#[frb]
+pub async fn receive_frames(timeout_ms: u64) -> Vec<FrameDto> {
+    use tokio::sync::mpsc::error::TryRecvError;
 
-    handle.connection.stats().path.rtt.as_millis() as u64
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+    let poll_interval = Duration::from_millis(2);
+    let mut frames = Vec::with_capacity(16);
+
+    loop {
+        // Try to drain frames (short-lived lock)
+        {
+            let mut guard = match STREAMING_HANDLE.lock() {
+                Ok(g) => g,
+                Err(_) => return frames,
+            };
+            let Some(handle) = guard.as_mut() else {
+                return frames;
+            };
+
+            loop {
+                match handle.packet_rx.try_recv() {
+                    Ok(packet) => {
+                        frames.push(FrameDto {
+                            data: packet.data,
+                            is_keyframe: packet.is_keyframe,
+                            sequence: packet.sequence,
+                        });
+                        if frames.len() >= 16 {
+                            return frames;
+                        }
+                    }
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => return frames,
+                }
+            }
+        }
+
+        // No frames available yet — wait and retry
+        if tokio::time::Instant::now() >= deadline {
+            return frames;
+        }
+        tokio::time::sleep(poll_interval).await;
+    }
 }
 
 /// Send mouse event to remote using KDE mousepad protocol.
