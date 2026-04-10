@@ -4,7 +4,6 @@
 //! Manages lifecycle, error handling, and graceful shutdown.
 
 use anyhow::{Context, Result};
-use std::net::SocketAddr;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -413,50 +412,6 @@ fn trace_packet_stats(packet: &EncodedPacket) {
         packet.data.len(),
         packet.timestamp.elapsed().as_millis()
     );
-}
-
-/// Streaming client that connects to a server and receives video packets
-pub struct StreamingClient {
-    #[allow(dead_code)]
-    config: StreamingConfig,
-    transport_config: StreamTransportConfig,
-}
-
-impl StreamingClient {
-    /// Create a new streaming client
-    pub fn new(config: StreamingConfig, transport_config: StreamTransportConfig) -> Self {
-        Self {
-            config,
-            transport_config,
-        }
-    }
-
-    /// Connect to a streaming server and receive packets
-    pub async fn connect(&self, server_addr: SocketAddr) -> Result<mpsc::Receiver<EncodedPacket>> {
-        info!("Connecting to streaming server at {}", server_addr);
-
-        let client = transport::StreamClient::new(self.transport_config.clone())
-            .context("Failed to create streaming client")?;
-
-        let connection = client
-            .connect(server_addr)
-            .await
-            .context("Failed to connect to server")?;
-
-        info!("Streaming connection established");
-
-        let (packet_tx, packet_rx) = mpsc::channel(8);
-
-        // Spawn packet receiver task
-        tokio::spawn(async move {
-            match transport::receive_packets(&connection, packet_tx).await {
-                Ok(()) => info!("Streaming client receiver finished"),
-                Err(e) => warn!("Streaming client receiver error: {}", e),
-            }
-        });
-
-        Ok(packet_rx)
-    }
 }
 
 /// Monitors QUIC connection stats and feeds RTT to the adaptive bitrate controller

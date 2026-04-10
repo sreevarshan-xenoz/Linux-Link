@@ -5,12 +5,14 @@
 
 pub mod bitrate;
 pub mod capture;
+pub mod client;
 pub mod encoder;
 pub mod streamer;
 pub mod transport;
 
 pub use bitrate::AdaptiveBitrate;
-pub use streamer::{StreamingClient, StreamingServer};
+pub use client::StreamingClient;
+pub use streamer::StreamingServer;
 
 use serde::{Deserialize, Serialize};
 

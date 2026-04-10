@@ -277,7 +277,7 @@ impl PacketHeader {
         bytes
     }
 
-    fn from_bytes(bytes: &[u8; 17]) -> Result<Self> {
+    pub fn from_bytes(bytes: &[u8; 17]) -> Result<Self> {
         Ok(Self {
             sequence: u64::from_le_bytes(bytes[0..8].try_into()?),
             is_keyframe: bytes[8] != 0,
