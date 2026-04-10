@@ -13,6 +13,12 @@ final peersProvider =
 
 final selectedPeerProvider = StateProvider<PeerInfo?>((ref) => null);
 
+/// The IP address of the currently connected peer.
+final selectedPeerAddressProvider = StateProvider<String?>((ref) => null);
+
+/// The port of the currently connected peer.
+final selectedPeerPortProvider = StateProvider<int?>((ref) => null);
+
 class PeersNotifier extends StateNotifier<List<PeerInfo>> {
   PeersNotifier() : super([]);
 

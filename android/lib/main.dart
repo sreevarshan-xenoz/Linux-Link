@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'rust_api_bridge.dart';
 import 'screens/connection_screen.dart';
 import 'screens/remote_desktop_screen.dart';
 import 'screens/file_browser_screen.dart';
@@ -15,11 +16,23 @@ final _router = GoRouter(
     ),
     GoRoute(
       path: '/remote',
-      builder: (context, state) => const RemoteDesktopScreen(),
+      builder: (context, state) {
+        final args = state.arguments as Map<String, dynamic>?;
+        return RemoteDesktopScreen(
+          address: args?['address'] as String? ?? '',
+          port: args?['port'] as int? ?? 1716,
+        );
+      },
     ),
     GoRoute(
       path: '/files',
-      builder: (context, state) => const FileBrowserScreen(),
+      builder: (context, state) {
+        final args = state.arguments as Map<String, dynamic>?;
+        return FileBrowserScreen(
+          address: args?['address'] as String? ?? '',
+          port: args?['port'] as int? ?? 1716,
+        );
+      },
     ),
     GoRoute(
       path: '/settings',
@@ -28,8 +41,11 @@ final _router = GoRouter(
   ],
 );
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Initialize the Rust backend
+  await rustApi.init();
 
   runApp(
     const ProviderScope(

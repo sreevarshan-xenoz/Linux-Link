@@ -1,5 +1,9 @@
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../rust_api_bridge.dart';
 
 class FileItem {
   final String name;
@@ -16,7 +20,14 @@ class FileItem {
 }
 
 class FileBrowserScreen extends ConsumerStatefulWidget {
-  const FileBrowserScreen({super.key});
+  final String address;
+  final int port;
+
+  const FileBrowserScreen({
+    super.key,
+    required this.address,
+    required this.port,
+  });
 
   @override
   ConsumerState<FileBrowserScreen> createState() => _FileBrowserScreenState();
@@ -29,17 +40,9 @@ class _FileBrowserScreenState extends ConsumerState<FileBrowserScreen>
   final Set<int> _selectedRemoteFiles = {};
   bool _isTransferring = false;
   double _transferProgress = 0.0;
+  List<String> _pendingFiles = [];
 
-  // Sample data for development
-  final List<FileItem> _localFiles = const [
-    FileItem(name: 'Documents', isDirectory: true, modified: '2024-01-15'),
-    FileItem(name: 'Downloads', isDirectory: true, modified: '2024-01-20'),
-    FileItem(name: 'Photos', isDirectory: true, modified: '2024-01-10'),
-    FileItem(name: 'report.pdf', isDirectory: false, size: '2.4 MB', modified: '2024-01-18'),
-    FileItem(name: 'notes.txt', isDirectory: false, size: '12 KB', modified: '2024-01-19'),
-    FileItem(name: 'image.png', isDirectory: false, size: '1.1 MB', modified: '2024-01-17'),
-  ];
-
+  // Sample data for development (remote files would come from Rust FFI eventually)
   final List<FileItem> _remoteFiles = const [
     FileItem(name: 'etc', isDirectory: true, modified: '2024-01-01'),
     FileItem(name: 'home', isDirectory: true, modified: '2024-01-15'),
@@ -47,6 +50,9 @@ class _FileBrowserScreenState extends ConsumerState<FileBrowserScreen>
     FileItem(name: 'backup.tar.gz', isDirectory: false, size: '156 MB', modified: '2024-01-14'),
     FileItem(name: 'config.yaml', isDirectory: false, size: '4 KB', modified: '2024-01-16'),
   ];
+
+  // Local files selected for transfer
+  final List<PlatformFile> _localFiles = [];
 
   @override
   void initState() {
@@ -60,40 +66,152 @@ class _FileBrowserScreenState extends ConsumerState<FileBrowserScreen>
     super.dispose();
   }
 
+  Future<void> _pickFiles() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        allowMultiple: true,
+        withData: false,
+      );
+
+      if (result != null && result.files.isNotEmpty) {
+        setState(() {
+          _localFiles.addAll(result.files);
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to pick files: $e')),
+        );
+      }
+    }
+  }
+
   Future<void> _sendFiles() async {
-    if (_selectedLocalFiles.isEmpty) return;
+    if (_localFiles.isEmpty) return;
 
     setState(() {
       _isTransferring = true;
       _transferProgress = 0.0;
+      _pendingFiles = _localFiles.map((f) => f.path ?? f.name).toList();
     });
 
-    // TODO: Wire up to Rust FFI send_file()
-    for (int i = 0; i <= 10; i++) {
-      await Future.delayed(const Duration(milliseconds: 200));
-      setState(() {
-        _transferProgress = i / 10;
-      });
+    int completed = 0;
+    for (final file in _localFiles) {
+      final filePath = file.path;
+      if (filePath == null) continue;
+
+      try {
+        final absPath = File(filePath).absolute.path;
+        await rustApi.sendFile(widget.address, widget.port, absPath);
+      } catch (e) {
+        debugPrint('Failed to send ${file.name}: $e');
+      }
+
+      completed++;
+      if (mounted) {
+        setState(() {
+          _transferProgress = completed / _localFiles.length;
+        });
+      }
     }
 
-    setState(() {
-      _isTransferring = false;
-      _selectedLocalFiles.clear();
-    });
-
     if (mounted) {
+      setState(() {
+        _isTransferring = false;
+        _localFiles.clear();
+        _selectedLocalFiles.clear();
+        _pendingFiles.clear();
+      });
+
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Files sent successfully')),
       );
     }
   }
 
-  Widget _buildFileList(List<FileItem> files, Set<int> selectedFiles) {
+  Widget _buildLocalFileList() {
+    if (_localFiles.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.upload_file,
+              size: 64,
+              color: Theme.of(context).colorScheme.outline,
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'No files selected',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Tap the + button to select files to send',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+            ),
+          ],
+        ),
+      );
+    }
+
     return ListView.builder(
-      itemCount: files.length,
+      itemCount: _localFiles.length,
       itemBuilder: (context, index) {
-        final file = files[index];
-        final isSelected = selectedFiles.contains(index);
+        final file = _localFiles[index];
+        final isSelected = _selectedLocalFiles.contains(index);
+
+        return ListTile(
+          leading: Icon(
+            Icons.insert_drive_file,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+          title: Text(file.name),
+          subtitle: file.size != null
+              ? Text('${_formatFileSize(file.size!)}')
+              : null,
+          trailing: isSelected
+              ? const Icon(Icons.check_circle, color: Colors.blue)
+              : null,
+          selected: isSelected,
+          onLongPress: () {
+            setState(() {
+              if (isSelected) {
+                _selectedLocalFiles.remove(index);
+              } else {
+                _selectedLocalFiles.add(index);
+              }
+            });
+          },
+          onDoubleTap: () {
+            setState(() {
+              _localFiles.removeAt(index);
+              _selectedLocalFiles.remove(index);
+            });
+          },
+        );
+      },
+    );
+  }
+
+  String _formatFileSize(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    if (bytes < 1024 * 1024 * 1024) {
+      return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    }
+    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
+  }
+
+  Widget _buildRemoteFileList() {
+    return ListView.builder(
+      itemCount: _remoteFiles.length,
+      itemBuilder: (context, index) {
+        final file = _remoteFiles[index];
+        final isSelected = _selectedRemoteFiles.contains(index);
 
         return ListTile(
           leading: Icon(
@@ -103,9 +221,10 @@ class _FileBrowserScreenState extends ConsumerState<FileBrowserScreen>
                 : Theme.of(context).colorScheme.primary,
           ),
           title: Text(file.name),
-          subtitle: Text([file.size, file.modified].whereType<String>().isNotEmpty
-              ? [file.size, file.modified].whereType<String>().join('  -  ')
-              : ''),
+          subtitle: Text(
+              [file.size, file.modified].whereType<String>().isNotEmpty
+                  ? [file.size, file.modified].whereType<String>().join('  -  ')
+                  : ''),
           trailing: isSelected
               ? const Icon(Icons.check_circle, color: Colors.blue)
               : null,
@@ -118,9 +237,9 @@ class _FileBrowserScreenState extends ConsumerState<FileBrowserScreen>
           onLongPress: () {
             setState(() {
               if (isSelected) {
-                selectedFiles.remove(index);
+                _selectedRemoteFiles.remove(index);
               } else {
-                selectedFiles.add(index);
+                _selectedRemoteFiles.add(index);
               }
             });
           },
@@ -142,7 +261,7 @@ class _FileBrowserScreenState extends ConsumerState<FileBrowserScreen>
           ],
         ),
         actions: [
-          if (_selectedLocalFiles.isNotEmpty)
+          if (_localFiles.isNotEmpty)
             IconButton(
               icon: const Icon(Icons.upload),
               onPressed: _isTransferring ? null : _sendFiles,
@@ -155,8 +274,8 @@ class _FileBrowserScreenState extends ConsumerState<FileBrowserScreen>
           TabBarView(
             controller: _tabController,
             children: [
-              _buildFileList(_localFiles, _selectedLocalFiles),
-              _buildFileList(_remoteFiles, _selectedRemoteFiles),
+              _buildLocalFileList(),
+              _buildRemoteFileList(),
             ],
           ),
           if (_isTransferring)
@@ -181,6 +300,10 @@ class _FileBrowserScreenState extends ConsumerState<FileBrowserScreen>
               ),
             ),
         ],
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _isTransferring ? null : _pickFiles,
+        child: const Icon(Icons.add),
       ),
     );
   }

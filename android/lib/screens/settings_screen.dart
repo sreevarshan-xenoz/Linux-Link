@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../rust_api_bridge.dart';
 
 enum VideoQuality { low, medium, high }
 
@@ -17,7 +19,84 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   VideoQuality _videoQuality = VideoQuality.high;
   InputMode _inputMode = InputMode.trackpad;
   int _connectionTimeout = 30;
-  final String _version = '1.0.0';
+  String _version = '1.0.0';
+  bool _isTestingConnection = false;
+
+  static const _keyTailscaleEnabled = 'tailscale_enabled';
+  static const _keyVideoQuality = 'video_quality';
+  static const _keyInputMode = 'input_mode';
+  static const _keyConnectionTimeout = 'connection_timeout';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSettings();
+    _loadVersion();
+  }
+
+  Future<void> _loadSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _tailscaleEnabled = prefs.getBool(_keyTailscaleEnabled) ?? true;
+      _videoQuality = VideoQuality.values
+          .firstWhere((e) => e.name == prefs.getString(_keyVideoQuality), orElse: () => VideoQuality.high);
+      _inputMode = InputMode.values
+          .firstWhere((e) => e.name == prefs.getString(_keyInputMode), orElse: () => InputMode.trackpad);
+      _connectionTimeout = prefs.getInt(_keyConnectionTimeout) ?? 30;
+    });
+  }
+
+  Future<void> _saveSetting(String key, dynamic value) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (value is bool) {
+      await prefs.setBool(key, value);
+    } else if (value is String) {
+      await prefs.setString(key, value);
+    } else if (value is int) {
+      await prefs.setInt(key, value);
+    }
+  }
+
+  Future<void> _loadVersion() async {
+    try {
+      final version = await rustApi.version();
+      if (mounted) {
+        setState(() => _version = version);
+      }
+    } catch (e) {
+      debugPrint('Failed to load version: $e');
+    }
+  }
+
+  Future<void> _testConnection() async {
+    setState(() => _isTestingConnection = true);
+    try {
+      final isReady = await rustApi.checkTailscaleStatus();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              isReady ? 'Tailscale is ready' : 'Tailscale is not ready',
+            ),
+            backgroundColor: isReady ? Colors.green : Colors.orange,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Connection test failed: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isTestingConnection = false);
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -26,6 +105,19 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Settings'),
+        actions: [
+          IconButton(
+            icon: _isTestingConnection
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.wifi_find),
+            onPressed: _isTestingConnection ? null : _testConnection,
+            tooltip: 'Test Tailscale connection',
+          ),
+        ],
       ),
       body: ListView(
         children: [
@@ -40,6 +132,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 setState(() {
                   _tailscaleEnabled = value;
                 });
+                _saveSetting(_keyTailscaleEnabled, value);
               },
             ),
           ),
@@ -63,6 +156,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               setState(() {
                 _videoQuality = value!;
               });
+              _saveSetting(_keyVideoQuality, value.name);
             },
           ),
           RadioListTile<VideoQuality>(
@@ -74,6 +168,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               setState(() {
                 _videoQuality = value!;
               });
+              _saveSetting(_keyVideoQuality, value.name);
             },
           ),
           RadioListTile<VideoQuality>(
@@ -85,6 +180,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               setState(() {
                 _videoQuality = value!;
               });
+              _saveSetting(_keyVideoQuality, value.name);
             },
           ),
           const Divider(),
@@ -107,6 +203,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               setState(() {
                 _inputMode = value!;
               });
+              _saveSetting(_keyInputMode, value.name);
             },
           ),
           RadioListTile<InputMode>(
@@ -118,6 +215,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               setState(() {
                 _inputMode = value!;
               });
+              _saveSetting(_keyInputMode, value.name);
             },
           ),
           RadioListTile<InputMode>(
@@ -129,6 +227,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               setState(() {
                 _inputMode = value!;
               });
+              _saveSetting(_keyInputMode, value.name);
             },
           ),
           const Divider(),
@@ -149,6 +248,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   setState(() {
                     _connectionTimeout = value.round();
                   });
+                  _saveSetting(_keyConnectionTimeout, _connectionTimeout);
                 },
               ),
             ),

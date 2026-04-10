@@ -3,7 +3,9 @@
 use flutter_rust_bridge::frb;
 use linux_link_core::protocol::connection::ConnectionManager;
 use linux_link_core::protocol::kdeconnect::{DeviceSender, NetworkPacket, TcpDeviceSender};
+use linux_link_core::streaming::StreamingClient;
 use linux_link_core::tailscale::TailscaleClient;
+use std::sync::Mutex;
 use std::time::Duration;
 
 // Initialize logging for Android
@@ -280,20 +282,85 @@ pub async fn send_file(address: String, port: u16, file_path: String) -> Result<
 /// Streaming session state
 static STREAMING_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Global handle for the active streaming client session.
+static STREAMING_HANDLE: Mutex<Option<StreamingHandle>> = Mutex::new(None);
+
+/// Holds the live streaming client and its packet receiver.
+struct StreamingHandle {
+    /// Token that can be used to cancel the receive loop.
+    cancel: tokio_util::sync::CancellationToken,
+    /// JoinHandle of the background `client.start()` task.
+    task: tokio::task::JoinHandle<()>,
+    /// Receiver so the consumer (Flutter) can receive packets.
+    /// Accessed via FFI bridge for MediaCodec integration.
+    #[allow(dead_code)]
+    packet_rx: tokio::sync::mpsc::Receiver<linux_link_core::streaming::EncodedPacket>,
+    /// Clone of the QUIC connection for RTT queries.
+    connection: quinn::Connection,
+}
+
 /// Request remote screen streaming.
+///
+/// Connects to the server at `address:port` via QUIC, starts a background
+/// receive task, and stores the session globally. Use `get_streaming_rtt`
+/// to query the current RTT.
 #[frb]
-pub async fn start_streaming(address: String, port: u16) -> Result<(), String> {
-    // Stub: actual MediaCodec integration and QUIC stream receiving done in Flutter native code.
+pub async fn connect_streaming(address: String, port: u16) -> Result<(), String> {
+    let addr = format!("{address}:{port}");
+    tracing::info!("Connecting to streaming server at {addr}");
+
+    let (mut client, packet_rx) = StreamingClient::connect(&addr)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Clone the connection for RTT queries before the client is moved into the task
+    let connection = client
+        .connection()
+        .ok_or_else(|| "Connection not available after connect".to_string())?
+        .clone();
+
+    let cancel = client.cancel_token();
+    let client_cancel = cancel.clone();
+
+    // Spawn the background receive loop
+    let task = tokio::spawn(async move {
+        client.start().await;
+        tracing::info!("Streaming client start loop exited");
+    });
+
+    // Store the handle
+    let mut handle = STREAMING_HANDLE
+        .lock()
+        .map_err(|e| format!("Lock poisoned: {e}"))?;
+    *handle = Some(StreamingHandle {
+        cancel: client_cancel,
+        task,
+        packet_rx,
+        connection,
+    });
+
     STREAMING_ACTIVE.store(true, std::sync::atomic::Ordering::SeqCst);
-    tracing::info!("Streaming session requested to {}:{}", address, port);
+    tracing::info!("Streaming session connected to {addr}");
     Ok(())
 }
 
 /// Stop remote screen streaming.
 #[frb]
 pub async fn stop_streaming() -> Result<(), String> {
+    let handle = {
+        let mut guard = STREAMING_HANDLE
+            .lock()
+            .map_err(|e| format!("Lock poisoned: {e}"))?;
+        guard.take()
+    };
+
+    if let Some(handle) = handle {
+        handle.cancel.cancel();
+        let _ = handle.task.await;
+        tracing::info!("Streaming session stopped");
+    }
+
     STREAMING_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
-    tracing::info!("Streaming session stopped");
     Ok(())
 }
 
@@ -301,6 +368,23 @@ pub async fn stop_streaming() -> Result<(), String> {
 #[frb]
 pub fn is_streaming_active() -> bool {
     STREAMING_ACTIVE.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Get the current RTT to the streaming server in milliseconds.
+///
+/// Returns 0 if no streaming session is active.
+#[frb]
+pub fn get_streaming_rtt() -> u64 {
+    let guard = match STREAMING_HANDLE.lock() {
+        Ok(g) => g,
+        Err(_) => return 0,
+    };
+
+    let Some(handle) = guard.as_ref() else {
+        return 0;
+    };
+
+    handle.connection.stats().path.rtt.as_millis() as u64
 }
 
 /// Send mouse event to remote using KDE mousepad protocol.

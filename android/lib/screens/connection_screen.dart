@@ -3,49 +3,96 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/peer_info.dart';
 import '../providers/connection_provider.dart';
 import '../widgets/peer_list_tile.dart';
+import '../rust_api_bridge.dart';
 
-class ConnectionScreen extends ConsumerWidget {
+class ConnectionScreen extends ConsumerStatefulWidget {
   const ConnectionScreen({super.key});
 
-  Future<void> _refreshPeers(WidgetRef ref) async {
-    // TODO: Wire up to Rust FFI get_peers()
-    // Simulated peers for development
-    final simulatedPeers = [
-      const PeerInfo(
-        name: 'arch-desktop',
-        dnsName: 'arch-desktop.tail12345.ts.net',
-        ips: ['100.64.0.1'],
-        online: true,
-      ),
-      const PeerInfo(
-        name: 'work-laptop',
-        dnsName: 'work-laptop.tail12345.ts.net',
-        ips: ['100.64.0.2'],
-        online: true,
-      ),
-      const PeerInfo(
-        name: 'home-server',
-        dnsName: 'home-server.tail12345.ts.net',
-        ips: ['100.64.0.3'],
-        online: false,
-      ),
-    ];
-    ref.read(peersProvider.notifier).setPeers(simulatedPeers);
+  @override
+  ConsumerState<ConnectionScreen> createState() => _ConnectionScreenState();
+}
+
+class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
+  bool _isLoading = false;
+
+  Future<void> _refreshPeers() async {
+    setState(() => _isLoading = true);
+    try {
+      final peers = await rustApi.getPeers();
+      if (mounted) {
+        ref.read(peersProvider.notifier).setPeers(peers);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to fetch peers: $e')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
   }
 
-  void _connectToPeer(WidgetRef ref, PeerInfo peer) {
+  Future<void> _connectToPeer(PeerInfo peer) async {
+    if (peer.ips.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Peer has no IP addresses')),
+        );
+      }
+      return;
+    }
+
     ref.read(selectedPeerProvider.notifier).state = peer;
     ref.read(connectionStateProvider.notifier).state = ConnectionState.connecting;
 
-    // TODO: Wire up to Rust FFI connect_to_peer()
-    // Simulate connection
-    Future.delayed(const Duration(seconds: 2), () {
-      ref.read(connectionStateProvider.notifier).state = ConnectionState.connected;
-    });
+    try {
+      final address = peer.ips.first;
+      const port = 1716;
+      final state = await rustApi.connectToPeer(address, port);
+
+      if (mounted) {
+        switch (state) {
+          case rust_api_bridge.ConnectionState.connected:
+            ref.read(connectionStateProvider.notifier).state = ConnectionState.connected;
+            // Navigate to remote desktop screen
+            Navigator.of(context).pushNamed(
+              '/remote',
+              arguments: {'address': address, 'port': port},
+            );
+          case rust_api_bridge.ConnectionState.connecting:
+            ref.read(connectionStateProvider.notifier).state = ConnectionState.connecting;
+          case rust_api_bridge.ConnectionState.error:
+            ref.read(connectionStateProvider.notifier).state = ConnectionState.error;
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Failed to connect to peer')),
+              );
+            }
+          case rust_api_bridge.ConnectionState.disconnected:
+            ref.read(connectionStateProvider.notifier).state = ConnectionState.disconnected;
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ref.read(connectionStateProvider.notifier).state = ConnectionState.error;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Connection error: $e')),
+        );
+      }
+    }
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  void initState() {
+    super.initState();
+    _refreshPeers();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final peers = ref.watch(peersProvider);
     final connectionState = ref.watch(connectionStateProvider);
 
@@ -53,9 +100,18 @@ class ConnectionScreen extends ConsumerWidget {
       appBar: AppBar(
         title: const Text('Linux Link'),
         actions: [
+          if (_isLoading)
+            const Padding(
+              padding: EdgeInsets.all(12.0),
+              child: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
           IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: () => _refreshPeers(ref),
+            onPressed: _isLoading ? null : () => _refreshPeers(),
             tooltip: 'Refresh peers',
           ),
         ],
@@ -127,8 +183,17 @@ class ConnectionScreen extends ConsumerWidget {
                         ),
                         const SizedBox(height: 16),
                         FilledButton.icon(
-                          onPressed: () => _refreshPeers(ref),
-                          icon: const Icon(Icons.refresh),
+                          onPressed: _isLoading ? null : _refreshPeers,
+                          icon: _isLoading
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : const Icon(Icons.refresh),
                           label: const Text('Scan for peers'),
                         ),
                       ],
@@ -141,7 +206,7 @@ class ConnectionScreen extends ConsumerWidget {
                       return PeerListTile(
                         peer: peer,
                         onTap: peer.online
-                            ? () => _connectToPeer(ref, peer)
+                            ? () => _connectToPeer(peer)
                             : null,
                       );
                     },
