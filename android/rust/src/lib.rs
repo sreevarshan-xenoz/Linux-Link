@@ -13,6 +13,12 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 
+/// Maximum number of H.264 frames to drain per `receive_frames` call.
+const MAX_FRAMES_PER_RECEIVE: usize = 16;
+
+/// Poll interval when waiting for frames to arrive on the channel.
+const FRAME_POLL_INTERVAL_MS: u64 = 2;
+
 /// Initialize the Linux Link backend
 #[frb(init)]
 pub fn init_app() {
@@ -290,6 +296,10 @@ static STREAMING_RTT_US: std::sync::atomic::AtomicU64 = std::sync::atomic::Atomi
 static STREAMING_HANDLE: Mutex<Option<StreamingHandle>> = Mutex::new(None);
 
 /// Frame data transfer object for Flutter/MediaCodec.
+///
+/// Note: No `timestamp` field is included because a monotonic `Instant` cannot
+/// cross the FFI boundary in a meaningful way. Flutter should use `sequence`
+/// for ordering and assign presentation timestamps via MediaCodec.
 #[frb]
 pub struct FrameDto {
     /// H.264 NAL unit data (including start codes).
@@ -306,6 +316,8 @@ struct StreamingHandle {
     cancel: tokio_util::sync::CancellationToken,
     /// JoinHandle of the background `client.start()` task.
     task: tokio::task::JoinHandle<()>,
+    /// JoinHandle of the background RTT polling task.
+    rtt_task: tokio::task::JoinHandle<()>,
     /// Receiver so the consumer (Flutter) can receive packets.
     /// Accessed via FFI bridge for MediaCodec integration.
     #[allow(dead_code)]
@@ -341,6 +353,28 @@ pub async fn connect_streaming(address: String, port: u16) -> Result<(), String>
         tracing::info!("Streaming client start loop exited");
     });
 
+    // Spawn a task to periodically poll RTT and update the atomic.
+    // The task shares the same `CancellationToken` as the streaming client so it
+    // exits cleanly when `stop_streaming()` is called.
+    let rtt_cancel = cancel.clone();
+    let rtt_connection = connection.clone();
+    let rtt_task = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(1));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                _ = rtt_cancel.cancelled() => {
+                    tracing::info!("RTT polling task cancelled");
+                    break;
+                }
+                _ = interval.tick() => {
+                    let rtt_us = rtt_connection.stats().path.rtt.as_micros() as u64;
+                    update_streaming_rtt(rtt_us);
+                }
+            }
+        }
+    });
+
     // Store the handle
     let mut handle = STREAMING_HANDLE
         .lock()
@@ -348,19 +382,8 @@ pub async fn connect_streaming(address: String, port: u16) -> Result<(), String>
     *handle = Some(StreamingHandle {
         cancel: client_cancel,
         task,
+        rtt_task,
         packet_rx,
-    });
-
-    // Spawn a task to periodically poll RTT and update the atomic
-    let rtt_connection = connection.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(1));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        loop {
-            interval.tick().await;
-            let rtt_us = rtt_connection.stats().path.rtt.as_micros() as u64;
-            update_streaming_rtt(rtt_us);
-        }
     });
 
     STREAMING_ACTIVE.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -381,6 +404,7 @@ pub async fn stop_streaming() -> Result<(), String> {
     if let Some(handle) = handle {
         handle.cancel.cancel();
         let _ = handle.task.await;
+        let _ = handle.rtt_task.await;
         tracing::info!("Streaming session stopped");
     }
 
@@ -395,7 +419,7 @@ pub fn is_streaming_active() -> bool {
 }
 
 /// Update the global streaming RTT value (called from the stats task).
-pub fn update_streaming_rtt(rtt_us: u64) {
+pub(crate) fn update_streaming_rtt(rtt_us: u64) {
     STREAMING_RTT_US.store(rtt_us, std::sync::atomic::Ordering::Relaxed);
 }
 
@@ -418,8 +442,8 @@ pub async fn receive_frames(timeout_ms: u64) -> Vec<FrameDto> {
     use tokio::sync::mpsc::error::TryRecvError;
 
     let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
-    let poll_interval = Duration::from_millis(2);
-    let mut frames = Vec::with_capacity(16);
+    let poll_interval = Duration::from_millis(FRAME_POLL_INTERVAL_MS);
+    let mut frames = Vec::with_capacity(MAX_FRAMES_PER_RECEIVE);
 
     loop {
         // Try to drain frames (short-lived lock)
@@ -440,7 +464,7 @@ pub async fn receive_frames(timeout_ms: u64) -> Vec<FrameDto> {
                             is_keyframe: packet.is_keyframe,
                             sequence: packet.sequence,
                         });
-                        if frames.len() >= 16 {
+                        if frames.len() >= MAX_FRAMES_PER_RECEIVE {
                             return frames;
                         }
                     }
