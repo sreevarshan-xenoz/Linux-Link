@@ -8,11 +8,12 @@
 
 **Estimated Timeline:** 4-6 months for MVP
 
-**Execution Snapshot (April 8, 2026):**
+**Execution Snapshot (April 10, 2026):**
 - Phase 0 completed (workspace scaffold, CI, docs, build/test baseline)
 - Phase 1 completed (CLI + handshake + discovery watch + two-device discovery)
 - Phase 2 completed (KDE protocol runtime, all 5 plugins with real behavior, KDE Connect TCP packet loop)
 - Phase 3 completed (full streaming pipeline: PipeWire capture → persistent FFmpeg encoder → QUIC transport → adaptive bitrate; 50 integration tests)
+- Phase 4 foundation completed (Android Rust FFI: clipboard, file transfer, mouse/keyboard input, streaming stubs; Flutter app scaffold: 4 screens, Riverpod state, GoRouter, Android native shell)
 - Quality gates pass (`cargo fmt`, `cargo check`, `cargo clippy -D warnings`, `cargo test` — 50 tests)
 
 ---
@@ -1789,7 +1790,54 @@ Full code documentation with Rustdoc comments is available in the source files.
 
 ### Phase 4: Android Client Polish (Week 19-26)
 
-[Continuing with similar detail for remaining phases...]
+**Status: FOUNDATION COMPLETE (April 10, 2026)**
+
+#### ✅ Completed: Android Client Scaffold
+
+The Phase 4 Android client foundation is fully scaffolded with all structural components in place.
+
+**What's Implemented:**
+
+| Component | Location | Status | Notes |
+|-----------|----------|--------|-------|
+| **Flutter App Entry** | `android/lib/main.dart` | ✅ Complete | GoRouter (`/`, `/remote`, `/files`, `/settings`), Material 3 dark theme, ProviderScope |
+| **Peer Model** | `android/lib/models/peer_info.dart` | ✅ Complete | PeerInfo with `toJson`/`fromJson` |
+| **Connection Provider** | `android/lib/providers/connection_provider.dart` | ✅ Complete | Riverpod: connectionStateProvider, peersProvider, selectedPeerProvider |
+| **Streaming Provider** | `android/lib/providers/streaming_provider.dart` | ✅ Complete | isStreamingProvider, latencyProvider |
+| **Connection Screen** | `android/lib/screens/connection_screen.dart` | ✅ Complete | Peer list, refresh, empty state, connect flow |
+| **Remote Desktop Screen** | `android/lib/screens/remote_desktop_screen.dart` | ✅ Complete | Texture widget placeholder, GestureDetector (tap/drag/double-tap), overlay controls |
+| **File Browser Screen** | `android/lib/screens/file_browser_screen.dart` | ✅ Complete | Local/Remote tabs, file selection, send button, progress indicator |
+| **Settings Screen** | `android/lib/screens/settings_screen.dart` | ✅ Complete | Tailscale toggle, video quality, input mode, timeout, about section |
+| **Peer List Tile** | `android/lib/widgets/peer_list_tile.dart` | ✅ Complete | Name, IP, green/red online indicator |
+| **Clipboard Service** | `android/lib/services/clipboard_service.dart` | ✅ Complete | Platform clipboard wrapper |
+| **Rust FFI — Clipboard** | `android/rust/src/lib.rs` | ✅ Complete | `send_clipboard` / `get_clipboard` via KDE Connect protocol |
+| **Rust FFI — File Transfer** | `android/rust/src/lib.rs` | ✅ Complete | `send_file` via KDE Share protocol, 64KB chunked streaming |
+| **Rust FFI — Mouse Input** | `android/rust/src/lib.rs` | ✅ Complete | `send_mouse_event` with dx/dy/button/isPressed |
+| **Rust FFI — Keyboard Input** | `android/rust/src/lib.rs` | ✅ Complete | `send_keyboard_event` with text typing + keycode mapping |
+| **Rust FFI — Streaming** | `android/rust/src/lib.rs` | ✅ Stub | `start_streaming` / `stop_streaming` / `is_streaming_active` (state tracking) |
+| **Android Native Shell** | `android/android/` | ✅ Complete | Gradle, manifest, MainActivity, styles, gradle wrapper |
+| **Flutter Config** | `android/pubspec.yaml` | ✅ Complete | All dependencies (Riverpod, go_router, file_picker, etc.) |
+
+**Dependencies Added to `android/rust/Cargo.toml`:**
+- `flutter_rust_bridge` 2.12.0
+- `tokio` (full) — async runtime for TCP operations
+- `serde_json` 1 — JSON serialization for KDE packets
+- `tracing-subscriber` 0.3 with env-filter — Android logging
+
+**Quality Gates:**
+- `cargo fmt`: ✅ Pass
+- `cargo clippy -D warnings`: ✅ Pass
+- `cargo test`: ✅ 50 tests pass (47 core + 3 server)
+- `cargo check --workspace`: ✅ Clean compilation
+
+**Remaining Work:**
+- [ ] FRB code generation (`flutter_rust_bridge_codegen generate`)
+- [ ] Wire Flutter screens to Rust FFI functions (actual invocation of `RustApi.*`)
+- [ ] MediaCodec integration for H.264 video decoding (native Android platform channel)
+- [ ] QUIC stream client for receiving video frames from server
+- [ ] Background service with notifications
+- [ ] Flutter `flutter pub get` + `flutter build apk` verification
+- [ ] Full end-to-end testing on Android device
 
 ### Phase 5: Polish & Extras (Week 25-28)
 
