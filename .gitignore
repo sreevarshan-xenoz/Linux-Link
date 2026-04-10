@@ -119,6 +119,9 @@ dmypy.json
 .cxx
 local.properties
 
+# Flutter Android lib (exclude from generic lib/ pattern)
+!android/lib/
+
 # Logs
 audit.log
 *.log
