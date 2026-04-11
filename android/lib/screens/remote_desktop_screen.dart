@@ -27,6 +27,8 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
   bool _isFullscreen = false;
   bool _showControls = true;
   Timer? _streamingCheckTimer;
+  Timer? _frameTimer;
+  Timer? _latencyTimer;
 
   @override
   void initState() {
@@ -34,12 +36,18 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
     _initVideoDecoder();
     _startStreaming();
     _startStreamingCheck();
+    _startFramePolling();
+    _startLatencyPolling();
   }
 
   @override
   void dispose() {
     _streamingCheckTimer?.cancel();
     _streamingCheckTimer = null;
+    _frameTimer?.cancel();
+    _frameTimer = null;
+    _latencyTimer?.cancel();
+    _latencyTimer = null;
     VideoPlayerService.dispose().catchError((e) => debugPrint('Video dispose error: $e'));
     super.dispose();
   }
@@ -78,6 +86,32 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
         }
       },
     );
+  }
+
+  /// Poll the Rust backend for H.264 frames and feed them to MediaCodec.
+  void _startFramePolling() {
+    _frameTimer = Timer.periodic(const Duration(milliseconds: 8), (_) async {
+      try {
+        final frames = await bridge.rustApi.receiveFrames(5);
+        if (frames.isNotEmpty) {
+          for (final frame in frames) {
+            await VideoPlayerService.feedFrame(frame.data);
+          }
+        }
+      } catch (e) {
+        debugPrint('Frame polling error: $e');
+      }
+    });
+  }
+
+  /// Poll RTT every 1 second and update the latency provider.
+  void _startLatencyPolling() {
+    _latencyTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      final rttUs = bridge.rustApi.getStreamingRtt();
+      final rttMs = rttUs ~/ 1000;
+      ref.read(latencyProvider.notifier).state = rttMs;
+    });
   }
 
   Future<void> _handleTap(TapUpDetails details) async {
