@@ -11,6 +11,7 @@ pub mod streamer;
 pub mod transport;
 
 pub use bitrate::AdaptiveBitrate;
+pub use client::DEFAULT_STREAMING_PORT;
 pub use client::StreamingClient;
 pub use streamer::StreamingServer;
 

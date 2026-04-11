@@ -1,0 +1,14 @@
+# Linux Link Configuration
+# Copy this file to ~/.config/linux-link/config.toml and customize.
+
+# Control port (KDE Connect compatible)
+control_port = 1716
+
+# QUIC streaming port
+streaming_port = 4716
+
+# Log level: trace, debug, info, warn, error
+log_level = "info"
+
+# Video quality preset: low, balanced, high
+video_quality = "balanced"

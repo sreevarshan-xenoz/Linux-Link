@@ -17,13 +17,21 @@ mod service;
 async fn main() -> Result<()> {
     let cli = cli::Cli::parse();
 
+    // Load configuration first
+    let config = config::Config::load()?;
+
+    // Initialize logging with config log_level
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer())
-        .with(tracing_subscriber::EnvFilter::from_default_env())
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                tracing_subscriber::EnvFilter::try_new(&config.log_level)
+                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
+            }),
+        )
         .init();
 
     tracing::info!("Linux Link Server starting");
-    let config = config::Config::load()?;
 
     match cli.command.unwrap_or(cli::Commands::Start) {
         cli::Commands::Start => service::run(config).await,
