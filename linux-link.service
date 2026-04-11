@@ -1,0 +1,21 @@
+[Unit]
+Description=Linux Link - Remote Desktop over Tailscale
+After=network-online.target tailscaled.service
+Wants=network-online.target
+Requires=tailscaled.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/linux-link start
+Restart=on-failure
+RestartSec=5
+Environment=RUST_LOG=info
+
+# Security hardening
+NoNewPrivileges=false
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/%u/.config/linux-link
+
+[Install]
+WantedBy=multi-user.target

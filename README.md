@@ -119,6 +119,39 @@ cargo run --bin linux-link capabilities
 # App coming soon!
 ```
 
+### systemd Service (Auto-start on Boot)
+
+To have Linux Link start automatically on boot:
+
+1. Build the release binary:
+   ```bash
+   cargo build --release --bin linux-link
+   ```
+
+2. Install the binary:
+   ```bash
+   sudo cp target/release/linux-link /usr/bin/linux-link
+   ```
+
+3. Install the systemd service:
+   ```bash
+   sudo cp linux-link.service /etc/systemd/system/
+   sudo systemctl daemon-reload
+   ```
+
+4. Enable and start the service:
+   ```bash
+   sudo systemctl enable --now linux-link
+   ```
+
+5. Verify it's running:
+   ```bash
+   systemctl status linux-link
+   ```
+
+The service depends on `tailscaled.service` and `network-online.target`.
+Configuration is read from `~/.config/linux-link/config.toml`.
+
 ## Contributing
 
 Linux Link is actively developed and **looking for contributors**! Whether you're into Rust, Flutter, Wayland internals, or just want to help test — all contributions are welcome.
