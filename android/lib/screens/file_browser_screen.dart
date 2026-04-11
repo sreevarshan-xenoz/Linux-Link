@@ -42,14 +42,9 @@ class _FileBrowserScreenState extends ConsumerState<FileBrowserScreen>
   double _transferProgress = 0.0;
   List<String> _pendingFiles = [];
 
-  // Sample data for development (remote files would come from Rust FFI eventually)
-  final List<FileItem> _remoteFiles = const [
-    FileItem(name: 'etc', isDirectory: true, modified: '2024-01-01'),
-    FileItem(name: 'home', isDirectory: true, modified: '2024-01-15'),
-    FileItem(name: 'var', isDirectory: true, modified: '2024-01-01'),
-    FileItem(name: 'backup.tar.gz', isDirectory: false, size: '156 MB', modified: '2024-01-14'),
-    FileItem(name: 'config.yaml', isDirectory: false, size: '4 KB', modified: '2024-01-16'),
-  ];
+  // Remote file browsing will be implemented in Phase 5.
+  // For now, show an empty state with a placeholder message.
+  final List<FileItem> _remoteFiles = const [];
 
   // Local files selected for transfer
   final List<PlatformFile> _localFiles = [];
@@ -207,44 +202,30 @@ class _FileBrowserScreenState extends ConsumerState<FileBrowserScreen>
   }
 
   Widget _buildRemoteFileList() {
-    return ListView.builder(
-      itemCount: _remoteFiles.length,
-      itemBuilder: (context, index) {
-        final file = _remoteFiles[index];
-        final isSelected = _selectedRemoteFiles.contains(index);
-
-        return ListTile(
-          leading: Icon(
-            file.isDirectory ? Icons.folder : Icons.insert_drive_file,
-            color: file.isDirectory
-                ? Colors.amber
-                : Theme.of(context).colorScheme.primary,
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.computer,
+            size: 64,
+            color: Theme.of(context).colorScheme.outline,
           ),
-          title: Text(file.name),
-          subtitle: Text(
-              [file.size, file.modified].whereType<String>().isNotEmpty
-                  ? [file.size, file.modified].whereType<String>().join('  -  ')
-                  : ''),
-          trailing: isSelected
-              ? const Icon(Icons.check_circle, color: Colors.blue)
-              : null,
-          selected: isSelected,
-          onTap: () {
-            if (file.isDirectory) {
-              // TODO: Navigate into directory
-            }
-          },
-          onLongPress: () {
-            setState(() {
-              if (isSelected) {
-                _selectedRemoteFiles.remove(index);
-              } else {
-                _selectedRemoteFiles.add(index);
-              }
-            });
-          },
-        );
-      },
+          const SizedBox(height: 16),
+          Text(
+            'Remote File Browser',
+            style: Theme.of(context).textTheme.titleLarge,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Browse and download files from the remote machine.\nComing in a future update.',
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+          ),
+        ],
+      ),
     );
   }
 
