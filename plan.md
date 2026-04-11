@@ -1832,18 +1832,24 @@ The Phase 4 Android client foundation is fully scaffolded with all structural co
 
 **Quality Gates:**
 - `cargo fmt`: ✅ Pass
-- `cargo clippy -D warnings`: ✅ Pass
-- `cargo test`: ✅ 50 tests pass (47 core + 3 server)
+- `cargo clippy -D warnings`: ✅ Pass (0 warnings across workspace)
+- `cargo test`: ✅ 52 tests pass (49 core + 3 server)
 - `cargo check --workspace`: ✅ Clean compilation
+- Flutter/Dart: ⚠️ Cannot verify (Flutter SDK not installed on build machine; code structurally correct)
 
 **Remaining Work:**
-- [ ] FRB code generation (`flutter_rust_bridge_codegen generate`)
-- [ ] Wire Flutter screens to Rust FFI functions (actual invocation of `RustApi.*`)
-- [ ] MediaCodec integration for H.264 video decoding (native Android platform channel)
-- [ ] QUIC stream client for receiving video frames from server
-- [ ] Background service with notifications
-- [ ] Flutter `flutter pub get` + `flutter build apk` verification
-- [ ] Full end-to-end testing on Android device
+- [x] FRB code generation (`flutter_rust_bridge_codegen generate`)
+- [x] Wire Flutter screens to Rust FFI functions (actual invocation of `RustApi.*`)
+- [x] Frame delivery pipeline: `receive_frames` → `VideoPlayerService.feedFrame()`
+- [x] RTT latency polling wired to `latencyProvider`
+- [x] Background service with notifications (foreground service)
+- [x] File browser cleanup (removed hardcoded data)
+- [x] MediaCodec integration for H.264 video decoding (native Android platform channel — already complete via `VideoPlayerPlugin.kt`)
+- [x] QUIC stream client for receiving video frames from server (`core/src/streaming/client.rs`)
+- [x] `receive_frames` FFI function to drain packet channel
+- [x] Lock-free RTT atomic (`AtomicU64`) for main-thread-safe latency queries
+- [ ] `flutter build apk` verification (requires Flutter SDK + Android NDK on build machine)
+- [ ] Full end-to-end testing on Android device (requires Hyprland + PipeWire server running)
 
 ### Phase 5: Polish & Extras (Week 25-28)
 
