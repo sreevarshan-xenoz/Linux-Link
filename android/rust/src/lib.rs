@@ -7,7 +7,8 @@ use linux_link_core::protocol::connection::ConnectionManager;
 use linux_link_core::protocol::kdeconnect::{DeviceSender, NetworkPacket, TcpDeviceSender};
 use linux_link_core::streaming::StreamingClient;
 use linux_link_core::tailscale::TailscaleClient;
-use std::sync::Mutex;
+use tokio::sync::Mutex;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 // Initialize logging for Android
@@ -17,9 +18,6 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 
 /// Maximum number of H.264 frames to drain per `receive_frames` call.
 const MAX_FRAMES_PER_RECEIVE: usize = 16;
-
-/// Poll interval when waiting for frames to arrive on the channel.
-const FRAME_POLL_INTERVAL_MS: u64 = 2;
 
 /// Initialize the Linux Link backend
 #[frb(init)]
@@ -295,7 +293,7 @@ static STREAMING_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::Atom
 static STREAMING_RTT_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Global handle for the active streaming client session.
-static STREAMING_HANDLE: Mutex<Option<StreamingHandle>> = Mutex::new(None);
+static STREAMING_HANDLE: LazyLock<Mutex<Option<StreamingHandle>>> = LazyLock::new(|| Mutex::new(None));
 
 /// Frame data transfer object for Flutter/MediaCodec.
 ///
@@ -378,9 +376,9 @@ pub async fn connect_streaming(address: String, port: u16) -> Result<(), String>
     });
 
     // Store the handle
-    let mut handle = STREAMING_HANDLE
+    let mut handle = (*STREAMING_HANDLE)
         .lock()
-        .map_err(|e| format!("Lock poisoned: {e}"))?;
+        .await;
     *handle = Some(StreamingHandle {
         cancel: client_cancel,
         task,
@@ -397,9 +395,7 @@ pub async fn connect_streaming(address: String, port: u16) -> Result<(), String>
 #[frb]
 pub async fn stop_streaming() -> Result<(), String> {
     let handle = {
-        let mut guard = STREAMING_HANDLE
-            .lock()
-            .map_err(|e| format!("Lock poisoned: {e}"))?;
+        let mut guard = (*STREAMING_HANDLE).lock().await;
         guard.take()
     };
 
@@ -436,51 +432,50 @@ pub fn get_streaming_rtt() -> u64 {
 
 /// Receive queued H.264 frames from the streaming client.
 ///
-/// Polls the frame receiver channel with the given timeout (in milliseconds).
-/// Returns up to 16 frames per call. Returns an empty list if no streaming
-/// session is active or no frames are available.
+/// Waits for the first frame with a timeout, then drains up to 15 additional
+/// frames from the channel. Returns empty if no streaming session is active
+/// or the timeout expires.
 #[frb]
 pub async fn receive_frames(timeout_ms: u64) -> Vec<FrameDto> {
-    use tokio::sync::mpsc::error::TryRecvError;
-
     let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
-    let poll_interval = Duration::from_millis(FRAME_POLL_INTERVAL_MS);
     let mut frames = Vec::with_capacity(MAX_FRAMES_PER_RECEIVE);
 
     loop {
-        // Try to drain frames (short-lived lock)
+        // Scope the lock so it's released before we sleep
         {
-            let mut guard = match STREAMING_HANDLE.lock() {
-                Ok(g) => g,
-                Err(_) => return frames,
-            };
+            let mut guard = (*STREAMING_HANDLE).lock().await;
             let Some(handle) = guard.as_mut() else {
                 return frames;
             };
 
-            loop {
-                match handle.packet_rx.try_recv() {
-                    Ok(packet) => {
-                        frames.push(FrameDto {
-                            data: packet.data,
-                            is_keyframe: packet.is_keyframe,
-                            sequence: packet.sequence,
-                        });
-                        if frames.len() >= MAX_FRAMES_PER_RECEIVE {
-                            return frames;
+            // Wait for the first frame with timeout
+            match tokio::time::timeout_at(deadline, handle.packet_rx.recv()).await {
+                Ok(Some(packet)) => {
+                    frames.push(FrameDto {
+                        data: packet.data,
+                        is_keyframe: packet.is_keyframe,
+                        sequence: packet.sequence,
+                    });
+                    // Drain remaining frames without blocking
+                    while frames.len() < MAX_FRAMES_PER_RECEIVE {
+                        match handle.packet_rx.try_recv() {
+                            Ok(packet) => {
+                                frames.push(FrameDto {
+                                    data: packet.data,
+                                    is_keyframe: packet.is_keyframe,
+                                    sequence: packet.sequence,
+                                });
+                            }
+                            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+                            | Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
                         }
                     }
-                    Err(TryRecvError::Empty) => break,
-                    Err(TryRecvError::Disconnected) => return frames,
+                    return frames;
                 }
+                Ok(None) => return frames, // channel disconnected
+                Err(_) => return frames,   // timeout expired
             }
         }
-
-        // No frames available yet — wait and retry
-        if tokio::time::Instant::now() >= deadline {
-            return frames;
-        }
-        tokio::time::sleep(poll_interval).await;
     }
 }
 
