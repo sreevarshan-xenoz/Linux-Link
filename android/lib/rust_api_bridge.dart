@@ -6,6 +6,7 @@ library rust_api_bridge;
 import 'frb_generated.dart';
 import 'lib.dart' as frb;
 import 'models/peer_info.dart';
+import 'models/remote_file.dart';
 import 'providers/connection_provider.dart';
 
 /// Re-export the provider's ConnectionState so screens can use
@@ -72,6 +73,27 @@ class _RustApiBridge {
   /// Send file to peer using KDE Share protocol.
   Future<void> sendFile(String address, int port, String filePath) async {
     await frb.sendFile(address: address, port: port, filePath: filePath);
+  }
+
+  /// List files in a remote directory.
+  Future<List<RemoteFile>> listRemoteFiles(
+    String address,
+    int port,
+    String remotePath,
+  ) async {
+    final dtos = await frb.listRemoteFiles(
+      address: address,
+      port: port,
+      remotePath: remotePath,
+    );
+    return dtos
+        .map((dto) => RemoteFile(
+              name: dto.name,
+              isDirectory: dto.isDirectory,
+              size: dto.size.toInt(),
+              modified: dto.modified.toInt(),
+            ))
+        .toList();
   }
 
   /// Start receiving remote screen streaming.
