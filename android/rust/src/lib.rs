@@ -391,6 +391,19 @@ pub struct RemoteFileDto {
     pub modified: u64,
 }
 
+/// Streaming statistics for display in Flutter.
+#[frb]
+pub struct StreamingStatsDto {
+    /// Current framerate in fps.
+    pub fps: f64,
+    /// Current bitrate in kbps.
+    pub bitrate_kbps: u64,
+    /// End-to-end latency in milliseconds.
+    pub e2e_latency_ms: u64,
+    /// Frames dropped count.
+    pub frame_drops: u64,
+}
+
 /// Holds the live streaming client and its packet receiver.
 struct StreamingHandle {
     /// Token that can be used to cancel the receive loop.
@@ -512,6 +525,23 @@ pub(crate) fn update_streaming_rtt(rtt_us: u64) {
 #[frb(sync)]
 pub fn get_streaming_rtt() -> u64 {
     STREAMING_RTT_US.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Get detailed streaming session statistics.
+///
+/// Returns default (zero) values if no streaming session is active.
+#[frb(sync)]
+pub fn get_streaming_stats() -> StreamingStatsDto {
+    // For now, report RTT as the lower bound of e2e latency.
+    // FPS, bitrate, and frame_drops tracking requires counters in the handle (deferred).
+    let rtt_ms = STREAMING_RTT_US.load(std::sync::atomic::Ordering::Relaxed) / 1000;
+
+    StreamingStatsDto {
+        fps: 0.0,
+        bitrate_kbps: 0,
+        e2e_latency_ms: rtt_ms,
+        frame_drops: 0,
+    }
 }
 
 /// Receive queued H.264 frames from the streaming client.

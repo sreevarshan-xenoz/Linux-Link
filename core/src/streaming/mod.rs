@@ -113,6 +113,19 @@ impl Default for StreamingConfig {
     }
 }
 
+/// Runtime statistics for an active streaming session.
+#[derive(Debug, Clone, Default)]
+pub struct StreamingStats {
+    /// Current output framerate in frames per second.
+    pub fps: f64,
+    /// Current encoder bitrate in kilobits per second.
+    pub bitrate_kbps: u64,
+    /// End-to-end latency from capture to render in milliseconds.
+    pub e2e_latency_ms: u64,
+    /// Frames dropped due to channel full.
+    pub frame_drops: u64,
+}
+
 /// A captured video frame with metadata
 #[derive(Debug)]
 pub struct VideoFrame {
