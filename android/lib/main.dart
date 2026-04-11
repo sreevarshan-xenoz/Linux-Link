@@ -6,6 +6,7 @@ import 'screens/connection_screen.dart';
 import 'screens/remote_desktop_screen.dart';
 import 'screens/file_browser_screen.dart';
 import 'screens/settings_screen.dart';
+import 'services/background_service.dart';
 
 final _router = GoRouter(
   initialLocation: '/',
@@ -46,6 +47,9 @@ void main() async {
 
   // Initialize the Rust backend
   await bridge.rustApi.init();
+
+  // Initialize the Android foreground service
+  await initBackgroundService();
 
   runApp(
     const ProviderScope(

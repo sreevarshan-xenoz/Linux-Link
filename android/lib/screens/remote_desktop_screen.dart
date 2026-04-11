@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/connection_provider.dart' as conn;
 import '../providers/streaming_provider.dart';
 import '../rust_api_bridge.dart' as bridge;
+import '../services/background_service.dart';
 import '../services/video_player_service.dart';
 
 class RemoteDesktopScreen extends ConsumerStatefulWidget {
@@ -65,6 +66,7 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
       await bridge.rustApi.startStreaming(widget.address, widget.port);
       if (mounted) {
         ref.read(isStreamingProvider.notifier).state = true;
+        await startForegroundService();
       }
     } catch (e) {
       if (mounted) {
@@ -209,6 +211,7 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
   Future<void> _disconnect() async {
     try {
       await bridge.rustApi.stopStreaming();
+      await stopForegroundService();
     } catch (e) {
       debugPrint('Stop streaming error: $e');
     }
