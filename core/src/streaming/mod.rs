@@ -55,6 +55,50 @@ pub enum EncoderPreset {
     Slow,
 }
 
+/// User-facing video quality preset with concrete encoding parameters.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub enum VideoQualityPreset {
+    /// 720p, 2 Mbps, veryfast encoder preset
+    Low,
+    /// 1080p, 5 Mbps, superfast encoder preset
+    #[default]
+    Balanced,
+    /// 1080p, 10 Mbps, medium encoder preset
+    High,
+}
+
+impl VideoQualityPreset {
+    /// Convert to a `StreamingConfig` with appropriate parameters.
+    pub fn to_streaming_config(&self) -> StreamingConfig {
+        match self {
+            VideoQualityPreset::Low => StreamingConfig {
+                width: 1280,
+                height: 720,
+                fps: 30,
+                bitrate_bps: 2_000_000,
+                preset: EncoderPreset::VeryFast,
+                ..StreamingConfig::default()
+            },
+            VideoQualityPreset::Balanced => StreamingConfig {
+                width: 1920,
+                height: 1080,
+                fps: 60,
+                bitrate_bps: 5_000_000,
+                preset: EncoderPreset::SuperFast,
+                ..StreamingConfig::default()
+            },
+            VideoQualityPreset::High => StreamingConfig {
+                width: 1920,
+                height: 1080,
+                fps: 60,
+                bitrate_bps: 10_000_000,
+                preset: EncoderPreset::Medium,
+                ..StreamingConfig::default()
+            },
+        }
+    }
+}
+
 impl Default for StreamingConfig {
     fn default() -> Self {
         Self {
