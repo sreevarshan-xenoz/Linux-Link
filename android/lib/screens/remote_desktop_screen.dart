@@ -93,6 +93,7 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
   /// Poll the Rust backend for H.264 frames and feed them to MediaCodec.
   void _startFramePolling() {
     _frameTimer = Timer.periodic(const Duration(milliseconds: 8), (_) async {
+      if (!mounted) return;
       try {
         final frames = await bridge.rustApi.receiveFrames(5);
         if (frames.isNotEmpty) {

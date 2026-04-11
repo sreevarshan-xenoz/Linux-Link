@@ -285,9 +285,6 @@ pub async fn send_file(address: String, port: u16, file_path: String) -> Result<
     Ok(())
 }
 
-/// Streaming session state
-static STREAMING_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
 /// Last known RTT in microseconds, updated by the streaming stats task.
 /// Read atomically from the main thread (no mutex lock needed).
 static STREAMING_RTT_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -385,7 +382,6 @@ pub async fn connect_streaming(address: String, port: u16) -> Result<(), String>
         packet_rx,
     });
 
-    STREAMING_ACTIVE.store(true, std::sync::atomic::Ordering::SeqCst);
     tracing::info!("Streaming session connected to {addr}");
     Ok(())
 }
@@ -400,19 +396,25 @@ pub async fn stop_streaming() -> Result<(), String> {
 
     if let Some(handle) = handle {
         handle.cancel.cancel();
-        let _ = handle.task.await;
-        let _ = handle.rtt_task.await;
+        if let Err(e) = handle.task.await {
+            tracing::warn!("Streaming client task exited with error: {e}");
+        }
+        if let Err(e) = handle.rtt_task.await {
+            tracing::warn!("RTT polled task exited with error: {e}");
+        }
         tracing::info!("Streaming session stopped");
     }
 
-    STREAMING_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
     Ok(())
 }
 
-/// Check if streaming is active
-#[frb]
+/// Check if streaming is active by inspecting the streaming handle.
+#[frb(sync)]
 pub fn is_streaming_active() -> bool {
-    STREAMING_ACTIVE.load(std::sync::atomic::Ordering::SeqCst)
+    STREAMING_HANDLE
+        .try_lock()
+        .map(|guard| guard.is_some())
+        .unwrap_or(false)
 }
 
 /// Update the global streaming RTT value (called from the stats task).

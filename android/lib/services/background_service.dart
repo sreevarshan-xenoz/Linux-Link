@@ -31,6 +31,8 @@ Future<void> startForegroundService() async {
 Future<void> stopForegroundService() async {
   final service = FlutterBackgroundService();
   service.invoke('stop');
+  // Give Android time to process the stop request
+  await Future.delayed(const Duration(milliseconds: 200));
 }
 
 @pragma('vm:entry-point')
