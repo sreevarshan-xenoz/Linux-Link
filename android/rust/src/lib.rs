@@ -285,6 +285,76 @@ pub async fn send_file(address: String, port: u16, file_path: String) -> Result<
     Ok(())
 }
 
+/// List files in a remote directory using the file browse protocol.
+#[frb]
+pub async fn list_remote_files(
+    address: String,
+    port: u16,
+    remote_path: String,
+) -> Result<Vec<RemoteFileDto>, String> {
+    let conn_mgr = ConnectionManager::new(Duration::from_secs(10));
+    let stream = conn_mgr
+        .connect(&address, port)
+        .await
+        .map_err(|e: anyhow::Error| e.to_string())?;
+
+    let (reader, writer) = tokio::io::split(stream);
+    let sender = TcpDeviceSender::new(writer);
+
+    // Send file browse request
+    let request =
+        NetworkPacket::new("kdeconnect.filebrowse.request").with_body(serde_json::json!({
+            "path": remote_path,
+        }));
+    sender
+        .send_packet(&request)
+        .await
+        .map_err(|e: anyhow::Error| e.to_string())?;
+
+    // Read response
+    let mut lines = tokio::io::BufReader::new(reader).lines();
+
+    match tokio::time::timeout(Duration::from_secs(10), lines.next_line()).await {
+        Ok(Ok(Some(line))) => {
+            let packet =
+                NetworkPacket::from_wire(&line).map_err(|e: anyhow::Error| e.to_string())?;
+
+            if packet.packet_type != "kdeconnect.filebrowse.response" {
+                return Err(format!("Unexpected packet type: {}", packet.packet_type));
+            }
+
+            // Check for error
+            if let Some(error) = packet.body.get("error").and_then(|v| v.as_str()) {
+                return Err(error.to_string());
+            }
+
+            // Parse file list
+            let files = packet
+                .body
+                .get("files")
+                .and_then(|v| v.as_array())
+                .ok_or_else(|| "Missing 'files' in response".to_string())?;
+
+            let result: Vec<RemoteFileDto> = files
+                .iter()
+                .filter_map(|f| {
+                    Some(RemoteFileDto {
+                        name: f.get("name")?.as_str()?.to_string(),
+                        is_directory: f.get("isDirectory")?.as_bool()?,
+                        size: f.get("size")?.as_u64()?,
+                        modified: f.get("modified")?.as_u64()?,
+                    })
+                })
+                .collect();
+
+            Ok(result)
+        }
+        Ok(Ok(None)) => Err("Connection closed before response".to_string()),
+        Ok(Err(e)) => Err(format!("Read error: {}", e)),
+        Err(_) => Err("Timeout waiting for file list response".to_string()),
+    }
+}
+
 /// Last known RTT in microseconds, updated by the streaming stats task.
 /// Read atomically from the main thread (no mutex lock needed).
 static STREAMING_RTT_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -306,6 +376,19 @@ pub struct FrameDto {
     pub is_keyframe: bool,
     /// Sequence number for ordering.
     pub sequence: u64,
+}
+
+/// Remote file metadata for the file browser.
+#[frb]
+pub struct RemoteFileDto {
+    /// File or directory name.
+    pub name: String,
+    /// Whether this is a directory.
+    pub is_directory: bool,
+    /// File size in bytes (0 for directories).
+    pub size: u64,
+    /// Last modified time as Unix timestamp (seconds since epoch).
+    pub modified: u64,
 }
 
 /// Holds the live streaming client and its packet receiver.
