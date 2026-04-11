@@ -7,9 +7,9 @@ use linux_link_core::protocol::connection::ConnectionManager;
 use linux_link_core::protocol::kdeconnect::{DeviceSender, NetworkPacket, TcpDeviceSender};
 use linux_link_core::streaming::StreamingClient;
 use linux_link_core::tailscale::TailscaleClient;
-use tokio::sync::Mutex;
 use std::sync::LazyLock;
 use std::time::Duration;
+use tokio::sync::Mutex;
 
 // Initialize logging for Android
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -293,7 +293,8 @@ static STREAMING_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::Atom
 static STREAMING_RTT_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Global handle for the active streaming client session.
-static STREAMING_HANDLE: LazyLock<Mutex<Option<StreamingHandle>>> = LazyLock::new(|| Mutex::new(None));
+static STREAMING_HANDLE: LazyLock<Mutex<Option<StreamingHandle>>> =
+    LazyLock::new(|| Mutex::new(None));
 
 /// Frame data transfer object for Flutter/MediaCodec.
 ///
@@ -376,9 +377,7 @@ pub async fn connect_streaming(address: String, port: u16) -> Result<(), String>
     });
 
     // Store the handle
-    let mut handle = (*STREAMING_HANDLE)
-        .lock()
-        .await;
+    let mut handle = (*STREAMING_HANDLE).lock().await;
     *handle = Some(StreamingHandle {
         cancel: client_cancel,
         task,
@@ -440,41 +439,39 @@ pub async fn receive_frames(timeout_ms: u64) -> Vec<FrameDto> {
     let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
     let mut frames = Vec::with_capacity(MAX_FRAMES_PER_RECEIVE);
 
-    loop {
-        // Scope the lock so it's released before we sleep
-        {
-            let mut guard = (*STREAMING_HANDLE).lock().await;
-            let Some(handle) = guard.as_mut() else {
-                return frames;
-            };
+    // Scope the lock so it's released before we sleep
+    {
+        let mut guard = (*STREAMING_HANDLE).lock().await;
+        let Some(handle) = guard.as_mut() else {
+            return frames;
+        };
 
-            // Wait for the first frame with timeout
-            match tokio::time::timeout_at(deadline, handle.packet_rx.recv()).await {
-                Ok(Some(packet)) => {
-                    frames.push(FrameDto {
-                        data: packet.data,
-                        is_keyframe: packet.is_keyframe,
-                        sequence: packet.sequence,
-                    });
-                    // Drain remaining frames without blocking
-                    while frames.len() < MAX_FRAMES_PER_RECEIVE {
-                        match handle.packet_rx.try_recv() {
-                            Ok(packet) => {
-                                frames.push(FrameDto {
-                                    data: packet.data,
-                                    is_keyframe: packet.is_keyframe,
-                                    sequence: packet.sequence,
-                                });
-                            }
-                            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
-                            | Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
+        // Wait for the first frame with timeout
+        match tokio::time::timeout_at(deadline, handle.packet_rx.recv()).await {
+            Ok(Some(packet)) => {
+                frames.push(FrameDto {
+                    data: packet.data,
+                    is_keyframe: packet.is_keyframe,
+                    sequence: packet.sequence,
+                });
+                // Drain remaining frames without blocking
+                while frames.len() < MAX_FRAMES_PER_RECEIVE {
+                    match handle.packet_rx.try_recv() {
+                        Ok(packet) => {
+                            frames.push(FrameDto {
+                                data: packet.data,
+                                is_keyframe: packet.is_keyframe,
+                                sequence: packet.sequence,
+                            });
                         }
+                        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+                        | Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
                     }
-                    return frames;
                 }
-                Ok(None) => return frames, // channel disconnected
-                Err(_) => return frames,   // timeout expired
+                return frames;
             }
+            Ok(None) => return frames, // channel disconnected
+            Err(_) => return frames,   // timeout expired
         }
     }
 }
