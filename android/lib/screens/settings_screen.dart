@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import '../rust_api_bridge.dart';
+import '../rust_api_bridge.dart' as bridge;
 
 enum VideoQuality { low, medium, high }
 
@@ -59,7 +59,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   Future<void> _loadVersion() async {
     try {
-      final version = await rustApi.version();
+      final version = await bridge.rustApi.version();
       if (mounted) {
         setState(() => _version = version);
       }
@@ -71,7 +71,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   Future<void> _testConnection() async {
     setState(() => _isTestingConnection = true);
     try {
-      final isReady = await rustApi.checkTailscaleStatus();
+      final isReady = await bridge.rustApi.checkTailscaleStatus();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

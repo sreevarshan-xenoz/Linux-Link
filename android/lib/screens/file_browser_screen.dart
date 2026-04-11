@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../rust_api_bridge.dart';
+import '../rust_api_bridge.dart' as bridge;
 
 class FileItem {
   final String name;
@@ -103,7 +103,7 @@ class _FileBrowserScreenState extends ConsumerState<FileBrowserScreen>
 
       try {
         final absPath = File(filePath).absolute.path;
-        await rustApi.sendFile(widget.address, widget.port, absPath);
+        await bridge.rustApi.sendFile(widget.address, widget.port, absPath);
       } catch (e) {
         debugPrint('Failed to send ${file.name}: $e');
       }

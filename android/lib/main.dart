@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'rust_api_bridge.dart';
+import 'rust_api_bridge.dart' as bridge;
 import 'screens/connection_screen.dart';
 import 'screens/remote_desktop_screen.dart';
 import 'screens/file_browser_screen.dart';
@@ -45,7 +45,7 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   // Initialize the Rust backend
-  await rustApi.init();
+  await bridge.rustApi.init();
 
   runApp(
     const ProviderScope(

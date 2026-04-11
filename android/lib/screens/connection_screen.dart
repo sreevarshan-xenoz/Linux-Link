@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/peer_info.dart';
-import '../providers/connection_provider.dart';
+import '../providers/connection_provider.dart' as conn;
 import '../widgets/peer_list_tile.dart';
-import '../rust_api_bridge.dart';
+import '../rust_api_bridge.dart' as bridge;
 
 class ConnectionScreen extends ConsumerStatefulWidget {
   const ConnectionScreen({super.key});
@@ -18,9 +18,9 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
   Future<void> _refreshPeers() async {
     setState(() => _isLoading = true);
     try {
-      final peers = await rustApi.getPeers();
+      final peers = await bridge.rustApi.getPeers();
       if (mounted) {
-        ref.read(peersProvider.notifier).setPeers(peers);
+        ref.read(conn.peersProvider.notifier).setPeers(peers);
       }
     } catch (e) {
       if (mounted) {
@@ -45,39 +45,39 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
       return;
     }
 
-    ref.read(selectedPeerProvider.notifier).state = peer;
-    ref.read(connectionStateProvider.notifier).state = ConnectionState.connecting;
+    ref.read(conn.selectedPeerProvider.notifier).state = peer;
+    ref.read(conn.connectionStateProvider.notifier).state = conn.ConnectionState.connecting;
 
     try {
       final address = peer.ips.first;
       const port = 1716;
-      final state = await rustApi.connectToPeer(address, port);
+      final state = await bridge.rustApi.connectToPeer(address, port);
 
       if (mounted) {
         switch (state) {
-          case rust_api_bridge.ConnectionState.connected:
-            ref.read(connectionStateProvider.notifier).state = ConnectionState.connected;
+          case bridge.ConnectionState.connected:
+            ref.read(conn.connectionStateProvider.notifier).state = conn.ConnectionState.connected;
             // Navigate to remote desktop screen
             Navigator.of(context).pushNamed(
               '/remote',
               arguments: {'address': address, 'port': port},
             );
-          case rust_api_bridge.ConnectionState.connecting:
-            ref.read(connectionStateProvider.notifier).state = ConnectionState.connecting;
-          case rust_api_bridge.ConnectionState.error:
-            ref.read(connectionStateProvider.notifier).state = ConnectionState.error;
+          case bridge.ConnectionState.connecting:
+            ref.read(conn.connectionStateProvider.notifier).state = conn.ConnectionState.connecting;
+          case bridge.ConnectionState.error:
+            ref.read(conn.connectionStateProvider.notifier).state = conn.ConnectionState.error;
             if (mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text('Failed to connect to peer')),
               );
             }
-          case rust_api_bridge.ConnectionState.disconnected:
-            ref.read(connectionStateProvider.notifier).state = ConnectionState.disconnected;
+          case bridge.ConnectionState.disconnected:
+            ref.read(conn.connectionStateProvider.notifier).state = conn.ConnectionState.disconnected;
         }
       }
     } catch (e) {
       if (mounted) {
-        ref.read(connectionStateProvider.notifier).state = ConnectionState.error;
+        ref.read(conn.connectionStateProvider.notifier).state = conn.ConnectionState.error;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Connection error: $e')),
         );
@@ -93,8 +93,8 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final peers = ref.watch(peersProvider);
-    final connectionState = ref.watch(connectionStateProvider);
+    final peers = ref.watch(conn.peersProvider);
+    final connectionState = ref.watch(conn.connectionStateProvider);
 
     return Scaffold(
       appBar: AppBar(
@@ -119,38 +119,38 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
       body: Column(
         children: [
           // Connection status banner
-          if (connectionState != ConnectionState.disconnected)
+          if (connectionState != conn.ConnectionState.disconnected)
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(12),
               color: switch (connectionState) {
-                ConnectionState.connecting => Colors.orange.withOpacity(0.1),
-                ConnectionState.connected => Colors.green.withOpacity(0.1),
-                ConnectionState.error => Colors.red.withOpacity(0.1),
-                ConnectionState.disconnected => Colors.transparent,
+                conn.ConnectionState.connecting => Colors.orange.withOpacity(0.1),
+                conn.ConnectionState.connected => Colors.green.withOpacity(0.1),
+                conn.ConnectionState.error => Colors.red.withOpacity(0.1),
+                conn.ConnectionState.disconnected => Colors.transparent,
               },
               child: Row(
                 children: [
                   switch (connectionState) {
-                    ConnectionState.connecting =>
+                    conn.ConnectionState.connecting =>
                       const SizedBox(
                         width: 16,
                         height: 16,
                         child: CircularProgressIndicator(strokeWidth: 2),
                       ),
-                    ConnectionState.connected =>
+                    conn.ConnectionState.connected =>
                       const Icon(Icons.check_circle, color: Colors.green),
-                    ConnectionState.error =>
+                    conn.ConnectionState.error =>
                       const Icon(Icons.error, color: Colors.red),
-                    ConnectionState.disconnected => const SizedBox.shrink(),
+                    conn.ConnectionState.disconnected => const SizedBox.shrink(),
                   },
                   const SizedBox(width: 8),
                   Text(
                     switch (connectionState) {
-                      ConnectionState.connecting => 'Connecting...',
-                      ConnectionState.connected => 'Connected',
-                      ConnectionState.error => 'Connection error',
-                      ConnectionState.disconnected => '',
+                      conn.ConnectionState.connecting => 'Connecting...',
+                      conn.ConnectionState.connected => 'Connected',
+                      conn.ConnectionState.error => 'Connection error',
+                      conn.ConnectionState.disconnected => '',
                     },
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),

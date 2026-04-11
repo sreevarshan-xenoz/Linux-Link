@@ -3,9 +3,9 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../providers/connection_provider.dart';
+import '../providers/connection_provider.dart' as conn;
 import '../providers/streaming_provider.dart';
-import '../rust_api_bridge.dart';
+import '../rust_api_bridge.dart' as bridge;
 import '../services/video_player_service.dart';
 
 class RemoteDesktopScreen extends ConsumerStatefulWidget {
@@ -54,7 +54,7 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
 
   Future<void> _startStreaming() async {
     try {
-      await rustApi.startStreaming(widget.address, widget.port);
+      await bridge.rustApi.startStreaming(widget.address, widget.port);
       if (mounted) {
         ref.read(isStreamingProvider.notifier).state = true;
       }
@@ -72,7 +72,7 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
       const Duration(seconds: 2),
       (_) async {
         if (!mounted) return;
-        final isActive = await rustApi.isStreamingActive();
+        final isActive = await bridge.rustApi.isStreamingActive();
         if (mounted) {
           ref.read(isStreamingProvider.notifier).state = isActive;
         }
@@ -84,7 +84,7 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
     final x = details.localPosition.dx;
     final y = details.localPosition.dy;
     try {
-      await rustApi.sendMouseEvent(
+      await bridge.rustApi.sendMouseEvent(
         widget.address,
         widget.port,
         x,
@@ -92,7 +92,7 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
         1, // left button
         true,
       );
-      await rustApi.sendMouseEvent(
+      await bridge.rustApi.sendMouseEvent(
         widget.address,
         widget.port,
         x,
@@ -107,7 +107,7 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
 
   Future<void> _handleDragUpdate(DragUpdateDetails details) async {
     try {
-      await rustApi.sendMouseEvent(
+      await bridge.rustApi.sendMouseEvent(
         widget.address,
         widget.port,
         details.delta.dx,
@@ -123,7 +123,7 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
   Future<void> _handleDoubleTap() async {
     try {
       // Double click: two rapid click cycles
-      await rustApi.sendMouseEvent(
+      await bridge.rustApi.sendMouseEvent(
         widget.address,
         widget.port,
         0,
@@ -131,7 +131,7 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
         1,
         true,
       );
-      await rustApi.sendMouseEvent(
+      await bridge.rustApi.sendMouseEvent(
         widget.address,
         widget.port,
         0,
@@ -139,7 +139,7 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
         1,
         false,
       );
-      await rustApi.sendMouseEvent(
+      await bridge.rustApi.sendMouseEvent(
         widget.address,
         widget.port,
         0,
@@ -147,7 +147,7 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
         1,
         true,
       );
-      await rustApi.sendMouseEvent(
+      await bridge.rustApi.sendMouseEvent(
         widget.address,
         widget.port,
         0,
@@ -174,12 +174,12 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
 
   Future<void> _disconnect() async {
     try {
-      await rustApi.stopStreaming();
+      await bridge.rustApi.stopStreaming();
     } catch (e) {
       debugPrint('Stop streaming error: $e');
     }
     if (mounted) {
-      ref.read(connectionStateProvider.notifier).state = ConnectionState.disconnected;
+      ref.read(conn.connectionStateProvider.notifier).state = conn.ConnectionState.disconnected;
       ref.read(isStreamingProvider.notifier).state = false;
       Navigator.of(context).pop();
     }
