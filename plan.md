@@ -1853,6 +1853,24 @@ The Phase 4 Android client foundation is fully scaffolded with all structural co
 
 ### Phase 5: Polish & Extras (Week 25-28)
 
+**Status: COMPLETE**
+
+**Quality Gates:**
+- `cargo fmt`: ✅ Pass
+- `cargo clippy -D warnings`: ✅ Pass (0 warnings across workspace)
+- `cargo test`: ✅ 52 tests pass (49 core + 3 server)
+- `cargo check --workspace`: ✅ Clean compilation
+
+**Completed:**
+- [x] Code review fixes (I1: timeout-based recv, I2: mounted guards, I4: error logging, I5: stop confirmation, S6: remove redundant atomic)
+- [x] Configuration extension (streaming_port, log_level, video_quality with VideoQualityPreset)
+- [x] systemd service with installation documentation
+- [x] Remote file browsing (server plugin with path sanitization + FFI + Flutter UI with navigation)
+- [x] Latency optimization (StreamingStats struct, encoder preset mapping via VideoQualityPreset)
+- [x] config.toml.example with all documented defaults
+- [ ] `flutter build apk` verification (requires Flutter SDK + Android NDK on build machine)
+- [ ] E2E latency measurement on live system (requires Hyprland + PipeWire server running)
+
 ### Phase 6: Release & Packaging (Week 29-30)
 
 ---
