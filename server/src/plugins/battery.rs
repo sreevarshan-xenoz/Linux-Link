@@ -1,5 +1,4 @@
 use linux_link_core::protocol::kdeconnect::{DeviceSender, NetworkPacket, Plugin};
-use serde_json::json;
 
 #[derive(Debug)]
 pub struct BatteryPlugin;
@@ -30,33 +29,52 @@ impl Plugin for BatteryPlugin {
         sender: &dyn DeviceSender,
     ) -> anyhow::Result<()> {
         if packet.packet_type.as_str() == "kdeconnect.battery.request" {
-            let charge = read_battery_charge().await;
-            let is_charging = read_is_charging().await;
-            let response = NetworkPacket::new("kdeconnect.battery").with_body(json!({
-                "currentCharge": charge,
-                "isCharging": is_charging,
-            }));
+            let (charge, is_charging) = match (
+                read_battery_charge().await,
+                read_is_charging().await,
+            ) {
+                (Some(charge), Some(charging)) => (charge, charging),
+                _ => {
+                    // No battery found — send explicit "no battery" response
+                    let response = NetworkPacket::new("kdeconnect.battery").with_body(
+                        serde_json::json!({
+                            "currentCharge": 0,
+                            "isCharging": false,
+                            "noBattery": true,
+                        }),
+                    );
+                    sender.send_packet(&response).await?;
+                    return Ok(());
+                }
+            };
+            let response = NetworkPacket::new("kdeconnect.battery").with_body(
+                serde_json::json!({
+                    "currentCharge": charge,
+                    "isCharging": is_charging,
+                }),
+            );
             sender.send_packet(&response).await?;
         }
         Ok(())
     }
 }
 
-/// Read battery charge percentage from UPower (or fallback to 100 for desktops).
-async fn read_battery_charge() -> u8 {
-    read_upower_property("Percentage").await.unwrap_or(100u8)
+/// Read battery charge percentage.
+///
+/// Tries UPower D-Bus first, then falls back to sysfs.
+/// Returns None if no battery is found (desktop system).
+async fn read_battery_charge() -> Option<u8> {
+    // Try UPower first
+    if let Some(charge) = read_upower_percentage().await {
+        return Some(charge);
+    }
+
+    // Fall back to sysfs
+    read_sysfs_capacity()
 }
 
-/// Check if battery is charging via UPower.
-async fn read_is_charging() -> bool {
-    read_upower_property("State")
-        .await
-        .map(|state: u32| state == 1)
-        .unwrap_or(true)
-}
-
-/// Read a property from UPower's display-device via dbus-send.
-async fn read_upower_property<T: std::str::FromStr>(property: &str) -> Option<T> {
+/// Try to read battery percentage from UPower via gdbus.
+async fn read_upower_percentage() -> Option<u8> {
     let output = tokio::process::Command::new("gdbus")
         .args([
             "call",
@@ -68,7 +86,7 @@ async fn read_upower_property<T: std::str::FromStr>(property: &str) -> Option<T>
             "--method",
             "org.freedesktop.DBus.Properties.Get",
             "org.freedesktop.UPower.Device",
-            property,
+            "Percentage",
         ])
         .output()
         .await
@@ -79,26 +97,82 @@ async fn read_upower_property<T: std::str::FromStr>(property: &str) -> Option<T>
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    // gdbus returns a variant like `(variant <value>)` - try to parse
-    parse_gdbus_variant(&stdout).and_then(|v| v.parse::<T>().ok())
+    // Parse "(variant <double> 85.0)" → 85
+    stdout
+        .trim()
+        .split_whitespace()
+        .last()
+        .and_then(|s| s.parse::<f64>().ok())
+        .map(|v| v as u8)
 }
 
-/// Parse a gdbus variant response, extracting the inner value.
-fn parse_gdbus_variant(output: &str) -> Option<String> {
-    // Example: "(variant uint32 85)" -> "85"
-    // Example: "(variant <'Charging'>)" -> "Charging"
-    let trimmed = output.trim();
-    if let Some(start) = trimmed.find("variant ") {
-        let inner = &trimmed[start + 8..];
-        let inner = inner.trim().trim_matches(|c| c == '(' || c == ')');
-        // For string variants like <'Charging'>, extract the quoted part
-        if let Some(q_start) = inner.find('\'')
-            && let Some(q_end) = inner[q_start + 1..].find('\'')
-        {
-            return Some(inner[q_start + 1..q_start + 1 + q_end].to_string());
+/// Read battery capacity from sysfs.
+fn read_sysfs_capacity() -> Option<u8> {
+    // Try BAT0, BAT1, BAT2
+    for bat in &["BAT0", "BAT1", "BAT2"] {
+        let path = format!("/sys/class/power_supply/{}/capacity", bat);
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            if let Ok(capacity) = content.trim().parse::<u8>() {
+                return Some(capacity);
+            }
         }
-        // For numeric variants, take the last token
-        return inner.split_whitespace().last().map(String::from);
+    }
+    None
+}
+
+/// Check if battery is charging.
+///
+/// Tries UPower first, then sysfs.
+/// Returns None if no battery is found.
+async fn read_is_charging() -> Option<bool> {
+    // Try UPower first
+    if let Some(charging) = read_upower_charging().await {
+        return Some(charging);
+    }
+
+    // Fall back to sysfs
+    read_sysfs_status()
+}
+
+/// Try to read charging status from UPower via gdbus.
+async fn read_upower_charging() -> Option<bool> {
+    let output = tokio::process::Command::new("gdbus")
+        .args([
+            "call",
+            "--session",
+            "--dest",
+            "org.freedesktop.UPower",
+            "--object-path",
+            "/org/freedesktop/UPower/devices/DisplayDevice",
+            "--method",
+            "org.freedesktop.DBus.Properties.Get",
+            "org.freedesktop.UPower.Device",
+            "State",
+        ])
+        .output()
+        .await
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // UPower State: 1=Charging, 2=Discharging, 3=Not charging
+    stdout
+        .contains("variant <uint32> 1")
+        .then_some(true)
+        .or_else(|| stdout.contains("variant <uint32>").then_some(false))
+}
+
+/// Read charging status from sysfs.
+fn read_sysfs_status() -> Option<bool> {
+    for bat in &["BAT0", "BAT1", "BAT2"] {
+        let path = format!("/sys/class/power_supply/{}/status", bat);
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            let status = content.trim();
+            return Some(status == "Charging");
+        }
     }
     None
 }
