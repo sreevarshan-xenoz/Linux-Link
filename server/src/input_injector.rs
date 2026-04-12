@@ -5,7 +5,7 @@
 //! uinput creates virtual HID devices at the kernel level, so every compositor sees them as real input devices.
 
 use anyhow::{Context, Result};
-use enigo::{Enigo, Key, Keyboard, Mouse, Coordinate, Settings};
+use enigo::{Coordinate, Enigo, Key, Keyboard, Mouse, Settings};
 use evdev::uinput::VirtualDeviceBuilder;
 use evdev::{AttributeSet, InputEvent, KeyCode, RelativeAxisCode};
 use std::path::Path;
@@ -22,7 +22,7 @@ const SYN_REPORT: u16 = 0;
 #[derive(Debug)]
 enum InputBackend {
     /// enigo (X11/XWayland via XTEST)
-    Enigo(Mutex<Enigo>),
+    Enigo(Box<Mutex<Enigo>>),
     /// uinput (universal, kernel-level)
     Uinput(Mutex<evdev::uinput::VirtualDevice>),
 }
@@ -45,7 +45,7 @@ impl InputInjector {
         if let Ok(enigo) = Enigo::new(&Settings::default()) {
             info!("Input injector: using enigo (X11/XWayland)");
             return Ok(Self {
-                backend: InputBackend::Enigo(Mutex::new(enigo)),
+                backend: InputBackend::Enigo(Box::new(Mutex::new(enigo))),
             });
         }
 
@@ -85,8 +85,10 @@ impl InputInjector {
             .context("Failed to set up relative axes")?
             .name(b"Linux Link Virtual Input")
             .build()
-            .context("Failed to build virtual device. \
-                     Ensure /dev/uinput is accessible (add user to 'uinput' group).")?;
+            .context(
+                "Failed to build virtual device. \
+                     Ensure /dev/uinput is accessible (add user to 'uinput' group).",
+            )?;
 
         info!("Input injector: using uinput (kernel-level, works on all compositors)");
         Ok(Self {
@@ -98,13 +100,13 @@ impl InputInjector {
     pub fn move_mouse_relative(&mut self, dx: i32, dy: i32) -> Result<()> {
         match &mut self.backend {
             InputBackend::Enigo(enigo) => {
-                let mut e = enigo.lock().unwrap();
+                let e = enigo.get_mut().unwrap();
                 e.move_mouse(dx, dy, Coordinate::Rel)
                     .context("enigo mouse move failed")?;
                 Ok(())
             }
             InputBackend::Uinput(device) => {
-                let mut dev = device.lock().unwrap();
+                let dev = device.get_mut().unwrap();
                 let events = [
                     InputEvent::new(EV_REL, RelativeAxisCode::REL_X.0, dx),
                     InputEvent::new(EV_REL, RelativeAxisCode::REL_Y.0, dy),
@@ -121,7 +123,7 @@ impl InputInjector {
     pub fn move_mouse_absolute(&mut self, x: i32, y: i32) -> Result<()> {
         match &mut self.backend {
             InputBackend::Enigo(enigo) => {
-                let mut e = enigo.lock().unwrap();
+                let e = enigo.get_mut().unwrap();
                 e.move_mouse(x, y, Coordinate::Abs)
                     .context("enigo mouse move to absolute position failed")?;
                 Ok(())
@@ -138,7 +140,7 @@ impl InputInjector {
     pub fn mouse_button(&mut self, button: MouseKey, pressed: bool) -> Result<()> {
         match &mut self.backend {
             InputBackend::Enigo(enigo) => {
-                let mut e = enigo.lock().unwrap();
+                let e = enigo.get_mut().unwrap();
                 if pressed {
                     e.button(button.as_enigo_button(), enigo::Direction::Press)
                         .context("enigo mouse press failed")?;
@@ -149,7 +151,7 @@ impl InputInjector {
                 Ok(())
             }
             InputBackend::Uinput(device) => {
-                let mut dev = device.lock().unwrap();
+                let dev = device.get_mut().unwrap();
                 let key = button.as_evdev_key();
                 let value = if pressed { 1 } else { 0 };
                 let events = [
@@ -167,7 +169,7 @@ impl InputInjector {
     pub fn scroll(&mut self, x: i32, y: i32) -> Result<()> {
         match &mut self.backend {
             InputBackend::Enigo(enigo) => {
-                let mut e = enigo.lock().unwrap();
+                let e = enigo.get_mut().unwrap();
                 if y != 0 {
                     e.scroll((y.abs() / 10).max(1), enigo::Axis::Vertical)
                         .context("enigo vertical scroll failed")?;
@@ -179,7 +181,7 @@ impl InputInjector {
                 Ok(())
             }
             InputBackend::Uinput(device) => {
-                let mut dev = device.lock().unwrap();
+                let dev = device.get_mut().unwrap();
                 let events = [
                     InputEvent::new(EV_REL, RelativeAxisCode::REL_WHEEL.0, y),
                     InputEvent::new(EV_REL, RelativeAxisCode::REL_HWHEEL.0, x),
@@ -195,16 +197,18 @@ impl InputInjector {
     pub fn key(&mut self, key: Key, pressed: bool) -> Result<()> {
         match &mut self.backend {
             InputBackend::Enigo(enigo) => {
-                let mut e = enigo.lock().unwrap();
+                let e = enigo.get_mut().unwrap();
                 if pressed {
-                    e.key(key, enigo::Direction::Press).context("enigo key press failed")?;
+                    e.key(key, enigo::Direction::Press)
+                        .context("enigo key press failed")?;
                 } else {
-                    e.key(key, enigo::Direction::Release).context("enigo key release failed")?;
+                    e.key(key, enigo::Direction::Release)
+                        .context("enigo key release failed")?;
                 }
                 Ok(())
             }
             InputBackend::Uinput(device) => {
-                let mut dev = device.lock().unwrap();
+                let dev = device.get_mut().unwrap();
                 let evdev_key = key_to_evdev(key);
                 let value = if pressed { 1 } else { 0 };
                 let events = [
@@ -221,7 +225,7 @@ impl InputInjector {
     pub fn text(&mut self, text: &str) -> Result<()> {
         match &mut self.backend {
             InputBackend::Enigo(enigo) => {
-                let mut e = enigo.lock().unwrap();
+                let e = enigo.get_mut().unwrap();
                 e.text(text).context("enigo text input failed")?;
                 Ok(())
             }
@@ -231,7 +235,7 @@ impl InputInjector {
                 for ch in text.chars() {
                     if let Some(keycode) = char_to_keycode(ch) {
                         let key = KeyCode(keycode);
-                        let mut dev = device.lock().unwrap();
+                        let dev = device.get_mut().unwrap();
                         let events = [
                             InputEvent::new(EV_KEY, key.0, 1), // press
                             InputEvent::new(EV_SYN, SYN_REPORT, 0),
@@ -275,7 +279,7 @@ impl MouseKey {
             MouseKey::Left => KeyCode::BTN_LEFT,
             MouseKey::Middle => KeyCode::BTN_MIDDLE,
             MouseKey::Right => KeyCode::BTN_RIGHT,
-            MouseKey::Button4 => KeyCode::BTN_SIDE,  // Side button (back)
+            MouseKey::Button4 => KeyCode::BTN_SIDE, // Side button (back)
             MouseKey::Button5 => KeyCode::BTN_EXTRA, // Extra button (forward)
         }
     }
@@ -297,6 +301,7 @@ pub fn button_id_to_mouse(button: i32) -> MouseKey {
 }
 
 /// Map a Linux evdev keycode to an enigo Key.
+#[allow(dead_code)]
 fn keycode_to_enigo(code: u16) -> Key {
     match code {
         36 => Key::Return,
@@ -392,7 +397,7 @@ fn char_to_keycode(ch: char) -> Option<u16> {
 
 /// Map a Unicode character to an evdev KeyCode.
 fn char_to_evdev_key(ch: char) -> Option<KeyCode> {
-    char_to_keycode(ch).map(|code| KeyCode(code))
+    char_to_keycode(ch).map(KeyCode)
 }
 
 /// Map key name to enigo Key

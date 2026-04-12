@@ -29,30 +29,25 @@ impl Plugin for BatteryPlugin {
         sender: &dyn DeviceSender,
     ) -> anyhow::Result<()> {
         if packet.packet_type.as_str() == "kdeconnect.battery.request" {
-            let (charge, is_charging) = match (
-                read_battery_charge().await,
-                read_is_charging().await,
-            ) {
-                (Some(charge), Some(charging)) => (charge, charging),
-                _ => {
-                    // No battery found — send explicit "no battery" response
-                    let response = NetworkPacket::new("kdeconnect.battery").with_body(
-                        serde_json::json!({
-                            "currentCharge": 0,
-                            "isCharging": false,
-                            "noBattery": true,
-                        }),
-                    );
-                    sender.send_packet(&response).await?;
-                    return Ok(());
-                }
-            };
-            let response = NetworkPacket::new("kdeconnect.battery").with_body(
-                serde_json::json!({
-                    "currentCharge": charge,
-                    "isCharging": is_charging,
-                }),
-            );
+            let (charge, is_charging) =
+                match (read_battery_charge().await, read_is_charging().await) {
+                    (Some(charge), Some(charging)) => (charge, charging),
+                    _ => {
+                        // No battery found — send explicit "no battery" response
+                        let response =
+                            NetworkPacket::new("kdeconnect.battery").with_body(serde_json::json!({
+                                "currentCharge": 0,
+                                "isCharging": false,
+                                "noBattery": true,
+                            }));
+                        sender.send_packet(&response).await?;
+                        return Ok(());
+                    }
+                };
+            let response = NetworkPacket::new("kdeconnect.battery").with_body(serde_json::json!({
+                "currentCharge": charge,
+                "isCharging": is_charging,
+            }));
             sender.send_packet(&response).await?;
         }
         Ok(())
@@ -99,7 +94,6 @@ async fn read_upower_percentage() -> Option<u8> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     // Parse "(variant <double> 85.0)" → 85
     stdout
-        .trim()
         .split_whitespace()
         .last()
         .and_then(|s| s.parse::<f64>().ok())
@@ -111,10 +105,10 @@ fn read_sysfs_capacity() -> Option<u8> {
     // Try BAT0, BAT1, BAT2
     for bat in &["BAT0", "BAT1", "BAT2"] {
         let path = format!("/sys/class/power_supply/{}/capacity", bat);
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            if let Ok(capacity) = content.trim().parse::<u8>() {
-                return Some(capacity);
-            }
+        if let Ok(content) = std::fs::read_to_string(&path)
+            && let Ok(capacity) = content.trim().parse::<u8>()
+        {
+            return Some(capacity);
         }
     }
     None

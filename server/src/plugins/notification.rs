@@ -63,20 +63,21 @@ async fn send_notification_dbus(summary: &str, body: &str) -> anyhow::Result<()>
     )
     .await?;
 
-    proxy.call::<_, _, u32>(
-        "Notify",
-        &(
-            "linux-link",           // app_name
-            0u32,                   // replaces_id
-            "",                     // app_icon
-            summary,                // summary
-            body,                   // body
-            Vec::<String>::new(),   // actions
-            std::collections::HashMap::<String, zbus::zvariant::Value>::new(), // hints
-            5000i32,                // timeout (5 seconds)
-        ),
-    )
-    .await?;
+    proxy
+        .call::<_, _, u32>(
+            "Notify",
+            &(
+                "linux-link",                                                      // app_name
+                0u32,                                                              // replaces_id
+                "",                                                                // app_icon
+                summary,                                                           // summary
+                body,                                                              // body
+                Vec::<String>::new(),                                              // actions
+                std::collections::HashMap::<String, zbus::zvariant::Value>::new(), // hints
+                5000i32, // timeout (5 seconds)
+            ),
+        )
+        .await?;
 
     Ok(())
 }

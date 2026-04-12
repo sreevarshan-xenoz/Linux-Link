@@ -80,13 +80,14 @@ pub async fn start_capture(
     );
 
     // Step 1: Create XDG Portal screencast session (with timeout to handle missing portal backends)
-    let screencast = tokio::time::timeout(
-        Duration::from_secs(10),
-        Screencast::new(),
-    )
-    .await
-    .map_err(|_| anyhow::anyhow!("Screencast portal unavailable (timeout after 10s) — is xdg-desktop-portal running?"))?
-    .context("Failed to create Screencast portal")?;
+    let screencast = tokio::time::timeout(Duration::from_secs(10), Screencast::new())
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "Screencast portal unavailable (timeout after 10s) — is xdg-desktop-portal running?"
+            )
+        })?
+        .context("Failed to create Screencast portal")?;
 
     debug!("Creating screencast session...");
     let session = tokio::time::timeout(

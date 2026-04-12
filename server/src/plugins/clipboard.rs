@@ -51,11 +51,10 @@ impl Plugin for ClipboardPlugin {
                     .duration_since(UNIX_EPOCH)
                     .map(|d| d.as_millis() as u64)
                     .unwrap_or(0);
-                let response =
-                    NetworkPacket::new("kdeconnect.clipboard").with_body(json!({
-                        "content": content,
-                        "timestamp": timestamp,
-                    }));
+                let response = NetworkPacket::new("kdeconnect.clipboard").with_body(json!({
+                    "content": content,
+                    "timestamp": timestamp,
+                }));
                 sender.send_packet(&response).await?;
             }
             _ => {}
@@ -68,7 +67,11 @@ impl Plugin for ClipboardPlugin {
 /// Tries: wl-paste (Wayland) -> xclip (X11) -> xsel (X11, lighter).
 async fn get_clipboard() -> Result<String> {
     // Try wl-clipboard first (Wayland native)
-    match tokio::process::Command::new("wl-paste").arg("--no-newline").output().await {
+    match tokio::process::Command::new("wl-paste")
+        .arg("--no-newline")
+        .output()
+        .await
+    {
         Ok(output) if output.status.success() => {
             return Ok(String::from_utf8_lossy(&output.stdout).to_string());
         }
@@ -128,7 +131,9 @@ async fn set_clipboard(content: &str) -> Result<()> {
                 .args(["--clipboard", "--input"])
                 .stdin(std::process::Stdio::piped())
                 .spawn()
-                .map_err(|_| anyhow::anyhow!("No clipboard utility found (tried wl-copy, xclip, xsel)"))?;
+                .map_err(|_| {
+                    anyhow::anyhow!("No clipboard utility found (tried wl-copy, xclip, xsel)")
+                })?;
 
             if let Some(mut stdin) = child.stdin.take() {
                 use tokio::io::AsyncWriteExt;

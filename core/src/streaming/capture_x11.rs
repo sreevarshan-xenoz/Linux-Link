@@ -29,8 +29,8 @@ fn capture_frame(monitor_idx: usize) -> Result<VideoFrame> {
         .capture_image()
         .context("Failed to capture X11 screenshot")?;
 
-    let width = image.width() as u32;
-    let height = image.height() as u32;
+    let width = image.width();
+    let height = image.height();
     let stride = width * 4; // 4 bytes per pixel (RGBA)
 
     // xcap returns RGBA, but our encoder expects BGRA (PipeWire's default).
