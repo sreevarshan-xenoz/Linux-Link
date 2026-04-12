@@ -7,12 +7,14 @@ pub mod bitrate;
 pub mod capture;
 pub mod client;
 pub mod encoder;
+pub mod session;
 pub mod streamer;
 pub mod transport;
 
 pub use bitrate::AdaptiveBitrate;
 pub use client::DEFAULT_STREAMING_PORT;
 pub use client::StreamingClient;
+pub use session::{detect_session_type, SessionType};
 pub use streamer::StreamingServer;
 
 use serde::{Deserialize, Serialize};
