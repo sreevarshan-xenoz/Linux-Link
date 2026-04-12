@@ -1873,6 +1873,17 @@ The Phase 4 Android client foundation is fully scaffolded with all structural co
 
 ### Phase 6: Release & Packaging (Week 29-30)
 
+**Status: COMPLETE**
+
+- [x] CHANGELOG.md with Unreleased section
+- [x] GitHub Release workflow (binary builds + checksums + draft release)
+- [x] AUR packaging (PKGBUILD + install script)
+- [x] CI expansion (cargo audit, Flutter analyze)
+- [x] Man page (linux-link.1)
+- [x] Install script (scripts/install.sh)
+- [x] CONTRIBUTING.md
+- [ ] First release tagged and published (requires manual action)
+
 ---
 
 ## Technical Deep Dives
