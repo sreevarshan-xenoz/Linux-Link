@@ -1,0 +1,66 @@
+.TH LINUX-LINK 1 "2026-04-11" "Linux Link 0.1.0"
+.SH NAME
+linux-link \- Remote desktop over Tailscale with KDE Connect integration
+.SH SYNOPSIS
+.B linux-link
+[\fIOPTIONS\fR] [\fICOMMAND\fR]
+.SH DESCRIPTION
+Linux Link is a pure-Rust remote desktop solution for Linux.
+It combines KDE Connect device integration with low-latency
+screen streaming over Tailscale.
+.SH COMMANDS
+.TP
+.B start
+Start the server daemon
+.TP
+.B stop
+Stop the running daemon
+.TP
+.B status
+Show connection status
+.TP
+.B list
+List available peers on tailnet
+.TP
+.B connect \fIPEER\fR
+Connect to a specific peer
+.TP
+.B watch
+Watch for peer discovery events
+.TP
+.B capabilities
+Show KDE Connect capabilities
+.TP
+.B pair \fIPIN\fR
+Pair with a new device
+.SH OPTIONS
+.TP
+.BI "\-\-config " PATH
+Config file path (default: ~/.config/linux-link/config.toml)
+.TP
+.BI "\-\-port " PORT
+Override the control port
+.TP
+.B \-v, \-\-verbose
+Verbose output
+.TP
+.B \-h, \-\-help
+Print help
+.TP
+.B \-V, \-\-version
+Print version
+.SH FILES
+.TP
+.I ~/.config/linux-link/config.toml
+Configuration file
+.SH ENVIRONMENT
+.TP
+.B RUST_LOG
+Log level (trace, debug, info, warn, error)
+.SH SEE ALSO
+.BR tailscaled (8),
+.BR hyprland (1)
+.SH BUGS
+Report bugs at https://github.com/sreevarshan-xenoz/Linux-Link/issues
+.SH AUTHOR
+Linux Link Development Team
