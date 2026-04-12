@@ -2,11 +2,9 @@ import 'package:flutter/services.dart';
 
 /// Service for H.264 video decoding via Android MediaCodec.
 ///
-/// Uses a MethodChannel for configuration and an EventChannel for
-/// receiving decoded frame texture IDs.
+/// Uses a MethodChannel for configuration and frame feeding.
 class VideoPlayerService {
   static const _methodChannel = MethodChannel('com.linuxlink/video_player');
-  static const _eventChannel = EventChannel('com.linuxlink/video_events');
 
   static int? _currentTextureId;
 

@@ -3,12 +3,12 @@ import '../models/peer_info.dart';
 
 class PeerListTile extends StatelessWidget {
   final PeerInfo peer;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   const PeerListTile({
     super.key,
     required this.peer,
-    required this.onTap,
+    this.onTap,
   });
 
   @override

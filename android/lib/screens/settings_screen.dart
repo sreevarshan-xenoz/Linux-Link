@@ -156,7 +156,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               setState(() {
                 _videoQuality = value!;
               });
-              _saveSetting(_keyVideoQuality, value.name);
+              _saveSetting(_keyVideoQuality, _videoQuality.name);
             },
           ),
           RadioListTile<VideoQuality>(
@@ -168,7 +168,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               setState(() {
                 _videoQuality = value!;
               });
-              _saveSetting(_keyVideoQuality, value.name);
+              _saveSetting(_keyVideoQuality, _videoQuality.name);
             },
           ),
           RadioListTile<VideoQuality>(
@@ -180,7 +180,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               setState(() {
                 _videoQuality = value!;
               });
-              _saveSetting(_keyVideoQuality, value.name);
+              _saveSetting(_keyVideoQuality, _videoQuality.name);
             },
           ),
           const Divider(),
@@ -203,7 +203,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               setState(() {
                 _inputMode = value!;
               });
-              _saveSetting(_keyInputMode, value.name);
+              _saveSetting(_keyInputMode, _inputMode.name);
             },
           ),
           RadioListTile<InputMode>(
@@ -215,7 +215,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               setState(() {
                 _inputMode = value!;
               });
-              _saveSetting(_keyInputMode, value.name);
+              _saveSetting(_keyInputMode, _inputMode.name);
             },
           ),
           RadioListTile<InputMode>(
@@ -227,7 +227,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               setState(() {
                 _inputMode = value!;
               });
-              _saveSetting(_keyInputMode, value.name);
+              _saveSetting(_keyInputMode, _inputMode.name);
             },
           ),
           const Divider(),

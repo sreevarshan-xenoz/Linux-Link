@@ -81,19 +81,12 @@ class _RustApiBridge {
     int port,
     String remotePath,
   ) async {
-    final dtos = await frb.listRemoteFiles(
-      address: address,
-      port: port,
-      remotePath: remotePath,
+    // TODO: Wired after FRB codegen re-run with list_remote_files FFI.
+    // The Rust FFI function exists, but FRB Dart bindings haven't been regenerated.
+    throw UnimplementedError(
+      'listRemoteFiles: FRB bindings need regeneration. '
+      'Run flutter_rust_bridge_codegen generate',
     );
-    return dtos
-        .map((dto) => RemoteFile(
-              name: dto.name,
-              isDirectory: dto.isDirectory,
-              size: dto.size.toInt(),
-              modified: dto.modified.toInt(),
-            ))
-        .toList();
   }
 
   /// Start receiving remote screen streaming.
