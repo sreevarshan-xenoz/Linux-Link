@@ -5,7 +5,7 @@
 [![Rust](https://img.shields.io/badge/Rust-Pure%20Rust-orange?logo=rust)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT%2FApache--2.0-blue)](LICENSE)
 [![Issues](https://img.shields.io/github/issues/sreevarshan-xenoz/Linux-Link)](https://github.com/sreevarshan-xenoz/Linux-Link/issues)
-[![Phase](https://img.shields.io/badge/Phase-3%20Complete-brightgreen)](plan.md)
+[![Phase](https://img.shields.io/badge/Phase-6%20Complete-brightgreen)](plan.md)
 
 > **Target:** Sub-100ms latency screen streaming + KDE Connect integration + zero-config Tailscale connectivity
 
