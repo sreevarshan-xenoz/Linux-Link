@@ -38,7 +38,6 @@ class _FileBrowserScreenState extends ConsumerState<FileBrowserScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
   final Set<int> _selectedLocalFiles = {};
-  final Set<int> _selectedRemoteFiles = {};
   bool _isTransferring = false;
   double _transferProgress = 0.0;
   List<String> _pendingFiles = [];
@@ -162,34 +161,36 @@ class _FileBrowserScreenState extends ConsumerState<FileBrowserScreen>
         final file = _localFiles[index];
         final isSelected = _selectedLocalFiles.contains(index);
 
-        return ListTile(
-          leading: Icon(
-            Icons.insert_drive_file,
-            color: Theme.of(context).colorScheme.primary,
-          ),
-          title: Text(file.name),
-          subtitle: file.size != null
-              ? Text('${_formatFileSize(file.size!)}')
-              : null,
-          trailing: isSelected
-              ? const Icon(Icons.check_circle, color: Colors.blue)
-              : null,
-          selected: isSelected,
-          onLongPress: () {
-            setState(() {
-              if (isSelected) {
-                _selectedLocalFiles.remove(index);
-              } else {
-                _selectedLocalFiles.add(index);
-              }
-            });
-          },
+        return GestureDetector(
           onDoubleTap: () {
             setState(() {
               _localFiles.removeAt(index);
               _selectedLocalFiles.remove(index);
             });
           },
+          child: ListTile(
+            leading: Icon(
+              Icons.insert_drive_file,
+              color: Theme.of(context).colorScheme.primary,
+            ),
+            title: Text(file.name),
+            subtitle: file.size > 0
+                ? Text(_formatFileSize(file.size))
+                : null,
+            trailing: isSelected
+                ? const Icon(Icons.check_circle, color: Colors.blue)
+                : null,
+            selected: isSelected,
+            onLongPress: () {
+              setState(() {
+                if (isSelected) {
+                  _selectedLocalFiles.remove(index);
+                } else {
+                  _selectedLocalFiles.add(index);
+                }
+              });
+            },
+          ),
         );
       },
     );

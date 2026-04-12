@@ -770,10 +770,10 @@ mod tests {
         // Encode enough frames to trigger the keyframe interval (2 seconds = 60 frames)
         let mut keyframe_count = 0;
         for _ in 0..90 {
-            if let Some(packet) = encoder.encode_frame(&frame).unwrap() {
-                if packet.is_keyframe {
-                    keyframe_count += 1;
-                }
+            if let Some(packet) = encoder.encode_frame(&frame).unwrap()
+                && packet.is_keyframe
+            {
+                keyframe_count += 1;
             }
         }
 

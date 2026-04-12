@@ -158,3 +158,5 @@ config/secrets.json
 config.json
 settings.json
 local_settings.py
+.qwen/
+gha-creds-*.json
