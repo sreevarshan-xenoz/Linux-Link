@@ -79,35 +79,48 @@ pub async fn start_capture(
         config.width, config.height, config.fps
     );
 
-    // Step 1: Create XDG Portal screencast session
-    let screencast = Screencast::new()
-        .await
-        .context("Failed to create Screencast portal")?;
+    // Step 1: Create XDG Portal screencast session (with timeout to handle missing portal backends)
+    let screencast = tokio::time::timeout(
+        Duration::from_secs(10),
+        Screencast::new(),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("Screencast portal unavailable (timeout after 10s) — is xdg-desktop-portal running?"))?
+    .context("Failed to create Screencast portal")?;
 
     debug!("Creating screencast session...");
-    let session = screencast
-        .create_session(Default::default())
-        .await
-        .context("Failed to create capture session")?;
+    let session = tokio::time::timeout(
+        Duration::from_secs(10),
+        screencast.create_session(Default::default()),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("Portal request timed out — is xdg-desktop-portal running?"))?
+    .context("Failed to create capture session")?;
 
     // Step 2: Select sources (monitor capture)
     let source_types = ashpd::enumflags2::BitFlags::from(SourceType::Monitor);
-    screencast
-        .select_sources(
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        screencast.select_sources(
             &session,
             SelectSourcesOptions::default()
                 .set_sources(Some(source_types))
                 .set_multiple(Some(true)),
-        )
-        .await
-        .context("Failed to select sources")?;
+        ),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("Portal request timed out — is xdg-desktop-portal running?"))?
+    .context("Failed to select sources")?;
 
     // Step 3: Start capture and get PipeWire node ID
     debug!("Starting capture and waiting for PipeWire stream...");
-    let response = screencast
-        .start(&session, None, Default::default())
-        .await
-        .context("Failed to start capture")?;
+    let response = tokio::time::timeout(
+        Duration::from_secs(10),
+        screencast.start(&session, None, Default::default()),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("Portal request timed out — is xdg-desktop-portal running?"))?
+    .context("Failed to start capture")?;
 
     let streams = response
         .response()
