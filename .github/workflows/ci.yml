@@ -18,6 +18,9 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install PipeWire dev libraries
+        run: sudo apt-get install -y libpipewire-0.3-dev
+
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
