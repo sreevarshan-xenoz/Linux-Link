@@ -1,0 +1,76 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release --bin linux-link
+
+      - name: Run tests
+        run: cargo test --workspace
+
+      - name: Create release archive
+        run: |
+          mkdir -p release/linux-link
+          cp target/release/linux-link release/linux-link/
+          cp config.toml.example release/linux-link/
+          cp linux-link.service release/linux-link/
+          cp README.md release/linux-link/
+          cp LICENSE release/linux-link/
+          cd release
+          tar czf "linux-link-${{ github.ref_name }}-x86_64-unknown-linux-gnu.tar.gz" linux-link/
+          sha256sum "linux-link-${{ github.ref_name }}-x86_64-unknown-linux-gnu.tar.gz" > "linux-link-${{ github.ref_name }}-checksums.txt"
+
+      - name: Upload Linux binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-binary
+          path: release/linux-link-*.tar.gz
+
+      - name: Upload checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: checksums
+          path: release/linux-link-*-checksums.txt
+
+  create-release:
+    needs: [build-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-binary
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: checksums
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: CHANGELOG.md
+          files: |
+            linux-link-*.tar.gz
+            linux-link-*-checksums.txt
+          draft: true
