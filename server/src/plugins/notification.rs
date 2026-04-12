@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use linux_link_core::protocol::kdeconnect::{DeviceSender, NetworkPacket, Plugin};
 
 #[derive(Debug)]
@@ -50,11 +50,43 @@ impl Plugin for NotificationPlugin {
     }
 }
 
-/// Show a desktop notification via `notify-send` (freedesktop notifications).
+/// Send a desktop notification via D-Bus (native, no external binary).
+async fn send_notification_dbus(summary: &str, body: &str) -> anyhow::Result<()> {
+    use zbus::Connection;
+
+    let conn = Connection::session().await?;
+    let proxy = zbus::Proxy::new(
+        &conn,
+        "org.freedesktop.Notifications",
+        "/org/freedesktop/Notifications",
+        "org.freedesktop.Notifications",
+    )
+    .await?;
+
+    proxy.call::<_, _, u32>(
+        "Notify",
+        &(
+            "linux-link",           // app_name
+            0u32,                   // replaces_id
+            "",                     // app_icon
+            summary,                // summary
+            body,                   // body
+            Vec::<String>::new(),   // actions
+            std::collections::HashMap::<String, zbus::zvariant::Value>::new(), // hints
+            5000i32,                // timeout (5 seconds)
+        ),
+    )
+    .await?;
+
+    Ok(())
+}
+
+/// Show a desktop notification via `notify-send` first, falling back to native D-Bus.
 async fn show_desktop_notification(app: &str, title: &str, text: &str) -> Result<()> {
     let summary = format!("{}: {}", app, title);
 
-    let output = tokio::process::Command::new("notify-send")
+    // Try notify-send first
+    let result = tokio::process::Command::new("notify-send")
         .args([
             &summary,
             text,
@@ -64,14 +96,24 @@ async fn show_desktop_notification(app: &str, title: &str, text: &str) -> Result
             "5000",
         ])
         .output()
-        .await
-        .context("failed to execute notify-send")?;
+        .await;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("notify-send failed: {}", stderr.trim());
+    match result {
+        Ok(output) if output.status.success() => {
+            tracing::info!("Notification sent via notify-send: {}", title);
+            return Ok(());
+        }
+        _ => {
+            tracing::debug!("notify-send failed, trying D-Bus");
+        }
     }
 
-    tracing::info!("Notification shown: {} - {}", title, text);
+    // Fall back to native D-Bus
+    if let Err(e) = send_notification_dbus(&summary, text).await {
+        anyhow::bail!("Failed to send notification via D-Bus: {e}");
+    } else {
+        tracing::info!("Notification sent via D-Bus: {}", title);
+    }
+
     Ok(())
 }
