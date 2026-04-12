@@ -19,7 +19,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 # XDG Desktop Portal (screen capture, input)
-ashpd = { version = "0.13", features = ["screencast", "tokio"] }
+ashpd = { version = "0.13", features = ["screencast", "remote_desktop", "tokio"] }
 
 # Video encoding
 ffmpeg-sidecar = { version = "2.5", default-features = false, features = [] }
@@ -32,7 +32,16 @@ rcgen = "0.14"
 rustls = "0.23"
 
 # Input handling
-enigo = "0.6"
+enigo = { version = "0.6", features = ["x11rb"] }
+
+# Input injection via uinput (universal fallback)
+evdev = "0.13"
+
+# X11 screen capture fallback
+xcap = "0.9"
+
+# D-Bus for notifications, battery, etc.
+zbus = { version = "5.7", features = ["tokio"] }
 
 # UUID
 uuid = { version = "1", features = ["v4"] }
@@ -47,3 +56,6 @@ tokio-util = "0.7"
 
 # Unix-specific utilities
 libc = "0.2"
+
+# Directories / home paths
+dirs = "5"

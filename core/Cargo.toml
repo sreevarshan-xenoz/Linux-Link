@@ -3,6 +3,11 @@ name = "linux-link-core"
 version.workspace = true
 edition.workspace = true
 
+[features]
+default = ["wayland-portal", "x11-capture"]
+wayland-portal = ["ashpd/screencast"]
+x11-capture = ["xcap"]
+
 [dependencies]
 anyhow.workspace = true
 serde.workspace = true
@@ -30,3 +35,12 @@ quinn.workspace = true
 # TLS and certificates for QUIC
 rcgen.workspace = true
 rustls.workspace = true
+
+# X11 screen capture fallback (feature-gated)
+xcap = { workspace = true, optional = true }
+
+# Input injection via uinput (universal fallback)
+evdev.workspace = true
+
+# Directories / home paths
+dirs.workspace = true
