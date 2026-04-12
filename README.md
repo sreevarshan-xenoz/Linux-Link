@@ -64,11 +64,52 @@ Linux Link is a **pure Rust** remote desktop solution built specifically for Lin
 
 ## Installation
 
-### From GitHub Releases
+### Quick Install (Recommended)
 
 ```bash
-# One-command installer (downloads latest release)
+# Install latest release
 curl -fsSL https://raw.githubusercontent.com/sreevarshan-xenoz/Linux-Link/main/scripts/install.sh | bash
+
+# Install specific version
+curl -fsSL https://raw.githubusercontent.com/sreevarshan-xenoz/Linux-Link/main/scripts/install.sh | bash -s -- v0.1.0
+
+# Non-interactive install (no prompts)
+curl -fsSL https://raw.githubusercontent.com/sreevarshan-xenoz/Linux-Link/main/scripts/install.sh | bash -s -- --yes
+
+# Install to custom prefix
+curl -fsSL https://raw.githubusercontent.com/sreevarshan-xenoz/Linux-Link/main/scripts/install.sh | bash -s -- --prefix /opt
+
+# Preview without changes
+curl -fsSL https://raw.githubusercontent.com/sreevarshan-xenoz/Linux-Link/main/scripts/install.sh | bash -s -- --dry-run
+```
+
+### Install Script Options
+
+| Flag | Description |
+|------|-------------|
+| `--yes`, `-y` | Non-interactive; accept all defaults |
+| `--dry-run` | Preview actions without making changes |
+| `--verbose` | Show detailed debug output |
+| `--force` | Force reinstall even if same version |
+| `--no-service` | Skip systemd service installation |
+| `--no-config` | Skip config file creation |
+| `--no-docs` | Skip documentation installation |
+| `--no-man` | Skip man page installation |
+| `--prefix PATH` | Install prefix (default: `/usr`) |
+| `--check-updates` | Check if installed version is current |
+| `--list-versions` | List all available releases |
+| `--status` | Show installation status |
+| `--rollback` | Roll back to previous version |
+| `--uninstall` | Remove installation |
+
+**Management commands** (after install):
+
+```bash
+linux-link --status           # Show installed version and config
+linux-link --check-updates    # Check for available updates
+linux-link --list-versions    # List all available releases
+linux-link --rollback         # Roll back to previous version
+linux-link --uninstall        # Remove installation
 ```
 
 ### Build from Source
