@@ -1,0 +1,26 @@
+# Maintainer: sreevarshan <sreevarshan@example.com>
+pkgname=linux-link
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Remote desktop solution over Tailscale with KDE Connect integration"
+arch=('x86_64')
+url="https://github.com/sreevarshan-xenoz/Linux-Link"
+license=('MIT' 'Apache')
+depends=('tailscale' 'ffmpeg' 'pipewire' 'xdg-desktop-portal')
+makedepends=('cargo' 'git')
+source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+  cd "${srcdir}/${pkgname}-${pkgver}"
+  cargo build --release --bin linux-link
+}
+
+package() {
+  cd "${srcdir}/${pkgname}-${pkgver}"
+  install -Dm755 "target/release/linux-link" "${pkgdir}/usr/bin/linux-link"
+  install -Dm644 "linux-link.service" "${pkgdir}/usr/lib/systemd/system/linux-link.service"
+  install -Dm644 "config.toml.example" "${pkgdir}/usr/share/doc/${pkgname}/config.toml.example"
+  install -Dm644 "README.md" "${pkgdir}/usr/share/doc/${pkgname}/README.md"
+  install -Dm644 "CHANGELOG.md" "${pkgdir}/usr/share/doc/${pkgname}/CHANGELOG.md"
+}
