@@ -87,17 +87,13 @@ impl TailscaleClient {
     }
 
     pub async fn status_text(&self) -> Result<String> {
-        let output = Command::new("tailscale")
-            .arg("status")
-            .output()
-            .await;
+        let output = Command::new("tailscale").arg("status").output().await;
 
         match output {
             Ok(output) if output.status.success() => {
                 Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
             }
             _ => {
-                // Fallback to local API for status text
                 let client = reqwest::Client::builder()
                     .timeout(Duration::from_secs(2))
                     .build()?;
@@ -180,6 +176,11 @@ struct StatusPeer {
     #[serde(rename = "DNSName")]
     dns_name: Option<String>,
     #[serde(rename = "TailscaleIPs", default)]
+    tailscale_ips: Vec<String>,
+    #[serde(rename = "Active")]
+    active: Option<bool>,
+}
+t)]
     tailscale_ips: Vec<String>,
     #[serde(rename = "Active")]
     active: Option<bool>,
