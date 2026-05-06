@@ -184,12 +184,6 @@ class _FileBrowserScreenState extends ConsumerState<FileBrowserScreen>
               }
             });
           },
-          onDoubleTap: () {
-            setState(() {
-              _localFiles.removeAt(index);
-              _selectedLocalFiles.remove(index);
-            });
-          },
         );
       },
     );

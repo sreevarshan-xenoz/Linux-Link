@@ -58,10 +58,7 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
           case bridge.ConnectionState.connected:
             ref.read(conn.connectionStateProvider.notifier).state = conn.ConnectionState.connected;
             // Navigate to remote desktop screen
-            Navigator.of(context).pushNamed(
-              '/remote',
-              arguments: {'address': address, 'port': port},
-            );
+            context.go('/remote?address=$address&port=$port');
           case bridge.ConnectionState.connecting:
             ref.read(conn.connectionStateProvider.notifier).state = conn.ConnectionState.connecting;
           case bridge.ConnectionState.error:

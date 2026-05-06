@@ -18,20 +18,22 @@ final _router = GoRouter(
     GoRoute(
       path: '/remote',
       builder: (context, state) {
-        final args = state.arguments as Map<String, dynamic>?;
+        final address = state.uri.queryParameters['address'] ?? '';
+        final port = int.tryParse(state.uri.queryParameters['port'] ?? '1716') ?? 1716;
         return RemoteDesktopScreen(
-          address: args?['address'] as String? ?? '',
-          port: args?['port'] as int? ?? 1716,
+          address: address,
+          port: port,
         );
       },
     ),
     GoRoute(
       path: '/files',
       builder: (context, state) {
-        final args = state.arguments as Map<String, dynamic>?;
+        final address = state.uri.queryParameters['address'] ?? '';
+        final port = int.tryParse(state.uri.queryParameters['port'] ?? '1716') ?? 1716;
         return FileBrowserScreen(
-          address: args?['address'] as String? ?? '',
-          port: args?['port'] as int? ?? 1716,
+          address: address,
+          port: port,
         );
       },
     ),

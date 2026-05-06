@@ -153,8 +153,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             value: VideoQuality.high,
             groupValue: _videoQuality,
             onChanged: (value) {
+              if (value == null) return;
               setState(() {
-                _videoQuality = value!;
+                _videoQuality = value;
               });
               _saveSetting(_keyVideoQuality, value.name);
             },
@@ -165,8 +166,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             value: VideoQuality.medium,
             groupValue: _videoQuality,
             onChanged: (value) {
+              if (value == null) return;
               setState(() {
-                _videoQuality = value!;
+                _videoQuality = value;
               });
               _saveSetting(_keyVideoQuality, value.name);
             },
@@ -177,8 +179,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             value: VideoQuality.low,
             groupValue: _videoQuality,
             onChanged: (value) {
+              if (value == null) return;
               setState(() {
-                _videoQuality = value!;
+                _videoQuality = value;
               });
               _saveSetting(_keyVideoQuality, value.name);
             },
@@ -200,8 +203,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             value: InputMode.trackpad,
             groupValue: _inputMode,
             onChanged: (value) {
+              if (value == null) return;
               setState(() {
-                _inputMode = value!;
+                _inputMode = value;
               });
               _saveSetting(_keyInputMode, value.name);
             },
@@ -212,8 +216,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             value: InputMode.touch,
             groupValue: _inputMode,
             onChanged: (value) {
+              if (value == null) return;
               setState(() {
-                _inputMode = value!;
+                _inputMode = value;
               });
               _saveSetting(_keyInputMode, value.name);
             },
@@ -224,8 +229,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             value: InputMode.mouse,
             groupValue: _inputMode,
             onChanged: (value) {
+              if (value == null) return;
               setState(() {
-                _inputMode = value!;
+                _inputMode = value;
               });
               _saveSetting(_keyInputMode, value.name);
             },
