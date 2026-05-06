@@ -203,9 +203,7 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
                       final peer = peers[index];
                       return PeerListTile(
                         peer: peer,
-                        onTap: peer.online
-                            ? () => _connectToPeer(peer)
-                            : null,
+                        onTap: peer.online ? () => _connectToPeer(peer) : () {},
                       );
                     },
                   ),

@@ -81,7 +81,7 @@ class _RustApiBridge {
     int port,
     String remotePath,
   ) async {
-    final dtos = await frb.listRemoteFiles(
+    final dtos = await frb.list_remote_files(
       address: address,
       port: port,
       remotePath: remotePath,
