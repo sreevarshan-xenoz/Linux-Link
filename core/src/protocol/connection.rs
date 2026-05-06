@@ -48,13 +48,11 @@ impl ConnectionManager {
         let identity_bytes = identity_packet.to_wire()?;
 
         let mut stream = reader.into_inner();
-        stream.write_all(&identity_bytes).await.context("failed to send identity packet")?;
+        stream
+            .write_all(&identity_bytes)
+            .await
+            .context("failed to send identity packet")?;
         stream.flush().await?;
-
-        Ok(stream)
-    }
-}
-().await?;
 
         Ok(stream)
     }
