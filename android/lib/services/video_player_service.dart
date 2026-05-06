@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 /// receiving decoded frame texture IDs.
 class VideoPlayerService {
   static const _methodChannel = MethodChannel('com.linuxlink/video_player');
+  // ignore: unused_field
   static const _eventChannel = EventChannel('com.linuxlink/video_events');
 
   static int? _currentTextureId;

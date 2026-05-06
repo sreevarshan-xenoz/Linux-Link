@@ -38,6 +38,8 @@ class _FileBrowserScreenState extends ConsumerState<FileBrowserScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
   final Set<int> _selectedLocalFiles = {};
+  // Remote file selection (for future multi-select feature)
+  // ignore: unused_field
   final Set<int> _selectedRemoteFiles = {};
   bool _isTransferring = false;
   double _transferProgress = 0.0;
