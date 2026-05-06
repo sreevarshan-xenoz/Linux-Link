@@ -132,11 +132,11 @@ impl TailscaleClient {
             .output()
             .await;
 
-        if let Ok(output) = output {
-            if output.status.success() {
-                return serde_json::from_slice::<TailscaleStatus>(&output.stdout)
-                    .context("failed to parse tailscale status JSON");
-            }
+        if let Ok(output) = output
+            && output.status.success()
+        {
+            return serde_json::from_slice::<TailscaleStatus>(&output.stdout)
+                .context("failed to parse tailscale status JSON");
         }
 
         // Fallback to Local API (especially for Android/container environments)
