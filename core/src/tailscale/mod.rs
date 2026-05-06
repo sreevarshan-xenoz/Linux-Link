@@ -97,9 +97,14 @@ impl TailscaleClient {
                 let client = reqwest::Client::builder()
                     .timeout(Duration::from_secs(2))
                     .build()?;
-                let res = client.get("http://100.100.100.100:1053/localapi/v0/status").send().await;
+                let res = client
+                    .get("http://100.100.100.100:1053/localapi/v0/status")
+                    .send()
+                    .await;
                 match res {
-                    Ok(r) if r.status().is_success() => Ok("Tailscale Online (via LocalAPI)".to_string()),
+                    Ok(r) if r.status().is_success() => {
+                        Ok("Tailscale Online (via LocalAPI)".to_string())
+                    }
                     _ => bail!("tailscale status failed"),
                 }
             }
