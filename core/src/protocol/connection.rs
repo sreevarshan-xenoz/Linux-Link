@@ -1,8 +1,8 @@
 use super::kdeconnect::DeviceIdentity;
 use super::{HANDSHAKE_HELLO, HANDSHAKE_OK};
 use anyhow::{Context, Result, bail};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use std::time::Duration;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 
 #[derive(Debug, Clone)]
@@ -50,6 +50,11 @@ impl ConnectionManager {
         let mut stream = reader.into_inner();
         stream.write_all(&identity_bytes).await.context("failed to send identity packet")?;
         stream.flush().await?;
+
+        Ok(stream)
+    }
+}
+().await?;
 
         Ok(stream)
     }
