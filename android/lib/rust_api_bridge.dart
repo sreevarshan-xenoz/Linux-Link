@@ -81,7 +81,9 @@ class _RustApiBridge {
     int port,
     String remotePath,
   ) async {
-    final dtos = await frb.list_remote_files(
+    // Note: This function requires flutter_rust_bridge codegen to be run first.
+    // If frb.list_remote_files is not generated, this will fail at runtime.
+    final dtos = await frb.listRemoteFiles(
       address: address,
       port: port,
       remotePath: remotePath,
