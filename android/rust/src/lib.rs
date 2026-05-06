@@ -7,8 +7,9 @@ use linux_link_core::protocol::connection::ConnectionManager;
 use linux_link_core::protocol::kdeconnect::{DeviceSender, NetworkPacket, TcpDeviceSender};
 use linux_link_core::streaming::StreamingClient;
 use linux_link_core::tailscale::TailscaleClient;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
+use tokio::net::tcp::OwnedWriteHalf;
 use tokio::sync::Mutex;
 
 // Initialize logging for Android
@@ -18,6 +19,14 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 
 /// Maximum number of H.264 frames to drain per `receive_frames` call.
 const MAX_FRAMES_PER_RECEIVE: usize = 16;
+
+/// Global handle for the active control connection writer.
+static CONTROL_WRITER: LazyLock<Mutex<Option<Arc<Mutex<OwnedWriteHalf>>>>> =
+    LazyLock::new(|| Mutex::new(None));
+
+/// Global handle for the active control connection state.
+static CONNECTION_STATE: LazyLock<Mutex<ConnectionState>> =
+    LazyLock::new(|| Mutex::new(ConnectionState::Disconnected));
 
 /// Initialize the Linux Link backend
 #[frb(init)]
@@ -104,25 +113,62 @@ pub async fn get_peers() -> Result<Vec<PeerInfoDto>, String> {
 /// Connect to a peer
 #[frb]
 pub async fn connect_to_peer(address: String, port: u16) -> Result<ConnectionState, String> {
+    let mut state_guard = (*CONNECTION_STATE).lock().await;
+    *state_guard = ConnectionState::Connecting;
+
     let conn_mgr = ConnectionManager::new(Duration::from_secs(10));
 
     match conn_mgr.connect(&address, port).await {
-        Ok(_) => Ok(ConnectionState::Connected),
-        Err(e) => Ok(ConnectionState::Error(e.to_string())),
+        Ok(stream) => {
+            let (reader, writer) = stream.into_split();
+
+            // Store writer globally
+            let mut writer_guard = (*CONTROL_WRITER).lock().await;
+            *writer_guard = Some(Arc::new(Mutex::new(writer)));
+
+            // Spawn reader loop to monitor connection and handle incoming packets
+            tokio::spawn(async move {
+                let mut reader = tokio::io::BufReader::new(reader);
+                let mut line = String::new();
+                while let Ok(n) = reader.read_line(&mut line).await {
+                    if n == 0 {
+                        break;
+                    }
+                    // For now, we just consume and discard packets.
+                    // In the future, this can dispatch to a global event bus or plugin system.
+                    line.clear();
+                }
+
+                // Handle disconnect
+                tracing::warn!("Control connection lost");
+                let mut state_guard = (*CONNECTION_STATE).lock().await;
+                *state_guard = ConnectionState::Disconnected;
+                let mut writer_guard = (*CONTROL_WRITER).lock().await;
+                *writer_guard = None;
+            });
+
+            *state_guard = ConnectionState::Connected;
+            Ok(ConnectionState::Connected)
+        }
+        Err(e) => {
+            *state_guard = ConnectionState::Error(e.to_string());
+            Ok(ConnectionState::Error(e.to_string()))
+        }
     }
 }
 
 /// Send clipboard content to peer using KDE Connect protocol.
 #[frb]
 pub async fn send_clipboard(address: String, port: u16, content: String) -> Result<(), String> {
-    let conn_mgr = ConnectionManager::new(Duration::from_secs(10));
-    let stream = conn_mgr
-        .connect(&address, port)
-        .await
-        .map_err(|e: anyhow::Error| e.to_string())?;
+    let writer_arc = {
+        let guard = (*CONTROL_WRITER).lock().await;
+        guard
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| "Not connected".to_string())?
+    };
 
-    let (_reader, writer) = tokio::io::split(stream);
-    let sender = TcpDeviceSender::new(writer);
+    let sender = TcpDeviceSender::from_arc(writer_arc);
 
     // Send clipboard packet
     let packet = NetworkPacket::new("kdeconnect.clipboard").with_body(serde_json::json!({
@@ -271,7 +317,7 @@ pub async fn send_file(address: String, port: u16, file_path: String) -> Result<
             .await
             .map_err(|e| format!("Failed to write to stream: {}", e))?;
         sent += n as u64;
-        if sent.is_multiple_of(1024 * 1024) {
+        if sent % (1024 * 1024) == 0 {
             tracing::debug!("Sent {} MB", sent / (1024 * 1024));
         }
     }
@@ -594,21 +640,22 @@ pub async fn receive_frames(timeout_ms: u64) -> Vec<FrameDto> {
 /// Send mouse event to remote using KDE mousepad protocol.
 #[frb]
 pub async fn send_mouse_event(
-    address: String,
-    port: u16,
+    _address: String,
+    _port: u16,
     x: f32,
     y: f32,
     button: i32,
     is_pressed: bool,
 ) -> Result<(), String> {
-    let conn_mgr = ConnectionManager::new(Duration::from_secs(10));
-    let stream = conn_mgr
-        .connect(&address, port)
-        .await
-        .map_err(|e: anyhow::Error| e.to_string())?;
+    let writer_arc = {
+        let guard = (*CONTROL_WRITER).lock().await;
+        guard
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| "Not connected".to_string())?
+    };
 
-    let (_reader, writer) = tokio::io::split(stream);
-    let sender = TcpDeviceSender::new(writer);
+    let sender = TcpDeviceSender::from_arc(writer_arc);
 
     // Build mousepad request packet
     let mut body = serde_json::json!({});
@@ -635,19 +682,20 @@ pub async fn send_mouse_event(
 /// Send keyboard event to remote using KDE mousepad protocol.
 #[frb]
 pub async fn send_keyboard_event(
-    address: String,
-    port: u16,
+    _address: String,
+    _port: u16,
     key_code: i32,
     text: String,
 ) -> Result<(), String> {
-    let conn_mgr = ConnectionManager::new(Duration::from_secs(10));
-    let stream = conn_mgr
-        .connect(&address, port)
-        .await
-        .map_err(|e: anyhow::Error| e.to_string())?;
+    let writer_arc = {
+        let guard = (*CONTROL_WRITER).lock().await;
+        guard
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| "Not connected".to_string())?
+    };
 
-    let (_reader, writer) = tokio::io::split(stream);
-    let sender = TcpDeviceSender::new(writer);
+    let sender = TcpDeviceSender::from_arc(writer_arc);
 
     // Build mousepad request packet
     let mut body = serde_json::json!({});
