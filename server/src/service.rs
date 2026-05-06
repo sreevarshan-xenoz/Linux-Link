@@ -3,6 +3,7 @@ use crate::kde;
 use anyhow::{Context, Result, bail};
 use linux_link_core::protocol::connection::ConnectionManager;
 use linux_link_core::protocol::kdeconnect::{NetworkPacket, PluginRegistry, TcpDeviceSender};
+use linux_link_core::protocol::{HANDSHAKE_HELLO, HANDSHAKE_OK};
 use linux_link_core::tailscale::{DiscoveryEvent, DiscoveryService, TailscaleClient};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -11,9 +12,6 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::time::timeout;
-
-const HANDSHAKE_HELLO: &str = "LINUX_LINK_HELLO 1";
-const HANDSHAKE_OK: &str = "LINUX_LINK_OK 1";
 
 pub async fn run(config: Config) -> Result<()> {
     let pid_file = pid_file_path()?;
