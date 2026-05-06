@@ -180,8 +180,3 @@ struct StatusPeer {
     #[serde(rename = "Active")]
     active: Option<bool>,
 }
-t)]
-    tailscale_ips: Vec<String>,
-    #[serde(rename = "Active")]
-    active: Option<bool>,
-}

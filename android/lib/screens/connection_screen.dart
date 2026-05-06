@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../models/peer_info.dart';
 import '../providers/connection_provider.dart' as conn;
 import '../widgets/peer_list_tile.dart';
