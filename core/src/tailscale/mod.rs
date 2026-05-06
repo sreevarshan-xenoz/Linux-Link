@@ -158,10 +158,7 @@ impl TailscaleClient {
                 let status: TailscaleStatus = r.json().await?;
                 Ok(status)
             }
-            Ok(r) => bail!(
-                "tailscale localapi returned error: {}",
-                r.status(),
-            ),
+            Ok(r) => bail!("tailscale localapi returned error: {}", r.status()),
             Err(e) => bail!(
                 "tailscale status failed (CLI error, and HTTP fallback failed: {})",
                 e,

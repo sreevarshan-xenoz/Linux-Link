@@ -170,7 +170,7 @@ class _FileBrowserScreenState extends ConsumerState<FileBrowserScreen>
             color: Theme.of(context).colorScheme.primary,
           ),
           title: Text(file.name),
-          subtitle: Text(_formatFileSize(file.size ?? 0)),
+          subtitle: Text(_formatFileSize(file.size)),
           trailing: isSelected
               ? const Icon(Icons.check_circle, color: Colors.blue)
               : null,
