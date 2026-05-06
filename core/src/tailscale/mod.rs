@@ -90,17 +90,24 @@ impl TailscaleClient {
         let output = Command::new("tailscale")
             .arg("status")
             .output()
-            .await
-            .context("failed to execute tailscale status")?;
+            .await;
 
-        if !output.status.success() {
-            bail!(
-                "tailscale status failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            )
+        match output {
+            Ok(output) if output.status.success() => {
+                Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+            }
+            _ => {
+                // Fallback to local API for status text
+                let client = reqwest::Client::builder()
+                    .timeout(Duration::from_secs(2))
+                    .build()?;
+                let res = client.get("http://100.100.100.100:1053/localapi/v0/status").send().await;
+                match res {
+                    Ok(r) if r.status().is_success() => Ok("Tailscale Online (via LocalAPI)".to_string()),
+                    _ => bail!("tailscale status failed"),
+                }
+            }
         }
-
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     }
 
     async fn status(&self) -> Result<TailscaleStatus> {
@@ -117,22 +124,42 @@ impl TailscaleClient {
             });
         }
 
+        // Try CLI first
         let output = Command::new("tailscale")
             .arg("status")
             .arg("--json")
             .output()
-            .await
-            .context("failed to execute tailscale status --json")?;
+            .await;
 
-        if !output.status.success() {
-            bail!(
-                "tailscale status --json failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            )
+        if let Ok(output) = output {
+            if output.status.success() {
+                return serde_json::from_slice::<TailscaleStatus>(&output.stdout)
+                    .context("failed to parse tailscale status JSON");
+            }
         }
 
-        serde_json::from_slice::<TailscaleStatus>(&output.stdout)
-            .context("failed to parse tailscale status JSON")
+        // Fallback to Local API (especially for Android/container environments)
+        // Tailscale LocalAPI usually listens on 100.100.100.100:1053 (internal DNS)
+        // or a local port. 100.100.100.100:1053 is a standard path.
+        tracing::debug!("Tailscale CLI failed, falling back to Local API HTTP endpoint");
+
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(2))
+            .build()?;
+
+        let res = client
+            .get("http://100.100.100.100:1053/localapi/v0/status")
+            .send()
+            .await;
+
+        match res {
+            Ok(r) if r.status().is_success() => {
+                let status: TailscaleStatus = r.json().await?;
+                Ok(status)
+            }
+            Ok(r) => bail!("tailscale localapi returned error: {}", r.status()),
+            Err(e) => bail!("tailscale status failed (CLI error, and HTTP fallback failed: {})", e),
+        }
     }
 }
 
