@@ -18,6 +18,7 @@ ashpd.workspace = true
 pipewire.workspace = true
 libspa.workspace = true
 tokio-util.workspace = true
+x11rb = { version = "0.13", features = ["shm"] }
 
 # Video encoding
 ffmpeg-sidecar.workspace = true
