@@ -6,7 +6,9 @@ use tokio::process::Command;
 use tokio::time::sleep;
 
 pub mod discovery;
+pub mod lan;
 pub use discovery::{DiscoveryEvent, DiscoveryService};
+pub use lan::{LanDiscoveryService, LanEvent};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeerInfo {

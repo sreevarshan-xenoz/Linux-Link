@@ -23,6 +23,9 @@ x11rb = { version = "0.13", features = ["shm"] }
 # Video encoding
 ffmpeg-sidecar.workspace = true
 
+# mDNS service discovery
+mdns-sd = "0.13"
+
 # Unix-specific utilities
 libc.workspace = true
 
