@@ -2,6 +2,8 @@ pub mod connection;
 pub mod kdeconnect;
 
 #[cfg(test)]
+mod connection_test;
+#[cfg(test)]
 mod kdeconnect_test;
 
 pub const HANDSHAKE_HELLO: &str = "LINUX_LINK_HELLO 1";
