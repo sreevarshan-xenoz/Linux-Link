@@ -3,11 +3,17 @@ name = "linux-link-core"
 version.workspace = true
 edition.workspace = true
 
+[features]
+default = ["wayland-portal", "x11-capture"]
+wayland-portal = ["ashpd/screencast"]
+x11-capture = ["xcap"]
+
 [dependencies]
 anyhow.workspace = true
 serde.workspace = true
 tokio.workspace = true
 serde_json = "1"
+reqwest = { version = "0.12", features = ["json"] }
 tracing.workspace = true
 uuid.workspace = true
 async-trait.workspace = true
@@ -17,9 +23,16 @@ ashpd.workspace = true
 pipewire.workspace = true
 libspa.workspace = true
 tokio-util.workspace = true
+x11rb = { version = "0.13", features = ["shm"] }
 
 # Video encoding
 ffmpeg-sidecar.workspace = true
+
+# mDNS service discovery
+mdns-sd = "0.13"
+
+# Certificate hashing for TOFU verification
+sha2 = "0.10"
 
 # Unix-specific utilities
 libc.workspace = true
@@ -30,3 +43,12 @@ quinn.workspace = true
 # TLS and certificates for QUIC
 rcgen.workspace = true
 rustls.workspace = true
+
+# X11 screen capture fallback (feature-gated)
+xcap = { workspace = true, optional = true }
+
+# Input injection via uinput (universal fallback)
+evdev.workspace = true
+
+# Directories / home paths
+dirs.workspace = true

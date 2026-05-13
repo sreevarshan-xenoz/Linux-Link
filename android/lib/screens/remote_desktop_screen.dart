@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -49,7 +48,8 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
     _frameTimer = null;
     _latencyTimer?.cancel();
     _latencyTimer = null;
-    VideoPlayerService.dispose().catchError((e) => debugPrint('Video dispose error: $e'));
+    VideoPlayerService.dispose()
+        .catchError((e) => debugPrint('Video dispose error: $e'));
     super.dispose();
   }
 
@@ -82,7 +82,7 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
       const Duration(seconds: 2),
       (_) async {
         if (!mounted) return;
-        final isActive = await bridge.rustApi.isStreamingActive();
+        final isActive = bridge.rustApi.isStreamingActive();
         if (mounted) {
           ref.read(isStreamingProvider.notifier).state = isActive;
         }
@@ -217,7 +217,8 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
       debugPrint('Stop streaming error: $e');
     }
     if (mounted) {
-      ref.read(conn.connectionStateProvider.notifier).state = conn.ConnectionState.disconnected;
+      ref.read(conn.connectionStateProvider.notifier).state =
+          conn.ConnectionState.disconnected;
       ref.read(isStreamingProvider.notifier).state = false;
       Navigator.of(context).pop();
     }
@@ -239,7 +240,7 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
+          const Icon(
             Icons.monitor_outlined,
             size: 80,
             color: Colors.white38,
@@ -330,15 +331,13 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
                     icon: const Icon(Icons.power_settings_new),
                     label: const Text('Disconnect'),
                     style: FilledButton.styleFrom(
-                      backgroundColor: Colors.red.withOpacity(0.8),
+                      backgroundColor: Colors.red.withValues(alpha: 0.8),
                     ),
                   ),
                   IconButton.filledTonal(
                     onPressed: _toggleFullscreen,
                     icon: Icon(
-                      _isFullscreen
-                          ? Icons.fullscreen_exit
-                          : Icons.fullscreen,
+                      _isFullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
                     ),
                   ),
                   IconButton.filledTonal(

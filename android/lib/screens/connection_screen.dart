@@ -46,7 +46,8 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
     }
 
     ref.read(conn.selectedPeerProvider.notifier).state = peer;
-    ref.read(conn.connectionStateProvider.notifier).state = conn.ConnectionState.connecting;
+    ref.read(conn.connectionStateProvider.notifier).state =
+        conn.ConnectionState.connecting;
 
     try {
       final address = peer.ips.first;
@@ -56,28 +57,33 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
       if (mounted) {
         switch (state) {
           case bridge.ConnectionState.connected:
-            ref.read(conn.connectionStateProvider.notifier).state = conn.ConnectionState.connected;
+            ref.read(conn.connectionStateProvider.notifier).state =
+                conn.ConnectionState.connected;
             // Navigate to remote desktop screen
             Navigator.of(context).pushNamed(
               '/remote',
               arguments: {'address': address, 'port': port},
             );
           case bridge.ConnectionState.connecting:
-            ref.read(conn.connectionStateProvider.notifier).state = conn.ConnectionState.connecting;
+            ref.read(conn.connectionStateProvider.notifier).state =
+                conn.ConnectionState.connecting;
           case bridge.ConnectionState.error:
-            ref.read(conn.connectionStateProvider.notifier).state = conn.ConnectionState.error;
+            ref.read(conn.connectionStateProvider.notifier).state =
+                conn.ConnectionState.error;
             if (mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text('Failed to connect to peer')),
               );
             }
           case bridge.ConnectionState.disconnected:
-            ref.read(conn.connectionStateProvider.notifier).state = conn.ConnectionState.disconnected;
+            ref.read(conn.connectionStateProvider.notifier).state =
+                conn.ConnectionState.disconnected;
         }
       }
     } catch (e) {
       if (mounted) {
-        ref.read(conn.connectionStateProvider.notifier).state = conn.ConnectionState.error;
+        ref.read(conn.connectionStateProvider.notifier).state =
+            conn.ConnectionState.error;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Connection error: $e')),
         );
@@ -124,16 +130,16 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
               width: double.infinity,
               padding: const EdgeInsets.all(12),
               color: switch (connectionState) {
-                conn.ConnectionState.connecting => Colors.orange.withOpacity(0.1),
-                conn.ConnectionState.connected => Colors.green.withOpacity(0.1),
-                conn.ConnectionState.error => Colors.red.withOpacity(0.1),
+                conn.ConnectionState.connecting =>
+                  Colors.orange.withValues(alpha: 0.1),
+                conn.ConnectionState.connected => Colors.green.withValues(alpha: 0.1),
+                conn.ConnectionState.error => Colors.red.withValues(alpha: 0.1),
                 conn.ConnectionState.disconnected => Colors.transparent,
               },
               child: Row(
                 children: [
                   switch (connectionState) {
-                    conn.ConnectionState.connecting =>
-                      const SizedBox(
+                    conn.ConnectionState.connecting => const SizedBox(
                         width: 16,
                         height: 16,
                         child: CircularProgressIndicator(strokeWidth: 2),
@@ -142,7 +148,8 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
                       const Icon(Icons.check_circle, color: Colors.green),
                     conn.ConnectionState.error =>
                       const Icon(Icons.error, color: Colors.red),
-                    conn.ConnectionState.disconnected => const SizedBox.shrink(),
+                    conn.ConnectionState.disconnected =>
+                      const SizedBox.shrink(),
                   },
                   const SizedBox(width: 8),
                   Text(
@@ -177,9 +184,12 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
                         const SizedBox(height: 8),
                         Text(
                           'Make sure Tailscale is running and peers are online',
-                          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                color: Theme.of(context).colorScheme.onSurfaceVariant,
-                              ),
+                          style:
+                              Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onSurfaceVariant,
+                                  ),
                         ),
                         const SizedBox(height: 16),
                         FilledButton.icon(
@@ -205,9 +215,7 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
                       final peer = peers[index];
                       return PeerListTile(
                         peer: peer,
-                        onTap: peer.online
-                            ? () => _connectToPeer(peer)
-                            : null,
+                        onTap: peer.online ? () => _connectToPeer(peer) : null,
                       );
                     },
                   ),

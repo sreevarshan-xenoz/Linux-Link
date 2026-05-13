@@ -12,13 +12,14 @@ use tracing::{debug, error, info, warn};
 use super::bitrate::AdaptiveBitrate;
 use super::capture;
 use super::encoder::VideoEncoder;
-use super::transport::{self, StreamServer, StreamTransportConfig};
+use super::transport::{self, CertManager, StreamServer, StreamTransportConfig};
 use super::{EncodedPacket, StreamingConfig, VideoFrame};
 
 /// Controls the streaming server lifecycle
 pub struct StreamingServer {
     config: StreamingConfig,
     transport_config: StreamTransportConfig,
+    cert_manager: std::sync::Arc<CertManager>,
     cancel: CancellationToken,
     /// Watch channel for adaptive bitrate updates
     bitrate_tx: watch::Sender<u32>,
@@ -28,11 +29,16 @@ pub struct StreamingServer {
 
 impl StreamingServer {
     /// Create a new streaming server with the given configurations
-    pub fn new(config: StreamingConfig, transport_config: StreamTransportConfig) -> Self {
+    pub fn new(
+        config: StreamingConfig,
+        transport_config: StreamTransportConfig,
+        cert_manager: std::sync::Arc<CertManager>,
+    ) -> Self {
         let (bitrate_tx, _) = watch::channel(config.bitrate_bps);
         Self {
             config,
             transport_config,
+            cert_manager,
             cancel: CancellationToken::new(),
             bitrate_tx,
             adaptive_bitrate: None,
@@ -78,7 +84,7 @@ impl StreamingServer {
         );
 
         // 1. Create QUIC server endpoint
-        let server = StreamServer::new(self.transport_config.clone())
+        let server = StreamServer::new(self.transport_config.clone(), &self.cert_manager)
             .await
             .context("Failed to create QUIC server")?;
 
@@ -458,7 +464,9 @@ mod tests {
     fn test_streaming_server_creation() {
         let config = StreamingConfig::default();
         let transport_config = StreamTransportConfig::default();
-        let server = StreamingServer::new(config, transport_config);
+        let cert_manager =
+            std::sync::Arc::new(CertManager::new().expect("Failed to create CertManager"));
+        let server = StreamingServer::new(config, transport_config, cert_manager);
 
         assert!(server.is_running());
     }
@@ -467,7 +475,9 @@ mod tests {
     fn test_bitrate_update() {
         let config = StreamingConfig::default();
         let transport_config = StreamTransportConfig::default();
-        let server = StreamingServer::new(config.clone(), transport_config);
+        let cert_manager =
+            std::sync::Arc::new(CertManager::new().expect("Failed to create CertManager"));
+        let server = StreamingServer::new(config.clone(), transport_config, cert_manager);
 
         let new_bitrate = 4_000_000;
         server.update_bitrate(new_bitrate);

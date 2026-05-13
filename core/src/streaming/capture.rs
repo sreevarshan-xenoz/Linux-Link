@@ -6,7 +6,7 @@
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use ashpd::desktop::screencast::{Screencast, SelectSourcesOptions, SourceType};
 use pipewire::stream::StreamFlags;
 use tokio::sync::mpsc;
@@ -79,35 +79,49 @@ pub async fn start_capture(
         config.width, config.height, config.fps
     );
 
-    // Step 1: Create XDG Portal screencast session
-    let screencast = Screencast::new()
+    // Step 1: Create XDG Portal screencast session (with timeout to handle missing portal backends)
+    let screencast = tokio::time::timeout(Duration::from_secs(10), Screencast::new())
         .await
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "Screencast portal unavailable (timeout after 10s) — is xdg-desktop-portal running?"
+            )
+        })?
         .context("Failed to create Screencast portal")?;
 
     debug!("Creating screencast session...");
-    let session = screencast
-        .create_session(Default::default())
-        .await
-        .context("Failed to create capture session")?;
+    let session = tokio::time::timeout(
+        Duration::from_secs(10),
+        screencast.create_session(Default::default()),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("Portal request timed out — is xdg-desktop-portal running?"))?
+    .context("Failed to create capture session")?;
 
     // Step 2: Select sources (monitor capture)
     let source_types = ashpd::enumflags2::BitFlags::from(SourceType::Monitor);
-    screencast
-        .select_sources(
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        screencast.select_sources(
             &session,
             SelectSourcesOptions::default()
                 .set_sources(Some(source_types))
                 .set_multiple(Some(true)),
-        )
-        .await
-        .context("Failed to select sources")?;
+        ),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("Portal request timed out — is xdg-desktop-portal running?"))?
+    .context("Failed to select sources")?;
 
     // Step 3: Start capture and get PipeWire node ID
     debug!("Starting capture and waiting for PipeWire stream...");
-    let response = screencast
-        .start(&session, None, Default::default())
-        .await
-        .context("Failed to start capture")?;
+    let response = tokio::time::timeout(
+        Duration::from_secs(10),
+        screencast.start(&session, None, Default::default()),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("Portal request timed out — is xdg-desktop-portal running?"))?
+    .context("Failed to start capture")?;
 
     let streams = response
         .response()
@@ -349,16 +363,254 @@ fn on_process(stream: &pipewire::stream::Stream, user_data: &StreamUserData) {
     }
 }
 
-/// Check if screen capture is available on this system
-pub async fn check_availability() -> Result<bool> {
-    let portal_available =
-        std::env::var("XDG_CURRENT_DESKTOP").is_ok() || std::env::var("WAYLAND_DISPLAY").is_ok();
+/// Which display server is currently running
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DisplayServer {
+    /// Wayland compositor (via XDG Desktop Portal / PipeWire)
+    Wayland,
+    /// X11 server (via XDG Desktop Portal or direct X11)
+    X11,
+    /// No display server detected
+    None,
+}
 
-    if !portal_available {
-        debug!("XDG Desktop Portal not available - no WAYLAND_DISPLAY or XDG_CURRENT_DESKTOP");
+/// Detect the active display server from environment variables.
+pub fn detect_display_server() -> DisplayServer {
+    // Wayland is indicated by WAYLAND_DISPLAY being set
+    if std::env::var("WAYLAND_DISPLAY").is_ok() {
+        debug!("Detected Wayland display server");
+        return DisplayServer::Wayland;
     }
 
-    Ok(portal_available)
+    // X11 is indicated by DISPLAY being set
+    if std::env::var("DISPLAY").is_ok() {
+        debug!("Detected X11 display server");
+        return DisplayServer::X11;
+    }
+
+    // XDG_CURRENT_DESKTOP may indicate a desktop environment
+    // Check if we're on a headless system or SSH without X forwarding
+    if std::env::var("XDG_CURRENT_DESKTOP").is_ok() {
+        // This could be a pure Wayland session without WAYLAND_DISPLAY set explicitly
+        debug!("Desktop environment detected via XDG_CURRENT_DESKTOP, assuming Wayland");
+        return DisplayServer::Wayland;
+    }
+
+    warn!("No display server detected (neither WAYLAND_DISPLAY nor DISPLAY is set)");
+    DisplayServer::None
+}
+
+/// Check if screen capture is available on this system
+pub async fn check_availability() -> Result<bool> {
+    match detect_display_server() {
+        DisplayServer::Wayland => {
+            // Check PipeWire portal availability by trying to create a session
+            let available = try_portal_available().await;
+            if available {
+                info!("Screen capture available via PipeWire/XDP");
+            } else {
+                warn!("Wayland detected but XDG Desktop Portal not available");
+            }
+            Ok(available)
+        }
+        DisplayServer::X11 => {
+            // Check X11 availability — try connecting to the display
+            let x11_available = check_x11_available();
+            if x11_available {
+                info!("Screen capture available via X11");
+            } else {
+                warn!("X11 detected but display connection failed");
+            }
+            Ok(x11_available)
+        }
+        DisplayServer::None => {
+            debug!("Screen capture not available — no display server");
+            Ok(false)
+        }
+    }
+}
+
+/// Quick check whether PipeWire portal is available (lightweight probe).
+async fn try_portal_available() -> bool {
+    // Try creating a screencast session — if it fails, portal isn't available
+    match Screencast::new().await {
+        Ok(screencast) => match screencast.create_session(Default::default()).await {
+            Ok(_session) => true,
+            Err(e) => {
+                debug!("Portal session creation failed: {e}");
+                false
+            }
+        },
+        Err(e) => {
+            debug!("Portal unavailable: {e}");
+            false
+        }
+    }
+}
+
+/// Quick check whether X11 display is accessible.
+fn check_x11_available() -> bool {
+    use x11rb::rust_connection::RustConnection;
+
+    match RustConnection::connect(None) {
+        Ok((_conn, _screen_num)) => true,
+        Err(e) => {
+            debug!("X11 connection failed: {e}");
+            false
+        }
+    }
+}
+
+/// Auto-detect display server and start the appropriate capture method.
+///
+/// Tries PipeWire/XDP first for Wayland, then falls back to X11 if applicable.
+pub async fn start_capture_auto(
+    config: StreamingConfig,
+    frame_tx: mpsc::Sender<VideoFrame>,
+    cancel: CancellationToken,
+) -> Result<CaptureSession> {
+    match detect_display_server() {
+        DisplayServer::Wayland => {
+            info!("Starting Wayland/PipeWire capture");
+            start_capture(config, frame_tx, cancel).await
+        }
+        DisplayServer::X11 => {
+            info!("Starting X11 capture");
+            start_x11_capture(config, frame_tx, cancel).await
+        }
+        DisplayServer::None => {
+            bail!("No display server detected — cannot start capture");
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// X11 screen capture (fallback when PipeWire portal isn't available)
+// ---------------------------------------------------------------------------
+
+/// Start X11 screen capture using X GetImage for screen capture.
+///
+/// This is a fallback when PipeWire/Portal isn't available (e.g., bare X11
+/// sessions without a working portal). For Wayland, use the PipeWire path via
+/// `start_capture()`.
+async fn start_x11_capture(
+    config: StreamingConfig,
+    frame_tx: mpsc::Sender<VideoFrame>,
+    cancel: CancellationToken,
+) -> Result<CaptureSession> {
+    use x11rb::connection::Connection;
+    use x11rb::rust_connection::RustConnection;
+
+    info!("Starting X11 screen capture");
+
+    let (conn, screen_num) =
+        RustConnection::connect(None).context("Failed to connect to X11 display")?;
+    let screen = &conn.setup().roots[screen_num];
+    let root = screen.root;
+
+    // Get the actual screen dimensions
+    let screen_width = screen.width_in_pixels as u32;
+    let screen_height = screen.height_in_pixels as u32;
+    info!("X11 screen: {}x{}", screen_width, screen_height);
+
+    // Determine capture width/height (use config if <= screen, otherwise screen)
+    let cap_width = config.width.min(screen_width);
+    let cap_height = config.height.min(screen_height);
+
+    // Spawn the capture loop on a blocking thread
+    let cap_cancel = cancel.clone();
+    std::thread::Builder::new()
+        .name("x11-capture".into())
+        .spawn(move || {
+            if let Err(e) = run_x11_capture_loop(
+                conn, root, cap_width, cap_height, config.fps, frame_tx, cap_cancel,
+            ) {
+                error!("X11 capture thread exited with error: {e}");
+            }
+        })
+        .context("Failed to spawn X11 capture thread")?;
+
+    Ok(CaptureSession::new(config, cancel))
+}
+
+/// Run the X11 capture loop, sending frames through the channel.
+fn run_x11_capture_loop(
+    conn: x11rb::rust_connection::RustConnection,
+    root: u32,
+    width: u32,
+    height: u32,
+    fps: u32,
+    frame_tx: mpsc::Sender<VideoFrame>,
+    cancel: CancellationToken,
+) -> Result<()> {
+    use x11rb::protocol::xproto::{ConnectionExt as _, ImageFormat};
+
+    let frame_interval = Duration::from_micros(1_000_000 / fps as u64);
+    let mut frame_count = 0u64;
+
+    loop {
+        if cancel.is_cancelled() {
+            info!("X11 capture cancelled");
+            break;
+        }
+
+        let frame_start = Instant::now();
+
+        // Capture the screen using GetImage
+        let result = conn.get_image(
+            ImageFormat::Z_PIXMAP,
+            root,
+            0, // x offset
+            0, // y offset
+            width as u16,
+            height as u16,
+            !0, // plane mask (all planes)
+        );
+
+        match result {
+            Ok(cookie) => match cookie.reply() {
+                Ok(reply) => {
+                    let frame_data = reply.data.to_vec();
+                    let stride = width * 4;
+
+                    frame_count += 1;
+                    if frame_count.is_multiple_of(30) {
+                        debug!("X11 capture: frame #{}, {}x{}", frame_count, width, height);
+                    }
+
+                    let frame = VideoFrame {
+                        data: frame_data,
+                        width,
+                        height,
+                        stride,
+                        timestamp: Instant::now(),
+                    };
+
+                    if frame_tx.blocking_send(frame).is_err() {
+                        debug!("Frame channel closed, stopping capture");
+                        break;
+                    }
+
+                    // Maintain target framerate
+                    let elapsed = frame_start.elapsed();
+                    if elapsed < frame_interval {
+                        std::thread::sleep(frame_interval - elapsed);
+                    }
+                }
+                Err(e) => {
+                    error!("X11 GetImage reply error: {e}");
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            },
+            Err(e) => {
+                error!("X11 GetImage request error: {e}");
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+    }
+
+    info!("X11 capture thread shut down after {} frames", frame_count);
+    Ok(())
 }
 
 /// Create a test frame for development/testing

@@ -38,10 +38,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
       _tailscaleEnabled = prefs.getBool(_keyTailscaleEnabled) ?? true;
-      _videoQuality = VideoQuality.values
-          .firstWhere((e) => e.name == prefs.getString(_keyVideoQuality), orElse: () => VideoQuality.high);
-      _inputMode = InputMode.values
-          .firstWhere((e) => e.name == prefs.getString(_keyInputMode), orElse: () => InputMode.trackpad);
+      _videoQuality = VideoQuality.values.firstWhere(
+          (e) => e.name == prefs.getString(_keyVideoQuality),
+          orElse: () => VideoQuality.high);
+      _inputMode = InputMode.values.firstWhere(
+          (e) => e.name == prefs.getString(_keyInputMode),
+          orElse: () => InputMode.trackpad);
       _connectionTimeout = prefs.getInt(_keyConnectionTimeout) ?? 30;
     });
   }
@@ -147,41 +149,35 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ),
             ),
           ),
-          RadioListTile<VideoQuality>(
-            title: const Text('High'),
-            subtitle: const Text('1080p, higher bitrate'),
-            value: VideoQuality.high,
+          RadioGroup<VideoQuality>(
             groupValue: _videoQuality,
             onChanged: (value) {
-              setState(() {
-                _videoQuality = value!;
-              });
-              _saveSetting(_keyVideoQuality, value.name);
+              if (value != null) {
+                setState(() {
+                  _videoQuality = value;
+                });
+                _saveSetting(_keyVideoQuality, value.name);
+              }
             },
-          ),
-          RadioListTile<VideoQuality>(
-            title: const Text('Medium'),
-            subtitle: const Text('720p, balanced'),
-            value: VideoQuality.medium,
-            groupValue: _videoQuality,
-            onChanged: (value) {
-              setState(() {
-                _videoQuality = value!;
-              });
-              _saveSetting(_keyVideoQuality, value.name);
-            },
-          ),
-          RadioListTile<VideoQuality>(
-            title: const Text('Low'),
-            subtitle: const Text('480p, lower bandwidth'),
-            value: VideoQuality.low,
-            groupValue: _videoQuality,
-            onChanged: (value) {
-              setState(() {
-                _videoQuality = value!;
-              });
-              _saveSetting(_keyVideoQuality, value.name);
-            },
+            child: const Column(
+              children: [
+                RadioListTile<VideoQuality>(
+                  title: Text('High'),
+                  subtitle: Text('1080p, higher bitrate'),
+                  value: VideoQuality.high,
+                ),
+                RadioListTile<VideoQuality>(
+                  title: Text('Medium'),
+                  subtitle: Text('720p, balanced'),
+                  value: VideoQuality.medium,
+                ),
+                RadioListTile<VideoQuality>(
+                  title: Text('Low'),
+                  subtitle: Text('480p, lower bandwidth'),
+                  value: VideoQuality.low,
+                ),
+              ],
+            ),
           ),
           const Divider(),
           // Input mode
@@ -194,41 +190,35 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ),
             ),
           ),
-          RadioListTile<InputMode>(
-            title: const Text('Trackpad'),
-            subtitle: const Text('Relative movement, like a laptop trackpad'),
-            value: InputMode.trackpad,
+          RadioGroup<InputMode>(
             groupValue: _inputMode,
             onChanged: (value) {
-              setState(() {
-                _inputMode = value!;
-              });
-              _saveSetting(_keyInputMode, value.name);
+              if (value != null) {
+                setState(() {
+                  _inputMode = value;
+                });
+                _saveSetting(_keyInputMode, value.name);
+              }
             },
-          ),
-          RadioListTile<InputMode>(
-            title: const Text('Touch'),
-            subtitle: const Text('Direct touch on screen'),
-            value: InputMode.touch,
-            groupValue: _inputMode,
-            onChanged: (value) {
-              setState(() {
-                _inputMode = value!;
-              });
-              _saveSetting(_keyInputMode, value.name);
-            },
-          ),
-          RadioListTile<InputMode>(
-            title: const Text('Mouse'),
-            subtitle: const Text('External mouse via Bluetooth/USB'),
-            value: InputMode.mouse,
-            groupValue: _inputMode,
-            onChanged: (value) {
-              setState(() {
-                _inputMode = value!;
-              });
-              _saveSetting(_keyInputMode, value.name);
-            },
+            child: const Column(
+              children: [
+                RadioListTile<InputMode>(
+                  title: Text('Trackpad'),
+                  subtitle: Text('Relative movement, like a laptop trackpad'),
+                  value: InputMode.trackpad,
+                ),
+                RadioListTile<InputMode>(
+                  title: Text('Touch'),
+                  subtitle: Text('Direct touch on screen'),
+                  value: InputMode.touch,
+                ),
+                RadioListTile<InputMode>(
+                  title: Text('Mouse'),
+                  subtitle: Text('External mouse via Bluetooth/USB'),
+                  value: InputMode.mouse,
+                ),
+              ],
+            ),
           ),
           const Divider(),
           // Connection timeout

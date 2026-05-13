@@ -36,7 +36,8 @@ class PeersNotifier extends StateNotifier<List<PeerInfo>> {
 
   void updatePeer(String name, PeerInfo updated) {
     state = [
-      for (final p in state) if (p.name == name) updated else p,
+      for (final p in state)
+        if (p.name == name) updated else p,
     ];
   }
 

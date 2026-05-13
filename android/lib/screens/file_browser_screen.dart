@@ -38,7 +38,6 @@ class _FileBrowserScreenState extends ConsumerState<FileBrowserScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
   final Set<int> _selectedLocalFiles = {};
-  final Set<int> _selectedRemoteFiles = {};
   bool _isTransferring = false;
   double _transferProgress = 0.0;
   List<String> _pendingFiles = [];
@@ -168,12 +167,23 @@ class _FileBrowserScreenState extends ConsumerState<FileBrowserScreen>
             color: Theme.of(context).colorScheme.primary,
           ),
           title: Text(file.name),
-          subtitle: file.size != null
-              ? Text('${_formatFileSize(file.size!)}')
-              : null,
-          trailing: isSelected
-              ? const Icon(Icons.check_circle, color: Colors.blue)
-              : null,
+          subtitle: Text(_formatFileSize(file.size)),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (isSelected)
+                const Icon(Icons.check_circle, color: Colors.blue),
+              IconButton(
+                icon: const Icon(Icons.close, size: 18),
+                onPressed: () {
+                  setState(() {
+                    _localFiles.removeAt(index);
+                    _selectedLocalFiles.remove(index);
+                  });
+                },
+              ),
+            ],
+          ),
           selected: isSelected,
           onLongPress: () {
             setState(() {
@@ -182,12 +192,6 @@ class _FileBrowserScreenState extends ConsumerState<FileBrowserScreen>
               } else {
                 _selectedLocalFiles.add(index);
               }
-            });
-          },
-          onDoubleTap: () {
-            setState(() {
-              _localFiles.removeAt(index);
-              _selectedLocalFiles.remove(index);
             });
           },
         );
@@ -264,7 +268,9 @@ class _FileBrowserScreenState extends ConsumerState<FileBrowserScreen>
                     final file = _remoteFiles[index];
                     return ListTile(
                       leading: Icon(
-                        file.isDirectory ? Icons.folder : Icons.insert_drive_file,
+                        file.isDirectory
+                            ? Icons.folder
+                            : Icons.insert_drive_file,
                         color: file.isDirectory
                             ? Colors.amber
                             : Theme.of(context).colorScheme.primary,
@@ -272,7 +278,8 @@ class _FileBrowserScreenState extends ConsumerState<FileBrowserScreen>
                       title: Text(file.name),
                       subtitle: file.isDirectory
                           ? null
-                          : Text('${file.formattedSize}  \u2022  ${file.formattedModified}'),
+                          : Text(
+                              '${file.formattedSize}  \u2022  ${file.formattedModified}'),
                       onTap: () {
                         if (file.isDirectory) {
                           _navigateInto(file.name);
@@ -316,7 +323,7 @@ class _FileBrowserScreenState extends ConsumerState<FileBrowserScreen>
   void _navigateInto(String name) {
     setState(() {
       _currentRemotePath =
-          '${_currentRemotePath}${_currentRemotePath.endsWith('/') ? '' : '/'}$name';
+          '$_currentRemotePath${_currentRemotePath.endsWith('/') ? '' : '/'}$name';
     });
     _loadRemoteFiles();
   }

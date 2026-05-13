@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use super::EncodedPacket;
-use super::transport::{self, StreamClient, StreamTransportConfig};
+use super::transport::{self, CertManager, StreamClient, StreamTransportConfig};
 
 /// Default port for the streaming service.
 pub const DEFAULT_STREAMING_PORT: u16 = 4716;
@@ -22,7 +22,8 @@ pub const DEFAULT_STREAMING_PORT: u16 = 4716;
 /// # Usage
 ///
 /// ```ignore
-/// let (mut client, packet_rx) = StreamingClient::connect("100.64.0.1:4716").await?;
+/// let cert_manager = std::sync::Arc::new(CertManager::new().unwrap());
+/// let (mut client, packet_rx) = StreamingClient::connect("100.64.0.1:4716", cert_manager).await?;
 /// // Spawn a task to consume packets from packet_rx
 /// tokio::spawn(consume_packets(packet_rx));
 /// client.start().await; // runs until cancelled
@@ -31,6 +32,8 @@ pub struct StreamingClient {
     connection: Option<quinn::Connection>,
     #[allow(dead_code)]
     transport_config: StreamTransportConfig,
+    #[allow(dead_code)]
+    cert_manager: std::sync::Arc<CertManager>,
     frame_tx: mpsc::Sender<EncodedPacket>,
     cancel: CancellationToken,
     #[allow(dead_code)]
@@ -43,11 +46,12 @@ impl StreamingClient {
     /// `channel_capacity` controls the buffer size between the receive task
     /// and the consumer. A capacity of 8 is a reasonable default for real-time
     /// video.
-    pub fn new(channel_capacity: usize) -> Self {
+    pub fn new(channel_capacity: usize, cert_manager: std::sync::Arc<CertManager>) -> Self {
         let (frame_tx, _frame_rx) = mpsc::channel(channel_capacity);
         Self {
             connection: None,
             transport_config: StreamTransportConfig::default(),
+            cert_manager,
             frame_tx,
             cancel: CancellationToken::new(),
             channel_capacity,
@@ -58,7 +62,10 @@ impl StreamingClient {
     ///
     /// The address should be in the form `"host:port"`, e.g. `"100.64.0.1:4716"`.
     /// Returns the client and a receiver channel for consuming frames.
-    pub async fn connect(addr: &str) -> Result<(Self, mpsc::Receiver<EncodedPacket>)> {
+    pub async fn connect(
+        addr: &str,
+        cert_manager: std::sync::Arc<CertManager>,
+    ) -> Result<(Self, mpsc::Receiver<EncodedPacket>)> {
         let addr: SocketAddr = addr
             .parse()
             .with_context(|| format!("Invalid server address: {addr}"))?;
@@ -68,11 +75,12 @@ impl StreamingClient {
 
         info!("Connecting to streaming server at {addr}");
 
-        let transport = StreamClient::new(StreamTransportConfig::default())
+        let transport = StreamClient::new(StreamTransportConfig::default(), &cert_manager)
             .context("Failed to create QUIC transport")?;
 
+        let server_name = addr.ip().to_string();
         let connection = transport
-            .connect(addr)
+            .connect(addr, &server_name)
             .await
             .context("Failed to connect to streaming server")?;
 
@@ -81,6 +89,7 @@ impl StreamingClient {
         let client = Self {
             connection: Some(connection),
             transport_config: StreamTransportConfig::default(),
+            cert_manager,
             frame_tx,
             cancel: CancellationToken::new(),
             channel_capacity,
@@ -297,7 +306,10 @@ mod tests {
 
     #[test]
     fn test_streaming_client_new() {
-        let client = StreamingClient::new(8);
+        use super::transport::CertManager;
+        let cert_manager =
+            std::sync::Arc::new(CertManager::new().expect("Failed to create CertManager"));
+        let client = StreamingClient::new(8, cert_manager);
         assert!(!client.is_running());
         assert_eq!(client.current_rtt(), Duration::ZERO);
     }

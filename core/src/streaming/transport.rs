@@ -4,9 +4,12 @@
 //! Uses quinn with datagram mode for minimal latency over reliability.
 
 use anyhow::{Context, Result};
-use rustls::pki_types::PrivateKeyDer;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
@@ -33,6 +36,245 @@ impl Default for StreamTransportConfig {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Certificate management with TOFU (Trust On First Use) verification
+// ---------------------------------------------------------------------------
+
+/// Manages TLS certificates for E2E encrypted streaming.
+///
+/// Provides:
+/// - A persistent identity certificate for this device (server identity)
+/// - TOFU peer certificate verification so connections are trusted
+///   automatically on first use and verified on reconnection
+/// - Optional on-disk persistence of known peer certificate hashes
+#[derive(Debug)]
+pub struct CertManager {
+    /// Our identity certificate in DER form
+    cert_der: Vec<u8>,
+    /// Our private key in PKCS#8 DER form
+    key_der: Vec<u8>,
+    /// Known peer certificate hashes: label → SHA-256 of the DER-encoded cert
+    known_peers: Arc<Mutex<HashMap<String, [u8; 32]>>>,
+    /// Optional path for persisting `known_peers` across restarts
+    peers_path: Option<PathBuf>,
+}
+
+impl CertManager {
+    /// Create a new `CertManager` with a freshly generated identity cert.
+    ///
+    /// Known peers are kept in memory only (not persisted).
+    pub fn new() -> Result<Self> {
+        let (cert_der, key_der) = generate_identity()?;
+        Ok(Self {
+            cert_der,
+            key_der,
+            known_peers: Arc::new(Mutex::new(HashMap::new())),
+            peers_path: None,
+        })
+    }
+
+    /// Create a `CertManager` backed by files in `identity_dir`.
+    ///
+    /// - If `identity_dir/identity.der` and `identity_dir/identity.key` exist, they
+    ///   are loaded; otherwise a new identity is generated and saved.
+    /// - Known peers are loaded from `identity_dir/known_peers.json` if it exists.
+    pub fn load_or_create(identity_dir: &Path) -> Result<Self> {
+        std::fs::create_dir_all(identity_dir).context("Failed to create identity directory")?;
+
+        let cert_path = identity_dir.join("identity.der");
+        let key_path = identity_dir.join("identity.key");
+
+        let (cert_der, key_der) = if cert_path.exists() && key_path.exists() {
+            let cert = std::fs::read(&cert_path)?;
+            let key = std::fs::read(&key_path)?;
+            (cert, key)
+        } else {
+            let (cert, key) = generate_identity()?;
+            std::fs::write(&cert_path, &cert)?;
+            std::fs::write(&key_path, &key)?;
+            (cert, key)
+        };
+
+        let peers_path = identity_dir.join("known_peers.json");
+        let known_peers = if peers_path.exists() {
+            let data =
+                std::fs::read_to_string(&peers_path).context("Failed to read known peers")?;
+            serde_json::from_str(&data).unwrap_or_default()
+        } else {
+            HashMap::new()
+        };
+
+        Ok(Self {
+            cert_der,
+            key_der,
+            known_peers: Arc::new(Mutex::new(known_peers)),
+            peers_path: Some(peers_path),
+        })
+    }
+
+    /// Build a QUIC server TLS configuration that presents this device's identity
+    /// certificate to connecting clients.
+    pub fn server_config(&self) -> Result<quinn::ServerConfig> {
+        let cert = CertificateDer::from(self.cert_der.clone());
+        let key = PrivateKeyDer::try_from(self.key_der.clone())
+            .map_err(|_| anyhow::anyhow!("Failed to parse private key"))?;
+
+        let mut transport = quinn::TransportConfig::default();
+        transport.datagram_send_buffer_size(16 * 1024 * 1024);
+        transport.datagram_receive_buffer_size(Some(16 * 1024 * 1024));
+
+        let mut server_config = quinn::ServerConfig::with_single_cert(vec![cert], key)
+            .context("Failed to configure TLS server")?;
+        server_config.transport_config(Arc::new(transport));
+
+        Ok(server_config)
+    }
+
+    /// Build a QUIC client TLS configuration with TOFU certificate verification.
+    ///
+    /// The client verifies the server's certificate against the stored known_peers
+    /// map and auto-accepts unknown peers on first use.
+    pub fn client_config(&self) -> Result<quinn::ClientConfig> {
+        let crypto = rustls::ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(TofuVerifier {
+                known_peers: self.known_peers.clone(),
+            }))
+            .with_no_client_auth();
+
+        let quic_crypto = quinn::crypto::rustls::QuicClientConfig::try_from(crypto)
+            .context("Failed to create QUIC client crypto config")?;
+
+        let mut client_config = quinn::ClientConfig::new(Arc::new(quic_crypto));
+
+        // Default transport config – caller can override
+        let mut transport = quinn::TransportConfig::default();
+        transport.datagram_send_buffer_size(16 * 1024 * 1024);
+        transport.datagram_receive_buffer_size(Some(16 * 1024 * 1024));
+        client_config.transport_config(Arc::new(transport));
+
+        Ok(client_config)
+    }
+
+    /// Save the known peers map to the configured path.
+    pub fn save_known_peers(&self) -> Result<()> {
+        if let Some(path) = &self.peers_path {
+            let peers = self.known_peers.lock().unwrap();
+            let json = serde_json::to_string_pretty(&*peers)?;
+            std::fs::write(path, json)?;
+        }
+        Ok(())
+    }
+
+    /// Return the SHA-256 hash of the given DER certificate.
+    fn cert_hash(cert: &CertificateDer<'_>) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(cert.as_ref());
+        hasher.finalize().into()
+    }
+}
+
+/// Generate a fresh ECDSA P-256 identity certificate and key.
+fn generate_identity() -> Result<(Vec<u8>, Vec<u8>)> {
+    use rcgen::{CertificateParams, KeyPair, PKCS_ECDSA_P256_SHA256};
+
+    let key_pair = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)
+        .context("Failed to generate ECDSA key pair")?;
+    let params = CertificateParams::new(vec!["linux-link.local".into()])
+        .context("Failed to create certificate params")?;
+    let cert = params
+        .self_signed(&key_pair)
+        .context("Failed to self-sign certificate")?;
+
+    Ok((cert.der().to_vec(), key_pair.serialize_der()))
+}
+
+/// TOFU (Trust On First Use) certificate verifier.
+///
+/// - **First connection:** auto-accepts any server certificate and stores its
+///   SHA-256 hash for future verification.
+/// - **Subsequent connections:** verifies that the presented certificate's hash
+///   matches the stored value. A mismatch indicates a potential MITM attack.
+#[derive(Debug)]
+struct TofuVerifier {
+    known_peers: Arc<Mutex<HashMap<String, [u8; 32]>>>,
+}
+
+impl rustls::client::danger::ServerCertVerifier for TofuVerifier {
+    fn verify_server_cert(
+        &self,
+        end_entity: &rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        server_name: &rustls::pki_types::ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> std::result::Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        let hash = CertManager::cert_hash(end_entity);
+        // Use the server-name representation for TOFU key lookup.
+        // ServerName doesn't implement Display, so we convert through its
+        // inner types since both DNS names and IPs implement Display.
+        let label = match server_name {
+            ServerName::DnsName(dns) => dns.as_ref().to_string(),
+            // IpAddr in pki-types doesn't impl Display; Debug output is stable
+            ServerName::IpAddress(addr) => format!("{:?}", addr),
+            // Fallback for any future ServerName variants
+            _ => format!("{:?}", server_name),
+        };
+
+        let mut peers = self.known_peers.lock().unwrap();
+
+        match peers.get(&label) {
+            Some(stored) if *stored == hash => {
+                // Known peer with matching cert — verified successfully.
+                debug!("TOFU: verified cert for {label}");
+                Ok(rustls::client::danger::ServerCertVerified::assertion())
+            }
+            Some(_) => {
+                // Known peer with a DIFFERENT cert — possible MITM!
+                warn!("TOFU: certificate hash mismatch for {label}! Possible MITM attack.");
+                Err(rustls::Error::General(format!(
+                    "Certificate for {label} has changed since the last connection. \
+                     This could be a man-in-the-middle attack. \
+                     If you recently reinstalled the remote device, \
+                     delete its entry and reconnect."
+                )))
+            }
+            None => {
+                // New peer — TOFU: auto-accept and store.
+                info!("TOFU: first connection to {label}, accepting cert");
+                peers.insert(label, hash);
+                Ok(rustls::client::danger::ServerCertVerified::assertion())
+            }
+        }
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls::pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls::pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        vec![
+            rustls::SignatureScheme::RSA_PKCS1_SHA256,
+            rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
+            rustls::SignatureScheme::ED25519,
+        ]
+    }
+}
+
 /// Server-side streaming transport
 pub struct StreamServer {
     endpoint: quinn::Endpoint,
@@ -41,30 +283,21 @@ pub struct StreamServer {
 
 impl StreamServer {
     /// Create a new streaming server endpoint
-    pub async fn new(config: StreamTransportConfig) -> Result<Self> {
+    pub async fn new(config: StreamTransportConfig, cert_manager: &CertManager) -> Result<Self> {
         info!(
             "Creating streaming server on {} (datagrams={})",
             config.address, config.use_datagrams
         );
 
+        let mut server_config = cert_manager.server_config()?;
+
+        // Override transport config with caller's settings
         let mut transport_config = quinn::TransportConfig::default();
         if config.use_datagrams {
-            // Enable datagram mode for lower latency
-            transport_config.datagram_send_buffer_size(16 * 1024 * 1024); // 16 MB
+            transport_config.datagram_send_buffer_size(16 * 1024 * 1024);
             transport_config.datagram_receive_buffer_size(Some(16 * 1024 * 1024));
         }
-
-        // Self-signed certificate for local streaming
-        // In production, use Tailscale's identity verification instead
-        let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()])
-            .context("Failed to generate certificate")?;
-
-        let server_config = quinn::ServerConfig::with_single_cert(
-            vec![cert.cert.der().clone()],
-            PrivateKeyDer::try_from(cert.signing_key.serialize_der())
-                .map_err(|e| anyhow::anyhow!("Failed to parse private key: {}", e))?,
-        )
-        .context("Failed to configure server")?;
+        server_config.transport_config(Arc::new(transport_config));
 
         let endpoint = quinn::Endpoint::server(server_config, config.address)
             .context("Failed to create endpoint")?;
@@ -125,26 +358,17 @@ pub struct StreamClient {
 
 impl StreamClient {
     /// Create a new streaming client
-    pub fn new(config: StreamTransportConfig) -> Result<Self> {
+    pub fn new(config: StreamTransportConfig, cert_manager: &CertManager) -> Result<Self> {
         info!("Creating streaming client");
 
+        let mut client_config = cert_manager.client_config()?;
+
+        // Override transport config with caller's settings
         let mut transport_config = quinn::TransportConfig::default();
         if config.use_datagrams {
             transport_config.datagram_send_buffer_size(16 * 1024 * 1024);
             transport_config.datagram_receive_buffer_size(Some(16 * 1024 * 1024));
         }
-
-        // Dangerous: skip certificate verification for local streaming
-        // In production, use Tailscale's identity instead
-        let crypto = rustls::ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(NoVerifier))
-            .with_no_client_auth();
-
-        let quic_crypto = quinn::crypto::rustls::QuicClientConfig::try_from(crypto)
-            .context("Failed to create QUIC client config")?;
-
-        let mut client_config = quinn::ClientConfig::new(Arc::new(quic_crypto));
         client_config.transport_config(Arc::new(transport_config));
 
         let mut endpoint = quinn::Endpoint::client("0.0.0.0:0".parse()?)
@@ -158,12 +382,19 @@ impl StreamClient {
     }
 
     /// Connect to the streaming server
-    pub async fn connect(&self, server_addr: SocketAddr) -> Result<quinn::Connection> {
-        info!("Connecting to streaming server at {}", server_addr);
+    pub async fn connect(
+        &self,
+        server_addr: SocketAddr,
+        server_name: &str,
+    ) -> Result<quinn::Connection> {
+        info!(
+            "Connecting to streaming server at {} (identity: {})",
+            server_addr, server_name
+        );
 
         let connection = self
             .endpoint
-            .connect(server_addr, "localhost")
+            .connect(server_addr, server_name)
             .context("Failed to initiate connection")?
             .await
             .context("Connection failed")?;
@@ -283,50 +514,6 @@ impl PacketHeader {
             is_keyframe: bytes[8] != 0,
             timestamp_us: u64::from_le_bytes(bytes[9..17].try_into()?),
         })
-    }
-}
-
-/// No-op certificate verifier for local streaming
-/// In production, use Tailscale's identity instead
-#[derive(Debug)]
-struct NoVerifier;
-
-impl rustls::client::danger::ServerCertVerifier for NoVerifier {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &rustls::pki_types::CertificateDer<'_>,
-        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
-        _server_name: &rustls::pki_types::ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: rustls::pki_types::UnixTime,
-    ) -> std::result::Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-        Ok(rustls::client::danger::ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        _message: &[u8],
-        _cert: &rustls::pki_types::CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        _message: &[u8],
-        _cert: &rustls::pki_types::CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        vec![
-            rustls::SignatureScheme::RSA_PKCS1_SHA256,
-            rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
-            rustls::SignatureScheme::ED25519,
-        ]
     }
 }
 
