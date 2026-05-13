@@ -3,8 +3,8 @@
 /// Delegates to flutter_rust_bridge generated code.
 library rust_api_bridge;
 
+import 'api.dart' as frb;
 import 'frb_generated.dart';
-import 'lib.dart' as frb;
 import 'models/peer_info.dart';
 import 'models/remote_file.dart';
 import 'providers/connection_provider.dart';
@@ -30,7 +30,7 @@ class _RustApiBridge {
 
   /// Initialize the Rust backend (call once at app startup).
   Future<void> init() async {
-    await RustApi.init();
+    await RustLib.init();
   }
 
   /// Get the version string from the Rust crate.
@@ -46,12 +46,14 @@ class _RustApiBridge {
   /// Get list of peers on the tailnet.
   Future<List<PeerInfo>> getPeers() async {
     final dtos = await frb.getPeers();
-    return dtos.map((dto) => PeerInfo(
-          name: dto.name,
-          dnsName: dto.dnsName,
-          ips: dto.ips,
-          online: dto.online,
-        )).toList();
+    return dtos
+        .map((dto) => PeerInfo(
+              name: dto.name,
+              dnsName: dto.dnsName,
+              ips: dto.ips,
+              online: dto.online,
+            ))
+        .toList();
   }
 
   /// Connect to a peer by IP and port.
@@ -107,17 +109,19 @@ class _RustApiBridge {
   }
 
   /// Check if streaming is currently active.
-  Future<bool> isStreamingActive() async {
-    return await frb.isStreamingActive();
+  bool isStreamingActive() {
+    return frb.isStreamingActive();
   }
 
   /// Receive queued H.264 frames from the streaming client.
   Future<List<FrameDtoWrapper>> receiveFrames(int timeoutMs) async {
     final dtos = await frb.receiveFrames(timeoutMs: BigInt.from(timeoutMs));
-    return dtos.map((dto) => FrameDtoWrapper(
-          data: dto.data,
-          isKeyframe: dto.isKeyframe,
-        )).toList();
+    return dtos
+        .map((dto) => FrameDtoWrapper(
+              data: dto.data,
+              isKeyframe: dto.isKeyframe,
+            ))
+        .toList();
   }
 
   /// Get the current RTT to the streaming server in microseconds.
