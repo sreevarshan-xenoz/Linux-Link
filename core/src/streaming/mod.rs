@@ -5,14 +5,20 @@
 
 pub mod bitrate;
 pub mod capture;
+#[cfg(feature = "x11-capture")]
+pub mod capture_x11;
 pub mod client;
 pub mod encoder;
+pub mod session;
 pub mod streamer;
 pub mod transport;
 
 pub use bitrate::AdaptiveBitrate;
+#[cfg(feature = "x11-capture")]
+pub use capture_x11::{check_x11_availability, start_x11_capture};
 pub use client::DEFAULT_STREAMING_PORT;
 pub use client::StreamingClient;
+pub use session::{SessionType, detect_session_type};
 pub use streamer::StreamingServer;
 
 use serde::{Deserialize, Serialize};

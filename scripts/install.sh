@@ -488,10 +488,423 @@ cmd_uninstall() {
   fi
 }
 
+# ─── System Detection ───────────────────────────────────────────────────────
+
+# Global variables populated by detect_* functions
+OS_ID=""
+OS_NAME=""
+OS_VERSION=""
+OS_VERSION_ID=""
+PKG_MANAGER=""
+SESSION_TYPE=""
+COMPOSITOR=""
+PORTAL_BACKEND=""
+INIT_SYSTEM=""
+HAS_PIPEWIRE=false
+HAS_TAILSCALE=false
+
+detect_os() {
+  debug "Detecting operating system..."
+
+  if [ -f /etc/os-release ]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    OS_ID="${ID:-unknown}"
+    OS_NAME="${PRETTY_NAME:-unknown}"
+    OS_VERSION_ID="${VERSION_ID:-}"
+    OS_VERSION="${VERSION:-${VERSION_ID:-unknown}}"
+  elif [ -f /etc/lsb-release ]; then
+    # shellcheck disable=SC1091
+    . /etc/lsb-release
+    OS_ID="${DISTRIB_ID:-unknown}"
+    OS_NAME="${DISTRIB_DESCRIPTION:-unknown}"
+    OS_VERSION_ID="${DISTRIB_RELEASE:-}"
+    OS_VERSION="${DISTRIB_DESCRIPTION:-unknown}"
+  else
+    OS_ID="unknown"
+    OS_NAME="$(uname -o 2>/dev/null || echo unknown)"
+    OS_VERSION="unknown"
+  fi
+
+  # Determine package manager
+  if command -v dnf &>/dev/null; then
+    PKG_MANAGER="dnf"
+  elif command -v yum &>/dev/null; then
+    PKG_MANAGER="yum"
+  elif command -v zypper &>/dev/null; then
+    PKG_MANAGER="zypper"
+  elif command -v pacman &>/dev/null; then
+    PKG_MANAGER="pacman"
+  elif command -v apt-get &>/dev/null; then
+    PKG_MANAGER="apt"
+  elif command -v apk &>/dev/null; then
+    PKG_MANAGER="apk"
+  elif command -v nix-env &>/dev/null; then
+    PKG_MANAGER="nix"
+  else
+    PKG_MANAGER="unknown"
+  fi
+
+  debug "  OS: ${OS_ID} (${OS_NAME})"
+  debug "  Version: ${OS_VERSION}"
+  debug "  Package manager: ${PKG_MANAGER}"
+}
+
+detect_compositor() {
+  debug "Detecting display compositor..."
+
+  # Priority 1: XDG_SESSION_TYPE (set by systemd-logind)
+  if [ -n "${XDG_SESSION_TYPE:-}" ]; then
+    SESSION_TYPE="$XDG_SESSION_TYPE"
+  # Priority 2: Check WAYLAND_DISPLAY first (can't have X11 if Wayland is active)
+  elif [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    SESSION_TYPE="wayland"
+  # Priority 3: Check DISPLAY (X11 or XWayland)
+  elif [ -n "${DISPLAY:-}" ]; then
+    SESSION_TYPE="x11"
+  # Priority 4: Check for running compositor processes
+  elif pgrep -x "Hyprland\|sway\|river\|wayfire" &>/dev/null; then
+    SESSION_TYPE="wayland"
+  elif pgrep -x "Xorg\|Xwayland\|X" &>/dev/null; then
+    SESSION_TYPE="x11"
+  else
+    SESSION_TYPE="unknown"
+  fi
+
+  # Detect specific compositor
+  COMPOSITOR="unknown"
+
+  if [ "$SESSION_TYPE" = "wayland" ]; then
+    # Check XDG_CURRENT_DESKTOP first
+    local desktop="${XDG_CURRENT_DESKTOP:-}"
+    case "$desktop" in
+      *Hyprland*)    COMPOSITOR="hyprland" ;;
+      *GNOME*)       COMPOSITOR="gnome" ;;
+      *KDE*)         COMPOSITOR="kde" ;;
+      *sway*)        COMPOSITOR="sway" ;;
+      *wlroots*)     COMPOSITOR="wlroots" ;;
+      *river*)       COMPOSITOR="river" ;;
+      *Wayfire*)     COMPOSITOR="wayfire" ;;
+      *phosh*)       COMPOSITOR="phosh" ;;
+      *Unity*)       COMPOSITOR="unity" ;;
+    esac
+
+    # If XDG_CURRENT_DESKTOP didn't help, check running processes
+    if [ "$COMPOSITOR" = "unknown" ]; then
+      if pgrep -x "Hyprland" &>/dev/null; then
+        COMPOSITOR="hyprland"
+      elif pgrep -x "sway" &>/dev/null; then
+        COMPOSITOR="sway"
+      elif pgrep -x "gnome-shell" &>/dev/null; then
+        COMPOSITOR="gnome"
+      elif pgrep -x "kwin_wayland" &>/dev/null; then
+        COMPOSITOR="kde"
+      elif pgrep -x "river" &>/dev/null; then
+        COMPOSITOR="river"
+      elif pgrep -x "wayfire" &>/dev/null; then
+        COMPOSITOR="wayfire"
+      fi
+    fi
+
+    # Detect portal backend
+    if pgrep -x "xdg-desktop-portal-hyprland" &>/dev/null; then
+      PORTAL_BACKEND="hyprland"
+    elif pgrep -x "xdg-desktop-portal-gnome" &>/dev/null; then
+      PORTAL_BACKEND="gnome"
+    elif pgrep -x "xdg-desktop-portal-kde" &>/dev/null; then
+      PORTAL_BACKEND="kde"
+    elif pgrep -x "xdg-desktop-portal-wlr" &>/dev/null; then
+      PORTAL_BACKEND="wlr"
+    elif pgrep -x "xdg-desktop-portal-lxqt" &>/dev/null; then
+      PORTAL_BACKEND="lxqt"
+    elif pgrep -x "xdg-desktop-portal" &>/dev/null; then
+      PORTAL_BACKEND="generic"
+    else
+      PORTAL_BACKEND="none"
+    fi
+
+  elif [ "$SESSION_TYPE" = "x11" ]; then
+    COMPOSITOR="x11"
+    PORTAL_BACKEND="none"
+  fi
+
+  debug "  Session type: ${SESSION_TYPE}"
+  debug "  Compositor: ${COMPOSITOR}"
+  debug "  Portal backend: ${PORTAL_BACKEND}"
+}
+
+detect_init_system() {
+  debug "Detecting init system..."
+
+  if command -v systemctl &>/dev/null && [ -d /run/systemd/system ]; then
+    INIT_SYSTEM="systemd"
+  elif command -v rc-status &>/dev/null; then
+    INIT_SYSTEM="openrc"
+  elif command -v sv &>/dev/null; then
+    INIT_SYSTEM="runit"
+  elif command -s 6 &>/dev/null 2>&1 || command -v s6-svscan &>/dev/null; then
+    INIT_SYSTEM="s6"
+  elif [ -d /etc/init.d ] && [ ! -d /run/systemd/system ]; then
+    INIT_SYSTEM="sysvinit"
+  else
+    INIT_SYSTEM="unknown"
+  fi
+
+  debug "  Init system: ${INIT_SYSTEM}"
+}
+
+detect_system_capabilities() {
+  debug "Detecting system capabilities..."
+
+  # PipeWire
+  if command -v pipewire &>/dev/null || pkg-config --exists libpipewire-0.3 2>/dev/null; then
+    HAS_PIPEWIRE=true
+  fi
+
+  # Tailscale
+  if command -v tailscale &>/dev/null && command -v tailscaled &>/dev/null; then
+    HAS_TAILSCALE=true
+  fi
+
+  debug "  PipeWire: ${HAS_PIPEWIRE}"
+  debug "  Tailscale: ${HAS_TAILSCALE}"
+}
+
+print_system_report() {
+  section "System Detection Report"
+
+  echo -e "  ${BOLD}Operating System:${RESET}  ${OS_NAME}"
+  echo -e "  ${BOLD}Distribution:${RESET}      ${OS_ID} ${OS_VERSION_ID:-}"
+  echo -e "  ${BOLD}Package Manager:${RESET}   ${PKG_MANAGER}"
+  echo -e "  ${BOLD}Init System:${RESET}       ${INIT_SYSTEM}"
+  echo ""
+  echo -e "  ${BOLD}Display Server:${RESET}    ${SESSION_TYPE}"
+  echo -e "  ${BOLD}Compositor:${RESET}        ${COMPOSITOR}"
+  echo -e "  ${BOLD}Portal Backend:${RESET}    ${PORTAL_BACKEND}"
+  echo ""
+  echo -e "  ${BOLD}Architecture:${RESET}      $(uname -m)"
+  echo -e "  ${BOLD}Kernel:${RESET}            $(uname -r)"
+  echo ""
+  echo -e "  ${BOLD}PipeWire:${RESET}          $(_status_icon "$HAS_PIPEWIRE" "Available" "Not detected")"
+  echo -e "  ${BOLD}Tailscale:${RESET}         $(_status_icon "$HAS_TAILSCALE" "Detected" "Not detected")"
+  echo ""
+
+  # Provide environment-specific recommendations
+  _print_recommendations
+}
+
+_status_icon() {
+  if [ "$1" = true ]; then
+    echo -e "${GREEN}✅ $2${RESET}"
+  else
+    echo -e "${YELLOW}⚠️  $3${RESET}"
+  fi
+}
+
+_print_recommendations() {
+  local missing=()
+
+  # Recommendations based on detected environment
+  if [ "$SESSION_TYPE" = "wayland" ] && [ "$PORTAL_BACKEND" = "none" ]; then
+    missing+=("xdg-desktop-portal (required for screen capture on Wayland)")
+  fi
+
+  if [ "$HAS_PIPEWIRE" = false ] && [ "$SESSION_TYPE" = "wayland" ]; then
+    missing+=("pipewire (required for screen capture on Wayland)")
+  fi
+
+  if [ "$HAS_TAILSCALE" = false ]; then
+    missing+=("tailscale (required for remote connectivity)")
+  fi
+
+  if [ "$SESSION_TYPE" = "wayland" ]; then
+    case "$COMPOSITOR" in
+      hyprland)
+        if [ "$PORTAL_BACKEND" != "hyprland" ]; then
+          missing+=("xdg-desktop-portal-hyprland (portal backend for Hyprland)")
+        fi
+        ;;
+      gnome)
+        if [ "$PORTAL_BACKEND" != "gnome" ]; then
+          missing+=("xdg-desktop-portal-gnome (portal backend for GNOME)")
+        fi
+        ;;
+      kde)
+        if [ "$PORTAL_BACKEND" != "kde" ]; then
+          missing+=("xdg-desktop-portal-kde (portal backend for KDE)")
+        fi
+        ;;
+      sway|wlroots)
+        if [ "$PORTAL_BACKEND" != "wlr" ]; then
+          missing+=("xdg-desktop-portal-wlr (portal backend for wlroots)")
+        fi
+        ;;
+    esac
+  fi
+
+  if [ ${#missing[@]} -gt 0 ]; then
+    echo -e "  ${BOLD}${YELLOW}⚠ Recommendations:${RESET}"
+    for item in "${missing[@]}"; do
+      echo -e "    ${YELLOW}•${RESET} $item"
+    done
+    echo ""
+  else
+    echo -e "  ${GREEN}✅ All recommended dependencies are available.${RESET}"
+    echo ""
+  fi
+}
+
+# ─── Dependency Installation ────────────────────────────────────────────────
+
+install_system_deps() {
+  local deps=()
+  local pkg_names=()
+
+  section "Checking System Dependencies"
+
+  # Build list of required packages based on detected environment
+  _build_dep_list deps
+
+  if [ ${#deps[@]} -eq 0 ]; then
+    ok "All system dependencies are satisfied."
+    return 0
+  fi
+
+  echo ""
+  info "Missing packages: ${deps[*]}"
+
+  if [ "$NON_INTERACTIVE" = true ]; then
+    info "Non-interactive mode — skipping dependency installation."
+    warn "You may need to install: ${deps[*]}"
+    return 0
+  fi
+
+  echo ""
+  echo -n "Install missing packages via ${PKG_MANAGER}? [Y/n] "
+  read -r -t 30 install_deps || true
+
+  if [[ "$install_deps" =~ ^[Nn]$ ]]; then
+    warn "Skipping dependency installation."
+    warn "You may need to install: ${deps[*]}"
+    return 0
+  fi
+
+  info "Installing dependencies via ${PKG_MANAGER}..."
+  _install_deps "${deps[@]}"
+}
+
+_build_dep_list() {
+  local -n _deps=$1
+
+  # Core runtime dependencies
+  case "$PKG_MANAGER" in
+    apt)
+      # Check each package individually
+      dpkg -s libpipewire-0.3-0 &>/dev/null || _deps+=("libpipewire-0.3-0")
+      dpkg -s pipewire &>/dev/null || _deps+=("pipewire")
+      dpkg -s tailscale &>/dev/null || _deps+=("tailscale")
+      ;;
+    pacman)
+      pacman -Qi pipewire &>/dev/null || _deps+=("pipewire")
+      pacman -Qi tailscale &>/dev/null || _deps+=("tailscale")
+      ;;
+    dnf|yum)
+      rpm -q pipewire &>/dev/null || _deps+=("pipewire")
+      rpm -q tailscale &>/dev/null || _deps+=("tailscale")
+      ;;
+    zypper)
+      rpm -q pipewire &>/dev/null || _deps+=("pipewire")
+      rpm -q tailscale &>/dev/null || _deps+=("tailscale")
+      ;;
+    apk)
+      apk info pipewire &>/dev/null || _deps+=("pipewire")
+      apk info tailscale &>/dev/null || _deps+=("tailscale")
+      ;;
+  esac
+
+  # Compositor-specific portal backends
+  if [ "$SESSION_TYPE" = "wayland" ]; then
+    case "$PKG_MANAGER" in
+      apt)
+        case "$COMPOSITOR" in
+          hyprland) dpkg -s xdg-desktop-portal-hyprland &>/dev/null || _deps+=("xdg-desktop-portal-hyprland") ;;
+          gnome)    dpkg -s xdg-desktop-portal-gnome &>/dev/null || _deps+=("xdg-desktop-portal-gnome") ;;
+          kde)      dpkg -s xdg-desktop-portal-kde &>/dev/null || _deps+=("xdg-desktop-portal-kde") ;;
+          sway|wlroots) dpkg -s xdg-desktop-portal-wlr &>/dev/null || _deps+=("xdg-desktop-portal-wlr") ;;
+        esac
+        ;;
+      pacman)
+        case "$COMPOSITOR" in
+          hyprland) pacman -Qi xdg-desktop-portal-hyprland &>/dev/null || _deps+=("xdg-desktop-portal-hyprland") ;;
+          gnome)    pacman -Qi xdg-desktop-portal-gnome &>/dev/null || _deps+=("xdg-desktop-portal-gnome") ;;
+          kde)      pacman -Qi xdg-desktop-portal-kde &>/dev/null || _deps+=("xdg-desktop-portal-kde") ;;
+          sway|wlroots) pacman -Qi xdg-desktop-portal-wlr &>/dev/null || _deps+=("xdg-desktop-portal-wlr") ;;
+        esac
+        ;;
+    esac
+  fi
+}
+
+_install_deps() {
+  local deps=("$@")
+  local cmd=""
+
+  case "$PKG_MANAGER" in
+    apt)
+      cmd="sudo apt-get update && sudo apt-get install -y ${deps[*]}"
+      ;;
+    pacman)
+      cmd="sudo pacman -Sy --noconfirm ${deps[*]}"
+      ;;
+    dnf)
+      cmd="sudo dnf install -y ${deps[*]}"
+      ;;
+    yum)
+      cmd="sudo yum install -y ${deps[*]}"
+      ;;
+    zypper)
+      cmd="sudo zypper install -y ${deps[*]}"
+      ;;
+    apk)
+      cmd="sudo apk add ${deps[*]}"
+      ;;
+    nix)
+      cmd="nix-env -iA ${deps[*]}"
+      ;;
+    *)
+      warn "Unknown package manager (${PKG_MANAGER}). Cannot auto-install dependencies."
+      warn "Please install manually: ${deps[*]}"
+      return 1
+      ;;
+  esac
+
+  info "Running: ${cmd}"
+  if [ "$DRY_RUN" = true ]; then
+    warn "[DRY RUN] Would execute: ${cmd}"
+    return 0
+  fi
+
+  if eval "$cmd"; then
+    ok "Dependencies installed successfully."
+  else
+    warn "Some dependencies may have failed to install."
+    warn "Please install manually: ${deps[*]}"
+  fi
+}
+
 # ─── Pre-flight checks ──────────────────────────────────────────────────────
 
 preflight() {
   section "Pre-flight Checks"
+
+  # Detect environment
+  detect_os
+  detect_compositor
+  detect_init_system
+  detect_system_capabilities
+
+  # Print full system report
+  print_system_report
 
   # Check required commands
   debug "Checking required commands..."
@@ -501,13 +914,6 @@ preflight() {
     fi
     debug "  ${cmd}: found"
   done
-
-  # Detect distribution for distro-specific tips
-  local distro="unknown"
-  if [ -f /etc/os-release ]; then
-    distro=$(. /etc/os-release && echo "${ID:-unknown}")
-  fi
-  debug "  Distribution: ${distro}"
 
   # Check architecture
   local arch
@@ -553,6 +959,9 @@ preflight() {
     warn "Existing installation: ${BINARY_NAME} ${CURRENT_VERSION}"
     UPGRADE=true
   fi
+
+  # Install missing dependencies
+  install_system_deps
 
   ok "Pre-flight checks passed."
 }
@@ -786,7 +1195,9 @@ cmd_install() {
 
   # Post-install: enable and start service
   section "Post-install"
-  if command -v systemctl &>/dev/null && [ "$NO_SERVICE" != true ]; then
+  if [ "$NO_SERVICE" = true ]; then
+    info "Skipping service setup (--no-service)."
+  elif command -v systemctl &>/dev/null; then
     if [ "$UPGRADE" = true ]; then
       info "Restarting ${BINARY_NAME} service..."
       [ "$DRY_RUN" = true ] || sudo systemctl restart "$BINARY_NAME"
@@ -811,8 +1222,25 @@ cmd_install() {
     if [ "$DRY_RUN" != true ] && systemctl is-active --quiet "$BINARY_NAME" 2>/dev/null; then
       ok "Service is running."
     fi
-  elif [ "$NO_SERVICE" != true ]; then
-    warn "systemctl not found — service will not be managed automatically."
+  elif [ -d /etc/init.d ] && command -v rc-status &>/dev/null; then
+    # OpenRC
+    info "Detected OpenRC — setting up init script..."
+    if [ -f "${extracted_dir}/${BINARY_NAME}.openrc" ]; then
+      [ "$DRY_RUN" = true ] || sudo cp "${extracted_dir}/${BINARY_NAME}.openrc" /etc/init.d/${BINARY_NAME}
+      [ "$DRY_RUN" = true ] || sudo chmod +x /etc/init.d/${BINARY_NAME}
+      [ "$DRY_RUN" = true ] || sudo rc-update add ${BINARY_NAME} default
+      [ "$DRY_RUN" = true ] || sudo rc-service ${BINARY_NAME} start
+      ok "OpenRC service configured."
+    else
+      warn "No OpenRC init script found in release archive."
+      warn "Create /etc/init.d/${BINARY_NAME} manually or use systemd."
+    fi
+  elif command -v sv &>/dev/null; then
+    # runit
+    info "Detected runit — service setup requires manual configuration."
+    warn "Create /etc/sv/${BINARY_NAME}/run manually."
+  else
+    warn "No supported init system detected — service will not be managed automatically."
     warn "Start manually with: ${BINARY_NAME} start"
   fi
 
