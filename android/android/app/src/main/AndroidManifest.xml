@@ -32,6 +32,6 @@
         <service
             android:name="id.flutter.flutter_background_service.BackgroundService"
             android:foregroundServiceType="dataSync"
-            android:exported="false" />
+            android:exported="true" />
     </application>
 </manifest>
