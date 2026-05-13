@@ -8,19 +8,20 @@
 
 **Estimated Timeline:** 4-6 months for MVP
 
-**Execution Snapshot (April 10, 2026):**
+**Execution Snapshot (April 2026):**
 - Phase 0 completed (workspace scaffold, CI, docs, build/test baseline)
 - Phase 1 completed (CLI + handshake + discovery watch + two-device discovery)
 - Phase 2 completed (KDE protocol runtime, all 5 plugins with real behavior, KDE Connect TCP packet loop)
-- Phase 3 completed (full streaming pipeline: PipeWire capture → persistent FFmpeg encoder → QUIC transport → adaptive bitrate; 49 integration tests)
-- Phase 4 in progress:
-  - ✅ Rust FFI: clipboard, file transfer, mouse/keyboard input, QUIC streaming (connect_streaming/stop_streaming/get_streaming_rtt)
-  - ✅ QUIC StreamingClient: core/src/streaming/client.rs with frame receiver + stats feedback tasks
-  - ✅ Flutter screens wired: connection (real peer discovery), remote desktop (gesture → FFI → input), file browser (sendFile), settings (SharedPreferences persistence)
-  - ✅ MediaCodec integration: native Android H.264 decoder via Flutter platform channels (MethodChannel + SurfaceTexture)
-  - ✅ RemoteDesktopScreen: Texture widget rendering from MediaCodec, periodic streaming status polling
-  - ⏳ Remaining: FRB codegen, background service, flutter build verification, E2E testing
-- Quality gates pass (`cargo fmt`, `cargo check`, `cargo clippy -D warnings`, `cargo test` — 49 tests)
+- Phase 3 completed (full streaming pipeline: PipeWire capture → persistent FFmpeg encoder → QUIC transport → adaptive bitrate; 50+ integration tests)
+- Phase 4 completed (Android client: Flutter UI + Rust FFI + MediaCodec video decoding + background service + all 4 screens wired)
+- Phase 5 completed (systemd service, config extension, remote file browsing, latency optimization, config.toml.example)
+- Phase 6 completed (CHANGELOG, GitHub Release workflow, AUR packaging, man page, install script, CONTRIBUTING.md, CI expansion)
+- **Phase A (Post-Phase Additions):**
+  - ✅ A1 — X11 screen capture fallback (Wayland/X11 auto-detection, `x11rb` GetImage)
+  - ✅ A2 — LAN mDNS discovery fallback (`mdns-sd`, polling-based peer discovery for local networks)
+  - ✅ A3 — Structured error types (`LinuxLinkError` enum with 15 variants, `From` impls)
+  - ✅ A4 — E2E encryption with TOFU certificate management (`CertManager`, `TofuVerifier`, persistent identity + known peers)
+- Quality gates pass (`cargo fmt`, `cargo check`, `cargo clippy -D warnings`, `cargo test` — 66 tests)
 
 ---
 
@@ -1853,12 +1854,12 @@ The Phase 4 Android client foundation is fully scaffolded with all structural co
 
 ### Phase 5: Polish & Extras (Week 25-28)
 
-**Status: COMPLETE**
+**Status: COMPLETE ✅**
 
 **Quality Gates:**
 - `cargo fmt`: ✅ Pass
 - `cargo clippy -D warnings`: ✅ Pass (0 warnings across workspace)
-- `cargo test`: ✅ 52 tests pass (49 core + 3 server)
+- `cargo test`: ✅ 66 tests pass (63 core + 3 server)
 - `cargo check --workspace`: ✅ Clean compilation
 
 **Completed:**
@@ -1868,12 +1869,14 @@ The Phase 4 Android client foundation is fully scaffolded with all structural co
 - [x] Remote file browsing (server plugin with path sanitization + FFI + Flutter UI with navigation)
 - [x] Latency optimization (StreamingStats struct, encoder preset mapping via VideoQualityPreset)
 - [x] config.toml.example with all documented defaults
+
+**Remaining (requires Flutter SDK or live hardware):**
 - [ ] `flutter build apk` verification (requires Flutter SDK + Android NDK on build machine)
 - [ ] E2E latency measurement on live system (requires Hyprland + PipeWire server running)
 
 ### Phase 6: Release & Packaging (Week 29-30)
 
-**Status: COMPLETE**
+**Status: COMPLETE ✅**
 
 - [x] CHANGELOG.md with Unreleased section
 - [x] GitHub Release workflow (binary builds + checksums + draft release)
@@ -1882,7 +1885,9 @@ The Phase 4 Android client foundation is fully scaffolded with all structural co
 - [x] Man page (linux-link.1)
 - [x] Install script (scripts/install.sh)
 - [x] CONTRIBUTING.md
-- [ ] First release tagged and published (requires manual action)
+
+**Remaining (manual action required):**
+- [ ] First release tagged and published (requires manual release workflow trigger)
 
 ---
 
