@@ -1,5 +1,5 @@
-/// FFI API module for flutter_rust_bridge v2.
-/// All `#[frb]` annotated items are here so the codegen can find them at `crate::api`.
+//! FFI API module for flutter_rust_bridge v2.
+//! All `#[frb]` annotated items are here so the codegen can find them at `crate::api`.
 
 use flutter_rust_bridge::frb;
 use linux_link_core::protocol::connection::ConnectionManager;
