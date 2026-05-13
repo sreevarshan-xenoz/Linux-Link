@@ -3,135 +3,211 @@
 
 // ignore_for_file: unused_import, unused_element, unnecessary_import, duplicate_ignore, invalid_use_of_internal_member, annotate_overrides, non_constant_identifier_names, curly_braces_in_flow_control_structures, prefer_const_literals_to_create_immutables, unused_field
 
+import 'api.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi' as ffi;
 import 'frb_generated.dart';
-import 'lib.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_io.dart';
 
+abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
+  RustLibApiImplPlatform({
+    required super.handler,
+    required super.wire,
+    required super.generalizedFrbRustBinding,
+    required super.portManager,
+  });
 
+  @protected
+  String dco_decode_String(dynamic raw);
 
+  @protected
+  bool dco_decode_bool(dynamic raw);
 
-                abstract class RustApiApiImplPlatform extends BaseApiImpl<RustApiWire> {
-                  RustApiApiImplPlatform({
-                    required super.handler,
-                    required super.wire,
-                    required super.generalizedFrbRustBinding,
-                    required super.portManager,
-                  });
+  @protected
+  ConnectionState dco_decode_connection_state(dynamic raw);
 
-                  
+  @protected
+  double dco_decode_f_32(dynamic raw);
 
-                  @protected String dco_decode_String(dynamic raw);
+  @protected
+  double dco_decode_f_64(dynamic raw);
 
-@protected bool dco_decode_bool(dynamic raw);
+  @protected
+  FrameDto dco_decode_frame_dto(dynamic raw);
 
-@protected ConnectionState dco_decode_connection_state(dynamic raw);
+  @protected
+  int dco_decode_i_32(dynamic raw);
 
-@protected double dco_decode_f_32(dynamic raw);
+  @protected
+  List<String> dco_decode_list_String(dynamic raw);
 
-@protected FrameDto dco_decode_frame_dto(dynamic raw);
+  @protected
+  List<FrameDto> dco_decode_list_frame_dto(dynamic raw);
 
-@protected int dco_decode_i_32(dynamic raw);
+  @protected
+  List<PeerInfoDto> dco_decode_list_peer_info_dto(dynamic raw);
 
-@protected List<String> dco_decode_list_String(dynamic raw);
+  @protected
+  Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
 
-@protected List<FrameDto> dco_decode_list_frame_dto(dynamic raw);
+  @protected
+  List<RemoteFileDto> dco_decode_list_remote_file_dto(dynamic raw);
 
-@protected List<PeerInfoDto> dco_decode_list_peer_info_dto(dynamic raw);
+  @protected
+  PeerInfoDto dco_decode_peer_info_dto(dynamic raw);
 
-@protected Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
+  @protected
+  RemoteFileDto dco_decode_remote_file_dto(dynamic raw);
 
-@protected PeerInfoDto dco_decode_peer_info_dto(dynamic raw);
+  @protected
+  StreamingStatsDto dco_decode_streaming_stats_dto(dynamic raw);
 
-@protected int dco_decode_u_16(dynamic raw);
+  @protected
+  int dco_decode_u_16(dynamic raw);
 
-@protected BigInt dco_decode_u_64(dynamic raw);
+  @protected
+  BigInt dco_decode_u_64(dynamic raw);
 
-@protected int dco_decode_u_8(dynamic raw);
+  @protected
+  int dco_decode_u_8(dynamic raw);
 
-@protected void dco_decode_unit(dynamic raw);
+  @protected
+  void dco_decode_unit(dynamic raw);
 
-@protected String sse_decode_String(SseDeserializer deserializer);
+  @protected
+  String sse_decode_String(SseDeserializer deserializer);
 
-@protected bool sse_decode_bool(SseDeserializer deserializer);
+  @protected
+  bool sse_decode_bool(SseDeserializer deserializer);
 
-@protected ConnectionState sse_decode_connection_state(SseDeserializer deserializer);
+  @protected
+  ConnectionState sse_decode_connection_state(SseDeserializer deserializer);
 
-@protected double sse_decode_f_32(SseDeserializer deserializer);
+  @protected
+  double sse_decode_f_32(SseDeserializer deserializer);
 
-@protected FrameDto sse_decode_frame_dto(SseDeserializer deserializer);
+  @protected
+  double sse_decode_f_64(SseDeserializer deserializer);
 
-@protected int sse_decode_i_32(SseDeserializer deserializer);
+  @protected
+  FrameDto sse_decode_frame_dto(SseDeserializer deserializer);
 
-@protected List<String> sse_decode_list_String(SseDeserializer deserializer);
+  @protected
+  int sse_decode_i_32(SseDeserializer deserializer);
 
-@protected List<FrameDto> sse_decode_list_frame_dto(SseDeserializer deserializer);
+  @protected
+  List<String> sse_decode_list_String(SseDeserializer deserializer);
 
-@protected List<PeerInfoDto> sse_decode_list_peer_info_dto(SseDeserializer deserializer);
+  @protected
+  List<FrameDto> sse_decode_list_frame_dto(SseDeserializer deserializer);
 
-@protected Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
+  @protected
+  List<PeerInfoDto> sse_decode_list_peer_info_dto(SseDeserializer deserializer);
 
-@protected PeerInfoDto sse_decode_peer_info_dto(SseDeserializer deserializer);
+  @protected
+  Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
 
-@protected int sse_decode_u_16(SseDeserializer deserializer);
+  @protected
+  List<RemoteFileDto> sse_decode_list_remote_file_dto(
+      SseDeserializer deserializer);
 
-@protected BigInt sse_decode_u_64(SseDeserializer deserializer);
+  @protected
+  PeerInfoDto sse_decode_peer_info_dto(SseDeserializer deserializer);
 
-@protected int sse_decode_u_8(SseDeserializer deserializer);
+  @protected
+  RemoteFileDto sse_decode_remote_file_dto(SseDeserializer deserializer);
 
-@protected void sse_decode_unit(SseDeserializer deserializer);
+  @protected
+  StreamingStatsDto sse_decode_streaming_stats_dto(
+      SseDeserializer deserializer);
 
-@protected void sse_encode_String(String self, SseSerializer serializer);
+  @protected
+  int sse_decode_u_16(SseDeserializer deserializer);
 
-@protected void sse_encode_bool(bool self, SseSerializer serializer);
+  @protected
+  BigInt sse_decode_u_64(SseDeserializer deserializer);
 
-@protected void sse_encode_connection_state(ConnectionState self, SseSerializer serializer);
+  @protected
+  int sse_decode_u_8(SseDeserializer deserializer);
 
-@protected void sse_encode_f_32(double self, SseSerializer serializer);
+  @protected
+  void sse_decode_unit(SseDeserializer deserializer);
 
-@protected void sse_encode_frame_dto(FrameDto self, SseSerializer serializer);
+  @protected
+  void sse_encode_String(String self, SseSerializer serializer);
 
-@protected void sse_encode_i_32(int self, SseSerializer serializer);
+  @protected
+  void sse_encode_bool(bool self, SseSerializer serializer);
 
-@protected void sse_encode_list_String(List<String> self, SseSerializer serializer);
+  @protected
+  void sse_encode_connection_state(
+      ConnectionState self, SseSerializer serializer);
 
-@protected void sse_encode_list_frame_dto(List<FrameDto> self, SseSerializer serializer);
+  @protected
+  void sse_encode_f_32(double self, SseSerializer serializer);
 
-@protected void sse_encode_list_peer_info_dto(List<PeerInfoDto> self, SseSerializer serializer);
+  @protected
+  void sse_encode_f_64(double self, SseSerializer serializer);
 
-@protected void sse_encode_list_prim_u_8_strict(Uint8List self, SseSerializer serializer);
+  @protected
+  void sse_encode_frame_dto(FrameDto self, SseSerializer serializer);
 
-@protected void sse_encode_peer_info_dto(PeerInfoDto self, SseSerializer serializer);
+  @protected
+  void sse_encode_i_32(int self, SseSerializer serializer);
 
-@protected void sse_encode_u_16(int self, SseSerializer serializer);
+  @protected
+  void sse_encode_list_String(List<String> self, SseSerializer serializer);
 
-@protected void sse_encode_u_64(BigInt self, SseSerializer serializer);
+  @protected
+  void sse_encode_list_frame_dto(List<FrameDto> self, SseSerializer serializer);
 
-@protected void sse_encode_u_8(int self, SseSerializer serializer);
+  @protected
+  void sse_encode_list_peer_info_dto(
+      List<PeerInfoDto> self, SseSerializer serializer);
 
-@protected void sse_encode_unit(void self, SseSerializer serializer);
-                }
-                
+  @protected
+  void sse_encode_list_prim_u_8_strict(
+      Uint8List self, SseSerializer serializer);
 
+  @protected
+  void sse_encode_list_remote_file_dto(
+      List<RemoteFileDto> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_peer_info_dto(PeerInfoDto self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_remote_file_dto(RemoteFileDto self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_streaming_stats_dto(
+      StreamingStatsDto self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_u_16(int self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_u_64(BigInt self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_u_8(int self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_unit(void self, SseSerializer serializer);
+}
 
 // Section: wire_class
 
+class RustLibWire implements BaseWire {
+  factory RustLibWire.fromExternalLibrary(ExternalLibrary lib) =>
+      RustLibWire(lib.ffiDynamicLibrary);
 
-        class RustApiWire implements BaseWire {
+  /// Holds the symbol lookup function.
+  final ffi.Pointer<T> Function<T extends ffi.NativeType>(String symbolName)
+      _lookup;
 
-            factory RustApiWire.fromExternalLibrary(ExternalLibrary lib) =>
-              RustApiWire(lib.ffiDynamicLibrary);
-        
-            /// Holds the symbol lookup function.
-            final ffi.Pointer<T> Function<T extends ffi.NativeType>(String symbolName)
-                _lookup;
-  
-            /// The symbols are looked up in [dynamicLibrary].
-            RustApiWire(ffi.DynamicLibrary dynamicLibrary)
-                : _lookup = dynamicLibrary.lookup;
-
-            
-        }
-        
+  /// The symbols are looked up in [dynamicLibrary].
+  RustLibWire(ffi.DynamicLibrary dynamicLibrary)
+      : _lookup = dynamicLibrary.lookup;
+}
