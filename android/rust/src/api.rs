@@ -326,7 +326,15 @@ pub async fn connect_streaming(address: String, port: u16) -> Result<(), String>
     let addr = format!("{address}:{port}");
     tracing::info!("Connecting to streaming server at {addr}");
 
-    let (mut client, packet_rx) = StreamingClient::connect(&addr)
+    // Create a CertManager for TOFU peer certificate verification.
+    // For now, an in-memory manager (peers lost on app restart).
+    // In the future, load from persistent storage using load_or_create().
+    let cert_manager = std::sync::Arc::new(
+        linux_link_core::streaming::transport::CertManager::new()
+            .map_err(|e| e.to_string())?,
+    );
+
+    let (mut client, packet_rx) = StreamingClient::connect(&addr, cert_manager)
         .await
         .map_err(|e| e.to_string())?;
 

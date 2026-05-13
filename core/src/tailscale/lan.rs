@@ -275,7 +275,7 @@ mod tests {
         let peer = peer.unwrap();
         assert_eq!(peer.name, "test-peer");
         assert!(peer.ips.contains(&"192.168.1.10".to_string()));
-        assert_eq!(peer.dns_name, "test-peer.local.:1716");
+        assert_eq!(peer.dns_name, "test-peer.local:1716");
     }
 
     #[test]

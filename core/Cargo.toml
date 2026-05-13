@@ -26,6 +26,9 @@ ffmpeg-sidecar.workspace = true
 # mDNS service discovery
 mdns-sd = "0.13"
 
+# Certificate hashing for TOFU verification
+sha2 = "0.10"
+
 # Unix-specific utilities
 libc.workspace = true
 
