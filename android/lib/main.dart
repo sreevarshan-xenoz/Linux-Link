@@ -18,7 +18,7 @@ final _router = GoRouter(
     GoRoute(
       path: '/remote',
       builder: (context, state) {
-        final args = state.arguments as Map<String, dynamic>?;
+        final args = state.extra as Map<String, dynamic>?;
         return RemoteDesktopScreen(
           address: args?['address'] as String? ?? '',
           port: args?['port'] as int? ?? 1716,
@@ -28,7 +28,7 @@ final _router = GoRouter(
     GoRoute(
       path: '/files',
       builder: (context, state) {
-        final args = state.arguments as Map<String, dynamic>?;
+        final args = state.extra as Map<String, dynamic>?;
         return FileBrowserScreen(
           address: args?['address'] as String? ?? '',
           port: args?['port'] as int? ?? 1716,
