@@ -420,15 +420,13 @@ pub async fn check_availability() -> Result<bool> {
 async fn try_portal_available() -> bool {
     // Try creating a screencast session — if it fails, portal isn't available
     match Screencast::new().await {
-        Ok(screencast) => {
-            match screencast.create_session(Default::default()).await {
-                Ok(_session) => true,
-                Err(e) => {
-                    debug!("Portal session creation failed: {e}");
-                    false
-                }
+        Ok(screencast) => match screencast.create_session(Default::default()).await {
+            Ok(_session) => true,
+            Err(e) => {
+                debug!("Portal session creation failed: {e}");
+                false
             }
-        }
+        },
         Err(e) => {
             debug!("Portal unavailable: {e}");
             false
@@ -491,8 +489,8 @@ async fn start_x11_capture(
 
     info!("Starting X11 screen capture");
 
-    let (conn, screen_num) = RustConnection::connect(None)
-        .context("Failed to connect to X11 display")?;
+    let (conn, screen_num) =
+        RustConnection::connect(None).context("Failed to connect to X11 display")?;
     let screen = &conn.setup().roots[screen_num];
     let root = screen.root;
 
@@ -548,8 +546,8 @@ fn run_x11_capture_loop(
         let result = conn.get_image(
             ImageFormat::Z_PIXMAP,
             root,
-            0,  // x offset
-            0,  // y offset
+            0, // x offset
+            0, // y offset
             width as u16,
             height as u16,
             !0, // plane mask (all planes)

@@ -89,10 +89,7 @@ impl TailscaleClient {
     }
 
     pub async fn status_text(&self) -> Result<String> {
-        let output = Command::new("tailscale")
-            .arg("status")
-            .output()
-            .await;
+        let output = Command::new("tailscale").arg("status").output().await;
 
         match output {
             Ok(output) if output.status.success() => {
@@ -103,9 +100,14 @@ impl TailscaleClient {
                 let client = reqwest::Client::builder()
                     .timeout(Duration::from_secs(2))
                     .build()?;
-                let res = client.get("http://100.100.100.100:1053/localapi/v0/status").send().await;
+                let res = client
+                    .get("http://100.100.100.100:1053/localapi/v0/status")
+                    .send()
+                    .await;
                 match res {
-                    Ok(r) if r.status().is_success() => Ok("Tailscale Online (via LocalAPI)".to_string()),
+                    Ok(r) if r.status().is_success() => {
+                        Ok("Tailscale Online (via LocalAPI)".to_string())
+                    }
                     _ => bail!("tailscale status failed"),
                 }
             }
@@ -133,7 +135,9 @@ impl TailscaleClient {
             .output()
             .await;
 
-        if let Ok(output) = output && output.status.success() {
+        if let Ok(output) = output
+            && output.status.success()
+        {
             return serde_json::from_slice::<TailscaleStatus>(&output.stdout)
                 .context("failed to parse tailscale status JSON");
         }
@@ -158,7 +162,10 @@ impl TailscaleClient {
                 Ok(status)
             }
             Ok(r) => bail!("tailscale localapi returned error: {}", r.status()),
-            Err(e) => bail!("tailscale status failed (CLI error, and HTTP fallback failed: {})", e),
+            Err(e) => bail!(
+                "tailscale status failed (CLI error, and HTTP fallback failed: {})",
+                e
+            ),
         }
     }
 }

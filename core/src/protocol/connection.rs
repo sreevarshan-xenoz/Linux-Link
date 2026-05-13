@@ -1,8 +1,8 @@
 use super::kdeconnect::DeviceIdentity;
 use super::{HANDSHAKE_HELLO, HANDSHAKE_OK};
 use anyhow::{Context, Result, bail};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use std::time::Duration;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 
 #[derive(Debug, Clone)]
@@ -46,9 +46,12 @@ impl ConnectionManager {
         let identity = DeviceIdentity::new("linux-link-client", "Linux Link Android Client");
         let identity_packet = identity.as_identity_packet();
         let identity_bytes = identity_packet.to_wire()?;
-        
+
         let mut stream = reader.into_inner();
-        stream.write_all(&identity_bytes).await.context("failed to send identity packet")?;
+        stream
+            .write_all(&identity_bytes)
+            .await
+            .context("failed to send identity packet")?;
         stream.flush().await?;
 
         Ok(stream)

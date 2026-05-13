@@ -8,9 +8,9 @@
 //! peers are on the same LAN and don't need Tailscale routing.
 
 use anyhow::{Context, Result};
+use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 use std::collections::HashMap;
 use std::time::Duration;
-use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 
@@ -129,8 +129,7 @@ impl LanDiscoveryService {
     /// Creates a temporary mDNS daemon, browses for the service type, and
     /// collects responses for up to [`SCAN_TIMEOUT`].
     async fn scan_lan_peers(&self) -> Result<Vec<PeerInfo>> {
-        let daemon =
-            ServiceDaemon::new().context("Failed to create mDNS daemon for scan")?;
+        let daemon = ServiceDaemon::new().context("Failed to create mDNS daemon for scan")?;
         let receiver = daemon
             .browse(SERVICE_TYPE)
             .context("Failed to browse mDNS")?;
@@ -154,8 +153,7 @@ impl LanDiscoveryService {
                 Ok(ServiceEvent::ServiceFound(_, _)) | Ok(ServiceEvent::ServiceRemoved(_, _)) => {
                     // The service will be resolved (or removed) in a separate event
                 }
-                Ok(ServiceEvent::SearchStarted(_))
-                | Ok(ServiceEvent::SearchStopped(_)) => {}
+                Ok(ServiceEvent::SearchStarted(_)) | Ok(ServiceEvent::SearchStopped(_)) => {}
                 Err(_) => break, // timeout or channel closed
             }
         }

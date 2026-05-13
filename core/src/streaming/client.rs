@@ -46,10 +46,7 @@ impl StreamingClient {
     /// `channel_capacity` controls the buffer size between the receive task
     /// and the consumer. A capacity of 8 is a reasonable default for real-time
     /// video.
-    pub fn new(
-        channel_capacity: usize,
-        cert_manager: std::sync::Arc<CertManager>,
-    ) -> Self {
+    pub fn new(channel_capacity: usize, cert_manager: std::sync::Arc<CertManager>) -> Self {
         let (frame_tx, _frame_rx) = mpsc::channel(channel_capacity);
         Self {
             connection: None,
@@ -78,11 +75,8 @@ impl StreamingClient {
 
         info!("Connecting to streaming server at {addr}");
 
-        let transport = StreamClient::new(
-            StreamTransportConfig::default(),
-            &cert_manager,
-        )
-        .context("Failed to create QUIC transport")?;
+        let transport = StreamClient::new(StreamTransportConfig::default(), &cert_manager)
+            .context("Failed to create QUIC transport")?;
 
         let server_name = addr.ip().to_string();
         let connection = transport
@@ -313,9 +307,8 @@ mod tests {
     #[test]
     fn test_streaming_client_new() {
         use super::transport::CertManager;
-        let cert_manager = std::sync::Arc::new(
-            CertManager::new().expect("Failed to create CertManager"),
-        );
+        let cert_manager =
+            std::sync::Arc::new(CertManager::new().expect("Failed to create CertManager"));
         let client = StreamingClient::new(8, cert_manager);
         assert!(!client.is_running());
         assert_eq!(client.current_rtt(), Duration::ZERO);

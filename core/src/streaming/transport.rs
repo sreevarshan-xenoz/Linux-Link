@@ -79,8 +79,7 @@ impl CertManager {
     ///   are loaded; otherwise a new identity is generated and saved.
     /// - Known peers are loaded from `identity_dir/known_peers.json` if it exists.
     pub fn load_or_create(identity_dir: &Path) -> Result<Self> {
-        std::fs::create_dir_all(identity_dir)
-            .context("Failed to create identity directory")?;
+        std::fs::create_dir_all(identity_dir).context("Failed to create identity directory")?;
 
         let cert_path = identity_dir.join("identity.der");
         let key_path = identity_dir.join("identity.key");
@@ -98,10 +97,9 @@ impl CertManager {
 
         let peers_path = identity_dir.join("known_peers.json");
         let known_peers = if peers_path.exists() {
-            let data = std::fs::read_to_string(&peers_path)
-                .context("Failed to read known peers")?;
-            serde_json::from_str(&data)
-                .unwrap_or_default()
+            let data =
+                std::fs::read_to_string(&peers_path).context("Failed to read known peers")?;
+            serde_json::from_str(&data).unwrap_or_default()
         } else {
             HashMap::new()
         };
@@ -125,9 +123,8 @@ impl CertManager {
         transport.datagram_send_buffer_size(16 * 1024 * 1024);
         transport.datagram_receive_buffer_size(Some(16 * 1024 * 1024));
 
-        let mut server_config =
-            quinn::ServerConfig::with_single_cert(vec![cert], key)
-                .context("Failed to configure TLS server")?;
+        let mut server_config = quinn::ServerConfig::with_single_cert(vec![cert], key)
+            .context("Failed to configure TLS server")?;
         server_config.transport_config(Arc::new(transport));
 
         Ok(server_config)
@@ -183,9 +180,8 @@ fn generate_identity() -> Result<(Vec<u8>, Vec<u8>)> {
 
     let key_pair = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)
         .context("Failed to generate ECDSA key pair")?;
-    let params =
-        CertificateParams::new(vec!["linux-link.local".into()])
-            .context("Failed to create certificate params")?;
+    let params = CertificateParams::new(vec!["linux-link.local".into()])
+        .context("Failed to create certificate params")?;
     let cert = params
         .self_signed(&key_pair)
         .context("Failed to self-sign certificate")?;
@@ -235,9 +231,7 @@ impl rustls::client::danger::ServerCertVerifier for TofuVerifier {
             }
             Some(_) => {
                 // Known peer with a DIFFERENT cert — possible MITM!
-                warn!(
-                    "TOFU: certificate hash mismatch for {label}! Possible MITM attack."
-                );
+                warn!("TOFU: certificate hash mismatch for {label}! Possible MITM attack.");
                 Err(rustls::Error::General(format!(
                     "Certificate for {label} has changed since the last connection. \
                      This could be a man-in-the-middle attack. \
@@ -259,10 +253,7 @@ impl rustls::client::danger::ServerCertVerifier for TofuVerifier {
         _message: &[u8],
         _cert: &rustls::pki_types::CertificateDer<'_>,
         _dss: &rustls::DigitallySignedStruct,
-    ) -> std::result::Result<
-        rustls::client::danger::HandshakeSignatureValid,
-        rustls::Error,
-    > {
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
         Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
     }
 
@@ -271,10 +262,7 @@ impl rustls::client::danger::ServerCertVerifier for TofuVerifier {
         _message: &[u8],
         _cert: &rustls::pki_types::CertificateDer<'_>,
         _dss: &rustls::DigitallySignedStruct,
-    ) -> std::result::Result<
-        rustls::client::danger::HandshakeSignatureValid,
-        rustls::Error,
-    > {
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
         Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
     }
 
@@ -295,10 +283,7 @@ pub struct StreamServer {
 
 impl StreamServer {
     /// Create a new streaming server endpoint
-    pub async fn new(
-        config: StreamTransportConfig,
-        cert_manager: &CertManager,
-    ) -> Result<Self> {
+    pub async fn new(config: StreamTransportConfig, cert_manager: &CertManager) -> Result<Self> {
         info!(
             "Creating streaming server on {} (datagrams={})",
             config.address, config.use_datagrams
@@ -373,10 +358,7 @@ pub struct StreamClient {
 
 impl StreamClient {
     /// Create a new streaming client
-    pub fn new(
-        config: StreamTransportConfig,
-        cert_manager: &CertManager,
-    ) -> Result<Self> {
+    pub fn new(config: StreamTransportConfig, cert_manager: &CertManager) -> Result<Self> {
         info!("Creating streaming client");
 
         let mut client_config = cert_manager.client_config()?;
@@ -534,8 +516,6 @@ impl PacketHeader {
         })
     }
 }
-
-
 
 #[cfg(test)]
 mod tests {

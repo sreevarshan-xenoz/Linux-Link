@@ -3,8 +3,8 @@
 pub mod api;
 mod frb_generated; /* AUTO INJECTED BY flutter_rust_bridge. This line may not be accurate, and you can change it according to your needs. */
 
-use tokio::net::tcp::OwnedWriteHalf;
 use std::sync::{Arc, LazyLock};
+use tokio::net::tcp::OwnedWriteHalf;
 use tokio::sync::Mutex;
 
 // Initialize logging for Android

@@ -20,35 +20,22 @@ pub enum LinuxLinkError {
         reason: String,
     },
     /// The KDE Connect protocol handshake did not complete.
-    HandshakeFailed {
-        peer: String,
-        response: String,
-    },
+    HandshakeFailed { peer: String, response: String },
     /// A timeout occurred while waiting for a response.
     Timeout {
         operation: &'static str,
         duration_ms: u64,
     },
     /// The remote peer sent an unexpected or malformed packet.
-    ProtocolError {
-        detail: String,
-    },
+    ProtocolError { detail: String },
     /// Screen capture is not available on this system.
-    CaptureNotAvailable {
-        reason: String,
-    },
+    CaptureNotAvailable { reason: String },
     /// An error from the PipeWire screen capture path.
-    PipeWireError {
-        detail: String,
-    },
+    PipeWireError { detail: String },
     /// An error from the X11 screen capture path.
-    X11Error {
-        detail: String,
-    },
+    X11Error { detail: String },
     /// Tailscale CLI or API returned an error.
-    TailscaleError {
-        reason: String,
-    },
+    TailscaleError { reason: String },
     /// Peer discovery (Tailscale or mDNS) failed.
     DiscoveryFailed {
         method: &'static str,
@@ -65,33 +52,32 @@ pub enum LinuxLinkError {
         detail: String,
     },
     /// TLS / certificate error.
-    TlsError {
-        detail: String,
-    },
+    TlsError { detail: String },
     /// QUIC connection error.
-    QuicError {
-        detail: String,
-    },
+    QuicError { detail: String },
     /// The peer declined an operation (e.g., not paired).
-    PeerDeclined {
-        reason: String,
-    },
+    PeerDeclined { reason: String },
     /// Generic / catch-all for errors that don't fit other variants.
-    Other {
-        detail: String,
-    },
+    Other { detail: String },
 }
 
 impl fmt::Display for LinuxLinkError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ConnectionFailed { address, port, reason } => {
+            Self::ConnectionFailed {
+                address,
+                port,
+                reason,
+            } => {
                 write!(f, "connection to {address}:{port} failed: {reason}")
             }
             Self::HandshakeFailed { peer, response } => {
                 write!(f, "handshake with {peer} failed: {response}")
             }
-            Self::Timeout { operation, duration_ms } => {
+            Self::Timeout {
+                operation,
+                duration_ms,
+            } => {
                 write!(f, "timeout after {duration_ms}ms during {operation}")
             }
             Self::ProtocolError { detail } => {

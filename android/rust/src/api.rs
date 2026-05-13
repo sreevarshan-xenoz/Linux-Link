@@ -6,13 +6,16 @@ use linux_link_core::protocol::connection::ConnectionManager;
 use linux_link_core::protocol::kdeconnect::{DeviceSender, NetworkPacket, TcpDeviceSender};
 use linux_link_core::streaming::StreamingClient;
 use linux_link_core::tailscale::TailscaleClient;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 
-use crate::{update_streaming_rtt, CONNECTION_STATE, CONTROL_WRITER, MAX_FRAMES_PER_RECEIVE, STREAMING_HANDLE, STREAMING_RTT_US, StreamingHandle};
+use crate::{
+    CONNECTION_STATE, CONTROL_WRITER, MAX_FRAMES_PER_RECEIVE, STREAMING_HANDLE, STREAMING_RTT_US,
+    StreamingHandle, update_streaming_rtt,
+};
 
 /// Initialize the Linux Link backend
 #[frb(init)]
@@ -97,7 +100,10 @@ pub async fn check_tailscale_status() -> Result<bool, String> {
 #[frb]
 pub async fn get_peers() -> Result<Vec<PeerInfoDto>, String> {
     let client = TailscaleClient::new().map_err(|e: anyhow::Error| e.to_string())?;
-    let peers = client.get_peers().await.map_err(|e: anyhow::Error| e.to_string())?;
+    let peers = client
+        .get_peers()
+        .await
+        .map_err(|e: anyhow::Error| e.to_string())?;
     Ok(peers
         .into_iter()
         .map(|p| PeerInfoDto {
@@ -163,8 +169,16 @@ pub async fn send_clipboard(address: String, port: u16, content: String) -> Resu
     let packet = NetworkPacket::new("kdeconnect.clipboard").with_body(serde_json::json!({
         "content": content,
     }));
-    sender.send_packet(&packet).await.map_err(|e: anyhow::Error| e.to_string())?;
-    tracing::info!("Clipboard sent to {}:{} ({} chars)", address, port, content.len());
+    sender
+        .send_packet(&packet)
+        .await
+        .map_err(|e: anyhow::Error| e.to_string())?;
+    tracing::info!(
+        "Clipboard sent to {}:{} ({} chars)",
+        address,
+        port,
+        content.len()
+    );
     Ok(())
 }
 
@@ -186,7 +200,8 @@ pub async fn get_clipboard(address: String, port: u16) -> Result<String, String>
     let mut lines = tokio::io::BufReader::new(reader).lines();
     match tokio::time::timeout(Duration::from_secs(5), lines.next_line()).await {
         Ok(Ok(Some(line))) => {
-            let packet = NetworkPacket::from_wire(&line).map_err(|e: anyhow::Error| e.to_string())?;
+            let packet =
+                NetworkPacket::from_wire(&line).map_err(|e: anyhow::Error| e.to_string())?;
             if packet.packet_type == "kdeconnect.clipboard" {
                 let content = packet
                     .body
@@ -261,7 +276,10 @@ pub async fn send_file(address: String, port: u16, file_path: String) -> Result<
             .map_err(|e| format!("Failed to write to stream: {}", e))?;
         sent += n as u64;
     }
-    client_stream.flush().await.map_err(|e: std::io::Error| e.to_string())?;
+    client_stream
+        .flush()
+        .await
+        .map_err(|e: std::io::Error| e.to_string())?;
     tracing::info!("File sent: {} ({} bytes)", filename, sent);
     Ok(())
 }
@@ -289,7 +307,8 @@ pub async fn list_remote_files(
     let mut lines = tokio::io::BufReader::new(reader).lines();
     match tokio::time::timeout(Duration::from_secs(10), lines.next_line()).await {
         Ok(Ok(Some(line))) => {
-            let packet = NetworkPacket::from_wire(&line).map_err(|e: anyhow::Error| e.to_string())?;
+            let packet =
+                NetworkPacket::from_wire(&line).map_err(|e: anyhow::Error| e.to_string())?;
             if packet.packet_type != "kdeconnect.filebrowse.response" {
                 return Err(format!("Unexpected packet type: {}", packet.packet_type));
             }
@@ -330,8 +349,7 @@ pub async fn connect_streaming(address: String, port: u16) -> Result<(), String>
     // For now, an in-memory manager (peers lost on app restart).
     // In the future, load from persistent storage using load_or_create().
     let cert_manager = std::sync::Arc::new(
-        linux_link_core::streaming::transport::CertManager::new()
-            .map_err(|e| e.to_string())?,
+        linux_link_core::streaming::transport::CertManager::new().map_err(|e| e.to_string())?,
     );
 
     let (mut client, packet_rx) = StreamingClient::connect(&addr, cert_manager)

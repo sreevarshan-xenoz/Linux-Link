@@ -464,9 +464,8 @@ mod tests {
     fn test_streaming_server_creation() {
         let config = StreamingConfig::default();
         let transport_config = StreamTransportConfig::default();
-        let cert_manager = std::sync::Arc::new(
-            CertManager::new().expect("Failed to create CertManager"),
-        );
+        let cert_manager =
+            std::sync::Arc::new(CertManager::new().expect("Failed to create CertManager"));
         let server = StreamingServer::new(config, transport_config, cert_manager);
 
         assert!(server.is_running());
@@ -476,9 +475,8 @@ mod tests {
     fn test_bitrate_update() {
         let config = StreamingConfig::default();
         let transport_config = StreamTransportConfig::default();
-        let cert_manager = std::sync::Arc::new(
-            CertManager::new().expect("Failed to create CertManager"),
-        );
+        let cert_manager =
+            std::sync::Arc::new(CertManager::new().expect("Failed to create CertManager"));
         let server = StreamingServer::new(config.clone(), transport_config, cert_manager);
 
         let new_bitrate = 4_000_000;
