@@ -3,6 +3,7 @@
 /// Delegates to flutter_rust_bridge generated code.
 library rust_api_bridge;
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'api.dart' as frb;
@@ -218,6 +219,47 @@ class _RustApiBridge {
       bytes.add(int.parse(hex.substring(i, i + 2), radix: 16));
     }
     return bytes;
+  }
+
+  /// Send power management command (sleep/shutdown/restart/hibernate) to the remote PC.
+  /// Performs the LINUX_LINK_HELLO handshake, consumes the server's response,
+  /// then sends the power command — all over a raw TCP connection (no Rust FFI needed).
+  Future<void> sendPowerCommand(
+    String address,
+    int port,
+    String action,
+  ) async {
+    final socket = await Socket.connect(address, port,
+        timeout: const Duration(seconds: 5));
+    try {
+      // Step 1: Send LINUX_LINK_HELLO handshake
+      socket.write('LINUX_LINK_HELLO 1\n');
+      await socket.flush();
+
+      // Step 2: Drain the server response(s) with a short timeout.
+      // The server sends an identity JSON packet (possibly preceded by
+      // HANDSHAKE_OK). Read available data for up to 500ms then move on.
+      try {
+        await socket
+            .cast<List<int>>()
+            .transform(utf8.decoder)
+            .transform(const LineSplitter())
+            .first
+            .timeout(const Duration(milliseconds: 500));
+      } catch (_) {
+        // Ignore — proceed with sending the power command
+      }
+
+      // Step 3: Send the power command as a proper NetworkPacket wire format
+      final packet = jsonEncode({
+        'type': 'kdeconnect.linuxlink.power',
+        'body': {'action': action},
+      });
+      socket.write('$packet\n');
+      await socket.flush();
+    } finally {
+      await socket.close();
+    }
   }
 
   /// Send keyboard event (text typing or key code).

@@ -533,6 +533,82 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
     return 0;
   }
 
+  Future<void> _sendPowerCommand(String action) async {
+    // Build confirmation dialog
+    final actionLabel = switch (action) {
+      'sleep' => 'Send to sleep',
+      'shutdown' => 'Shut down',
+      'restart' => 'Restart',
+      'hibernate' => 'Hibernate',
+      _ => action,
+    };
+    final actionIcon = switch (action) {
+      'sleep' => Icons.bedtime_outlined,
+      'shutdown' => Icons.power_settings_new,
+      'restart' => Icons.restart_alt,
+      'hibernate' => Icons.nightlight_outlined,
+      _ => Icons.power_settings_new,
+    };
+    final actionDescription = switch (action) {
+      'sleep' => 'Suspend the remote PC to RAM',
+      'shutdown' => 'Power off the remote PC',
+      'restart' => 'Reboot the remote PC',
+      'hibernate' => 'Save state to disk and power off',
+      _ => 'Perform power action: $action',
+    };
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(actionIcon, size: 24, color: Colors.redAccent),
+            const SizedBox(width: 8),
+            Text(actionLabel),
+          ],
+        ),
+        content: Text(actionDescription),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(ctx, true),
+            icon: const Icon(Icons.check),
+            label: const Text('Confirm'),
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.redAccent,
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    try {
+      await bridge.rustApi.sendPowerCommand(widget.address, widget.port, action);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('$actionLabel command sent'),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to send power command: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
   void _toggleFullscreen() {
     setState(() {
       _isFullscreen = !_isFullscreen;
@@ -777,6 +853,53 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
                     tooltip: 'Reset zoom',
                   ),
                   // Keyboard mode toggle
+                  // Power management
+                  PopupMenuButton<String>(
+                    onSelected: (action) => _sendPowerCommand(action),
+                    itemBuilder: (ctx) => [
+                      const PopupMenuItem(
+                        value: 'sleep',
+                        child: ListTile(
+                          leading: Icon(Icons.bedtime_outlined),
+                          title: Text('Sleep'),
+                          subtitle: Text('Suspend to RAM'),
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                        ),
+                      ),
+                      const PopupMenuItem(
+                        value: 'shutdown',
+                        child: ListTile(
+                          leading: Icon(Icons.power_settings_new, color: Colors.redAccent),
+                          title: Text('Shutdown'),
+                          subtitle: Text('Power off the PC'),
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                        ),
+                      ),
+                      const PopupMenuItem(
+                        value: 'restart',
+                        child: ListTile(
+                          leading: Icon(Icons.restart_alt),
+                          title: Text('Restart'),
+                          subtitle: Text('Reboot the PC'),
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                        ),
+                      ),
+                      const PopupMenuItem(
+                        value: 'hibernate',
+                        child: ListTile(
+                          leading: Icon(Icons.nightlight_outlined),
+                          title: Text('Hibernate'),
+                          subtitle: Text('Save state & power off'),
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                        ),
+                      ),
+                    ],
+                    child: const Icon(Icons.power_settings_new),
+                  ),
                   IconButton.filledTonal(
                     onPressed: _toggleKeyboardMode,
                     icon: Icon(

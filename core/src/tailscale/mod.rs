@@ -7,8 +7,10 @@ use tokio::time::sleep;
 
 pub mod discovery;
 pub mod lan;
+pub mod wol;
 pub use discovery::{DiscoveryEvent, DiscoveryService};
 pub use lan::{LanDiscoveryService, LanEvent};
+pub use wol::send_wol_with_retry;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeerInfo {
