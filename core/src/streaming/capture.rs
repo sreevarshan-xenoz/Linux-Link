@@ -99,6 +99,9 @@ pub async fn start_capture(
     .context("Failed to create capture session")?;
 
     // Step 2: Select sources (monitor capture)
+    // Determine which monitor to capture (F2: multi-monitor).
+    // ashpd screencast captures all monitors; we'll select based on config.monitor_index.
+    // For now, Portal captures primary monitor by default.
     let source_types = ashpd::enumflags2::BitFlags::from(SourceType::Monitor);
     tokio::time::timeout(
         Duration::from_secs(10),

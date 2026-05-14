@@ -12,38 +12,38 @@ part 'api.freezed.dart';
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `DiscoveryEvent`
 
 /// Get version string
-Future<String> version() => RustApi.instance.api.crateApiVersion();
+Future<String> version() => RustLib.instance.api.crateApiVersion();
 
 /// Check Tailscale status
 Future<bool> checkTailscaleStatus() =>
-    RustApi.instance.api.crateApiCheckTailscaleStatus();
+    RustLib.instance.api.crateApiCheckTailscaleStatus();
 
 /// Get list of peers on the tailnet
-Future<List<PeerInfoDto>> getPeers() => RustApi.instance.api.crateApiGetPeers();
+Future<List<PeerInfoDto>> getPeers() => RustLib.instance.api.crateApiGetPeers();
 
 /// Connect to a peer
 Future<ConnectionState> connectToPeer(
         {required String address, required int port}) =>
-    RustApi.instance.api.crateApiConnectToPeer(address: address, port: port);
+    RustLib.instance.api.crateApiConnectToPeer(address: address, port: port);
 
 /// Send clipboard content to peer using KDE Connect protocol.
 Future<void> sendClipboard(
         {required String address,
         required int port,
         required String content}) =>
-    RustApi.instance.api
+    RustLib.instance.api
         .crateApiSendClipboard(address: address, port: port, content: content);
 
 /// Get clipboard content from peer.
 Future<String> getClipboard({required String address, required int port}) =>
-    RustApi.instance.api.crateApiGetClipboard(address: address, port: port);
+    RustLib.instance.api.crateApiGetClipboard(address: address, port: port);
 
 /// Send file to peer using KDE Share protocol.
 Future<void> sendFile(
         {required String address,
         required int port,
         required String filePath}) =>
-    RustApi.instance.api
+    RustLib.instance.api
         .crateApiSendFile(address: address, port: port, filePath: filePath);
 
 /// List files in a remote directory using the file browse protocol.
@@ -51,29 +51,47 @@ Future<List<RemoteFileDto>> listRemoteFiles(
         {required String address,
         required int port,
         required String remotePath}) =>
-    RustApi.instance.api.crateApiListRemoteFiles(
+    RustLib.instance.api.crateApiListRemoteFiles(
         address: address, port: port, remotePath: remotePath);
 
 /// Request remote screen streaming.
-Future<void> connectStreaming({required String address, required int port}) =>
-    RustApi.instance.api.crateApiConnectStreaming(address: address, port: port);
+///
+/// `monitor_index` selects which display to stream (0 = primary).
+/// Pass `None` to use the default monitor.
+Future<void> connectStreaming(
+        {required String address, required int port, int? monitorIndex}) =>
+    RustLib.instance.api.crateApiConnectStreaming(
+        address: address, port: port, monitorIndex: monitorIndex);
 
 /// Stop remote screen streaming.
-Future<void> stopStreaming() => RustApi.instance.api.crateApiStopStreaming();
+Future<void> stopStreaming() => RustLib.instance.api.crateApiStopStreaming();
 
 /// Check if streaming is active by inspecting the streaming handle.
-bool isStreamingActive() => RustApi.instance.api.crateApiIsStreamingActive();
+bool isStreamingActive() => RustLib.instance.api.crateApiIsStreamingActive();
 
 /// Get the current RTT to the streaming server in microseconds.
-BigInt getStreamingRtt() => RustApi.instance.api.crateApiGetStreamingRtt();
+BigInt getStreamingRtt() => RustLib.instance.api.crateApiGetStreamingRtt();
 
 /// Get detailed streaming session statistics.
 StreamingStatsDto getStreamingStats() =>
-    RustApi.instance.api.crateApiGetStreamingStats();
+    RustLib.instance.api.crateApiGetStreamingStats();
+
+/// Get the number of monitors available on the remote server.
+///
+/// F2: Multi-monitor support — returns 0 if detection fails or no display.
+Future<int> getMonitorCount({required String address, required int port}) =>
+    RustLib.instance.api.crateApiGetMonitorCount(address: address, port: port);
+
+/// Receive queued audio packets from the streaming client (F1: Audio Streaming).
+///
+/// Each audio packet contains raw Opus-encoded data (typically 20ms @ 48kHz stereo).
+/// Returns up to `MAX_AUDIO_PACKETS_PER_RECEIVE` packets.
+Future<List<Uint8List>> receiveAudio({required BigInt timeoutMs}) =>
+    RustLib.instance.api.crateApiReceiveAudio(timeoutMs: timeoutMs);
 
 /// Receive queued H.264 frames from the streaming client.
 Future<List<FrameDto>> receiveFrames({required BigInt timeoutMs}) =>
-    RustApi.instance.api.crateApiReceiveFrames(timeoutMs: timeoutMs);
+    RustLib.instance.api.crateApiReceiveFrames(timeoutMs: timeoutMs);
 
 /// Send mouse event to remote, preferring the low-latency QUIC streaming channel.
 ///
@@ -85,7 +103,7 @@ Future<void> sendMouseEvent(
         required double y,
         required int button,
         required bool isPressed}) =>
-    RustApi.instance.api.crateApiSendMouseEvent(
+    RustLib.instance.api.crateApiSendMouseEvent(
         address: address,
         port: port,
         x: x,
@@ -101,7 +119,7 @@ Future<void> sendKeyboardEvent(
         required int port,
         required int keyCode,
         required String text}) =>
-    RustApi.instance.api.crateApiSendKeyboardEvent(
+    RustLib.instance.api.crateApiSendKeyboardEvent(
         address: address, port: port, keyCode: keyCode, text: text);
 
 @freezed

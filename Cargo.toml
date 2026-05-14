@@ -43,6 +43,9 @@ xcap = "0.9"
 # D-Bus for notifications, battery, etc.
 zbus = { version = "5.7", features = ["tokio"] }
 
+# Opus audio codec
+opus = "0.3"
+
 # UUID
 uuid = { version = "1", features = ["v4"] }
 

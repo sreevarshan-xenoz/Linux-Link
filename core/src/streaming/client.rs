@@ -1,7 +1,7 @@
-//! QUIC stream client for receiving H.264 video frames.
+//! QUIC stream client for receiving H.264 video frames and Opus audio packets.
 //!
 //! Connects to a `StreamingServer`, receives encoded packets over unidirectional
-//! QUIC streams, and feeds them into an mpsc channel for the Flutter/MediaCodec side.
+//! QUIC streams, and demuxes them into video and audio channels.
 
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -11,12 +11,16 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
-use super::EncodedPacket;
 use super::input_packet::InputPacket;
 use super::transport::{self, CertManager, StreamClient, StreamTransportConfig};
+use super::{AudioPacket, EncodedPacket};
 
 /// Default port for the streaming service.
 pub const DEFAULT_STREAMING_PORT: u16 = 4716;
+
+/// Marker bytes for a client-to-server config QUIC stream.
+/// Used to transmit settings (e.g. monitor index) before the pipeline starts.
+const MONITOR_CONFIG_MARKER: [u8; 2] = [0xFF, 0x00];
 
 /// QUIC Stream Client — connects to a StreamingServer and receives H.264 video frames.
 ///
@@ -36,6 +40,8 @@ pub struct StreamingClient {
     #[allow(dead_code)]
     cert_manager: std::sync::Arc<CertManager>,
     frame_tx: mpsc::Sender<EncodedPacket>,
+    #[allow(dead_code)]
+    audio_tx: mpsc::Sender<AudioPacket>,
     cancel: CancellationToken,
     #[allow(dead_code)]
     channel_capacity: usize,
@@ -49,11 +55,13 @@ impl StreamingClient {
     /// video.
     pub fn new(channel_capacity: usize, cert_manager: std::sync::Arc<CertManager>) -> Self {
         let (frame_tx, _frame_rx) = mpsc::channel(channel_capacity);
+        let (audio_tx, _audio_rx) = mpsc::channel(channel_capacity);
         Self {
             connection: None,
             transport_config: StreamTransportConfig::default(),
             cert_manager,
             frame_tx,
+            audio_tx,
             cancel: CancellationToken::new(),
             channel_capacity,
         }
@@ -62,17 +70,24 @@ impl StreamingClient {
     /// Connect to a streaming server at the given address.
     ///
     /// The address should be in the form `"host:port"`, e.g. `"100.64.0.1:4716"`.
-    /// Returns the client and a receiver channel for consuming frames.
+    /// Optionally sends a `monitor_index` to the server for multi-monitor selection.
+    /// Returns the client and receiver channels for consuming video frames and audio packets.
     pub async fn connect(
         addr: &str,
         cert_manager: std::sync::Arc<CertManager>,
-    ) -> Result<(Self, mpsc::Receiver<EncodedPacket>)> {
+        monitor_index: Option<u32>,
+    ) -> Result<(
+        Self,
+        mpsc::Receiver<EncodedPacket>,
+        mpsc::Receiver<AudioPacket>,
+    )> {
         let addr: SocketAddr = addr
             .parse()
             .with_context(|| format!("Invalid server address: {addr}"))?;
 
         let channel_capacity = 8;
         let (frame_tx, frame_rx) = mpsc::channel(channel_capacity);
+        let (audio_tx, audio_rx) = mpsc::channel(channel_capacity);
 
         info!("Connecting to streaming server at {addr}");
 
@@ -87,16 +102,39 @@ impl StreamingClient {
 
         info!("Streaming connection established to {addr}");
 
+        // Send optional monitor_index to the server as a config stream
+        if let Some(index) = monitor_index {
+            match connection.open_uni().await {
+                Ok(mut config_stream) => {
+                    // Format: [0xFF, 0x00] config marker + 4 bytes LE monitor_index
+                    let mut config_buf = [0u8; 6];
+                    config_buf[0..2].copy_from_slice(&MONITOR_CONFIG_MARKER);
+                    config_buf[2..6].copy_from_slice(&index.to_le_bytes());
+                    if let Err(e) = config_stream.write_all(&config_buf).await {
+                        warn!("Failed to send monitor index ({index}): {e}");
+                    }
+                    if let Err(e) = config_stream.finish() {
+                        warn!("Failed to finish config stream: {e}");
+                    }
+                    info!("Sent monitor_index={index} to server");
+                }
+                Err(e) => {
+                    warn!("Failed to open config stream for monitor_index: {e}");
+                }
+            }
+        }
+
         let client = Self {
             connection: Some(connection),
             transport_config: StreamTransportConfig::default(),
             cert_manager,
             frame_tx,
+            audio_tx,
             cancel: CancellationToken::new(),
             channel_capacity,
         };
 
-        Ok((client, frame_rx))
+        Ok((client, frame_rx, audio_rx))
     }
 
     /// Start receiving frames. This runs until cancelled or the connection closes.
@@ -115,6 +153,7 @@ impl StreamingClient {
 
         let cancel = self.cancel.clone();
         let frame_tx = self.frame_tx.clone();
+        let audio_tx = self.audio_tx.clone();
 
         info!("Starting frame receiver");
 
@@ -124,7 +163,7 @@ impl StreamingClient {
         // Spawn the receive loop using our cancel-aware receiver
         let recv_cancel = cancel.clone();
         let recv_handle = tokio::spawn(async move {
-            let result = recv_with_cancel(&connection, frame_tx, recv_cancel).await;
+            let result = recv_with_cancel(&connection, frame_tx, audio_tx, recv_cancel).await;
             match result {
                 Ok(()) => debug!("Frame receiver finished normally"),
                 Err(e) => warn!("Frame receiver error: {e}"),
@@ -208,17 +247,18 @@ impl StreamingClient {
     }
 }
 
-/// Receive packets with cancellation support.
+/// Receive packets with cancellation support — demuxes video and audio streams.
 ///
-/// Wraps `transport::receive_packets` so it can be aborted on cancellation.
+/// Reads packet headers and routes to the appropriate channel based on `stream_kind`:
+/// - `stream_kind == 0` → video frames on `frame_tx`
+/// - `stream_kind == 1` → audio packets on `audio_tx`
 async fn recv_with_cancel(
     connection: &quinn::Connection,
     frame_tx: mpsc::Sender<EncodedPacket>,
+    audio_tx: mpsc::Sender<AudioPacket>,
     cancel: CancellationToken,
 ) -> Result<()> {
-    // We implement our own receive loop here so we can interleave cancellation.
-    // The transport::receive_packets function does not support cancellation.
-    info!("Starting packet receiver");
+    info!("Starting packet receiver (video + audio)");
 
     loop {
         tokio::select! {
@@ -232,8 +272,8 @@ async fn recv_with_cancel(
             result = connection.accept_uni() => {
                 match result {
                     Ok(mut recv_stream) => {
-                        // Read the 17-byte packet header
-                        let mut header_bytes = [0u8; 17];
+                        // Read the 18-byte packet header
+                        let mut header_bytes = [0u8; 18];
                         if let Err(e) = recv_stream.read_exact(&mut header_bytes).await {
                             debug!("Failed to read packet header: {e}");
                             continue;
@@ -247,25 +287,46 @@ async fn recv_with_cancel(
                             }
                         };
 
-                        // Read the NAL payload (up to 10 MB)
-                        let data = match recv_stream.read_to_end(10 * 1024 * 1024).await {
+                        // Read the payload (up to 10 MB for video, 64 KB for audio)
+                        let max_size = if header.stream_kind == transport::STREAM_KIND_AUDIO {
+                            64 * 1024
+                        } else {
+                            10 * 1024 * 1024
+                        };
+                        let data = match recv_stream.read_to_end(max_size).await {
                             Ok(data) => data,
                             Err(e) => {
-                                warn!("Failed to read packet data (seq={}): {e}", header.sequence);
+                                warn!("Failed to read packet data (seq={}, kind={}): {e}", header.sequence, header.stream_kind);
                                 continue;
                             }
                         };
 
-                        let packet = EncodedPacket {
-                            data,
-                            is_keyframe: header.is_keyframe,
-                            timestamp: std::time::Instant::now(),
-                            sequence: header.sequence,
-                        };
+                        if header.stream_kind == transport::STREAM_KIND_AUDIO {
+                            // Route to audio channel
+                            let packet = AudioPacket {
+                                data,
+                                sequence: header.sequence,
+                                timestamp: std::time::Instant::now(),
+                                is_config: false,
+                            };
 
-                        if frame_tx.send(packet).await.is_err() {
-                            debug!("Frame receiver dropped — channel closed");
-                            break;
+                            if audio_tx.send(packet).await.is_err() {
+                                debug!("Audio receiver dropped — channel closed");
+                                break;
+                            }
+                        } else {
+                            // Route to video channel
+                            let packet = EncodedPacket {
+                                data,
+                                is_keyframe: header.is_keyframe,
+                                timestamp: std::time::Instant::now(),
+                                sequence: header.sequence,
+                            };
+
+                            if frame_tx.send(packet).await.is_err() {
+                                debug!("Frame receiver dropped — channel closed");
+                                break;
+                            }
                         }
                     }
                     Err(quinn::ConnectionError::ApplicationClosed(_)) => {

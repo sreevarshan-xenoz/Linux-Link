@@ -12,8 +12,8 @@ import 'dart:convert';
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_web.dart';
 
-abstract class RustApiApiImplPlatform extends BaseApiImpl<RustApiWire> {
-  RustApiApiImplPlatform({
+abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
+  RustLibApiImplPlatform({
     required super.handler,
     required super.wire,
     required super.generalizedFrbRustBinding,
@@ -25,6 +25,9 @@ abstract class RustApiApiImplPlatform extends BaseApiImpl<RustApiWire> {
 
   @protected
   bool dco_decode_bool(dynamic raw);
+
+  @protected
+  int dco_decode_box_autoadd_u_32(dynamic raw);
 
   @protected
   ConnectionState dco_decode_connection_state(dynamic raw);
@@ -48,6 +51,9 @@ abstract class RustApiApiImplPlatform extends BaseApiImpl<RustApiWire> {
   List<FrameDto> dco_decode_list_frame_dto(dynamic raw);
 
   @protected
+  List<Uint8List> dco_decode_list_list_prim_u_8_strict(dynamic raw);
+
+  @protected
   List<PeerInfoDto> dco_decode_list_peer_info_dto(dynamic raw);
 
   @protected
@@ -55,6 +61,9 @@ abstract class RustApiApiImplPlatform extends BaseApiImpl<RustApiWire> {
 
   @protected
   List<RemoteFileDto> dco_decode_list_remote_file_dto(dynamic raw);
+
+  @protected
+  int? dco_decode_opt_box_autoadd_u_32(dynamic raw);
 
   @protected
   PeerInfoDto dco_decode_peer_info_dto(dynamic raw);
@@ -67,6 +76,9 @@ abstract class RustApiApiImplPlatform extends BaseApiImpl<RustApiWire> {
 
   @protected
   int dco_decode_u_16(dynamic raw);
+
+  @protected
+  int dco_decode_u_32(dynamic raw);
 
   @protected
   BigInt dco_decode_u_64(dynamic raw);
@@ -82,6 +94,9 @@ abstract class RustApiApiImplPlatform extends BaseApiImpl<RustApiWire> {
 
   @protected
   bool sse_decode_bool(SseDeserializer deserializer);
+
+  @protected
+  int sse_decode_box_autoadd_u_32(SseDeserializer deserializer);
 
   @protected
   ConnectionState sse_decode_connection_state(SseDeserializer deserializer);
@@ -105,6 +120,10 @@ abstract class RustApiApiImplPlatform extends BaseApiImpl<RustApiWire> {
   List<FrameDto> sse_decode_list_frame_dto(SseDeserializer deserializer);
 
   @protected
+  List<Uint8List> sse_decode_list_list_prim_u_8_strict(
+      SseDeserializer deserializer);
+
+  @protected
   List<PeerInfoDto> sse_decode_list_peer_info_dto(SseDeserializer deserializer);
 
   @protected
@@ -113,6 +132,9 @@ abstract class RustApiApiImplPlatform extends BaseApiImpl<RustApiWire> {
   @protected
   List<RemoteFileDto> sse_decode_list_remote_file_dto(
       SseDeserializer deserializer);
+
+  @protected
+  int? sse_decode_opt_box_autoadd_u_32(SseDeserializer deserializer);
 
   @protected
   PeerInfoDto sse_decode_peer_info_dto(SseDeserializer deserializer);
@@ -128,6 +150,9 @@ abstract class RustApiApiImplPlatform extends BaseApiImpl<RustApiWire> {
   int sse_decode_u_16(SseDeserializer deserializer);
 
   @protected
+  int sse_decode_u_32(SseDeserializer deserializer);
+
+  @protected
   BigInt sse_decode_u_64(SseDeserializer deserializer);
 
   @protected
@@ -141,6 +166,9 @@ abstract class RustApiApiImplPlatform extends BaseApiImpl<RustApiWire> {
 
   @protected
   void sse_encode_bool(bool self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_box_autoadd_u_32(int self, SseSerializer serializer);
 
   @protected
   void sse_encode_connection_state(
@@ -165,6 +193,10 @@ abstract class RustApiApiImplPlatform extends BaseApiImpl<RustApiWire> {
   void sse_encode_list_frame_dto(List<FrameDto> self, SseSerializer serializer);
 
   @protected
+  void sse_encode_list_list_prim_u_8_strict(
+      List<Uint8List> self, SseSerializer serializer);
+
+  @protected
   void sse_encode_list_peer_info_dto(
       List<PeerInfoDto> self, SseSerializer serializer);
 
@@ -175,6 +207,9 @@ abstract class RustApiApiImplPlatform extends BaseApiImpl<RustApiWire> {
   @protected
   void sse_encode_list_remote_file_dto(
       List<RemoteFileDto> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_box_autoadd_u_32(int? self, SseSerializer serializer);
 
   @protected
   void sse_encode_peer_info_dto(PeerInfoDto self, SseSerializer serializer);
@@ -190,6 +225,9 @@ abstract class RustApiApiImplPlatform extends BaseApiImpl<RustApiWire> {
   void sse_encode_u_16(int self, SseSerializer serializer);
 
   @protected
+  void sse_encode_u_32(int self, SseSerializer serializer);
+
+  @protected
   void sse_encode_u_64(BigInt self, SseSerializer serializer);
 
   @protected
@@ -201,13 +239,13 @@ abstract class RustApiApiImplPlatform extends BaseApiImpl<RustApiWire> {
 
 // Section: wire_class
 
-class RustApiWire implements BaseWire {
-  RustApiWire.fromExternalLibrary(ExternalLibrary lib);
+class RustLibWire implements BaseWire {
+  RustLibWire.fromExternalLibrary(ExternalLibrary lib);
 }
 
 @JS('wasm_bindgen')
-external RustApiWasmModule get wasmModule;
+external RustLibWasmModule get wasmModule;
 
 @JS()
 @anonymous
-extension type RustApiWasmModule._(JSObject _) implements JSObject {}
+extension type RustLibWasmModule._(JSObject _) implements JSObject {}

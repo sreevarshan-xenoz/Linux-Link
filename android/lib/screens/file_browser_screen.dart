@@ -268,14 +268,18 @@ class _FileBrowserScreenState extends ConsumerState<FileBrowserScreen>
                     final file = _remoteFiles[index];
                     final dragFile = file.isDirectory ? null : file;
                     return LongPressDraggable<String>(
-                      data: dragFile != null ? '$_currentRemotePath${dragFile.name}' : null,
+                      data: dragFile != null
+                          ? '$_currentRemotePath${dragFile.name}'
+                          : null,
                       feedback: Material(
                         elevation: 4,
                         borderRadius: BorderRadius.circular(8),
                         child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 8),
                           decoration: BoxDecoration(
-                            color: Theme.of(context).colorScheme.primaryContainer,
+                            color:
+                                Theme.of(context).colorScheme.primaryContainer,
                             borderRadius: BorderRadius.circular(8),
                           ),
                           child: Row(

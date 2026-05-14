@@ -71,7 +71,8 @@ class _TrustScreenState extends State<TrustScreen> {
   Future<void> _saveTrustedDevices() async {
     final prefs = await SharedPreferences.getInstance();
     final devicesJson = _trustedDevices
-        .map((d) => '${d.address}|${d.name}|${d.fingerprint}|${d.trustedAt.toIso8601String()}')
+        .map((d) =>
+            '${d.address}|${d.name}|${d.fingerprint}|${d.trustedAt.toIso8601String()}')
         .toList();
     await prefs.setStringList(_trustedDevicesKey, devicesJson);
   }
@@ -97,9 +98,11 @@ class _TrustScreenState extends State<TrustScreen> {
       final prefs = await SharedPreferences.getInstance();
       final devicesJson = prefs.getStringList(_trustedDevicesKey) ?? [];
       // Check if already exists
-      final alreadyTrusted = devicesJson.any((d) => d.startsWith('${widget.address}|'));
+      final alreadyTrusted =
+          devicesJson.any((d) => d.startsWith('${widget.address}|'));
       if (!alreadyTrusted) {
-        devicesJson.add('${widget.address}|${widget.address}|${widget.fingerprint}|${DateTime.now().toIso8601String()}');
+        devicesJson.add(
+            '${widget.address}|${widget.address}|${widget.fingerprint}|${DateTime.now().toIso8601String()}');
         await prefs.setStringList(_trustedDevicesKey, devicesJson);
       }
       widget.onAccept!();
@@ -189,7 +192,8 @@ class _TrustScreenState extends State<TrustScreen> {
                   children: [
                     Row(
                       children: [
-                        const Icon(Icons.computer, size: 16, color: Colors.white54),
+                        const Icon(Icons.computer,
+                            size: 16, color: Colors.white54),
                         const SizedBox(width: 8),
                         Text(
                           'Server: ${widget.address}',
@@ -204,10 +208,12 @@ class _TrustScreenState extends State<TrustScreen> {
                     const SizedBox(height: 12),
                     // Fingerprint section
                     GestureDetector(
-                      onTap: () => setState(() => _expandedFingerprint = !_expandedFingerprint),
+                      onTap: () => setState(
+                          () => _expandedFingerprint = !_expandedFingerprint),
                       child: Row(
                         children: [
-                          const Icon(Icons.fingerprint, size: 16, color: Colors.blueAccent),
+                          const Icon(Icons.fingerprint,
+                              size: 16, color: Colors.blueAccent),
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text(
@@ -220,7 +226,9 @@ class _TrustScreenState extends State<TrustScreen> {
                             ),
                           ),
                           Icon(
-                            _expandedFingerprint ? Icons.expand_less : Icons.expand_more,
+                            _expandedFingerprint
+                                ? Icons.expand_less
+                                : Icons.expand_more,
                             size: 16,
                             color: Colors.white38,
                           ),
@@ -265,12 +273,14 @@ class _TrustScreenState extends State<TrustScreen> {
                 decoration: BoxDecoration(
                   color: Colors.orangeAccent.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.orangeAccent.withValues(alpha: 0.3)),
+                  border: Border.all(
+                      color: Colors.orangeAccent.withValues(alpha: 0.3)),
                 ),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Icon(Icons.warning_amber, size: 16, color: Colors.orangeAccent),
+                    const Icon(Icons.warning_amber,
+                        size: 16, color: Colors.orangeAccent),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
@@ -369,7 +379,8 @@ class _TrustScreenState extends State<TrustScreen> {
                     style: const TextStyle(fontSize: 12),
                   ),
                   trailing: IconButton(
-                    icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                    icon: const Icon(Icons.delete_outline,
+                        color: Colors.redAccent),
                     tooltip: 'Remove trust',
                     onPressed: () => _confirmRemove(index),
                   ),

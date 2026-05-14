@@ -28,3 +28,6 @@ zbus.workspace = true
 
 # Input injection via uinput (universal fallback)
 evdev.workspace = true
+
+# Cancellation tokens and utilities
+tokio-util.workspace = true

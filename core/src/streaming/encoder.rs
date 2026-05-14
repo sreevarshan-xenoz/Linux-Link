@@ -13,7 +13,7 @@ use ffmpeg_sidecar::command::FfmpegCommand;
 use tracing::{debug, error, info, trace, warn};
 
 use super::encoder_detect::HardwareEncoder;
-use super::{EncodedPacket, EncoderPreset, H264Profile, StreamingConfig, VideoFrame};
+use super::{EncodedPacket, EncoderPreset, H264Profile, StreamingConfig, VideoCodec, VideoFrame};
 
 /// Set a file descriptor to non-blocking mode.
 fn set_nonblocking(stream: &impl AsRawFd) -> io::Result<()> {
@@ -467,6 +467,9 @@ fn find_start_code(data: &[u8], from: usize) -> Option<(usize, usize)> {
 /// Input: raw BGRA frames via stdin (pipe:0)
 /// Output: H.264 NAL units via stdout (pipe:1)
 fn build_ffmpeg_args(config: &StreamingConfig, keyframe_interval: u64) -> Vec<String> {
+    // Determine codec type
+    let is_hevc = matches!(config.codec, VideoCodec::H265);
+
     let profile_str = match config.profile {
         H264Profile::Baseline => "baseline".to_string(),
         H264Profile::Main => "main".to_string(),
@@ -501,6 +504,21 @@ fn build_ffmpeg_args(config: &StreamingConfig, keyframe_interval: u64) -> Vec<St
         config.hardware_encoder
     };
 
+    // Determine encoder name based on resolved encoder and codec
+    let (codec_name, output_fmt) = if is_hevc {
+        match resolved {
+            HardwareEncoder::Vaapi => ("hevc_vaapi", "hevc"),
+            HardwareEncoder::Nvenc => ("hevc_nvenc", "hevc"),
+            _ => ("libx265", "hevc"),
+        }
+    } else {
+        match resolved {
+            HardwareEncoder::Vaapi => ("h264_vaapi", "h264"),
+            HardwareEncoder::Nvenc => ("h264_nvenc", "h264"),
+            _ => ("libx264", "h264"),
+        }
+    };
+
     // Select encoder-specific args based on resolved encoder
     let encoder_args: Vec<String> = match resolved {
         HardwareEncoder::Vaapi => {
@@ -508,7 +526,7 @@ fn build_ffmpeg_args(config: &StreamingConfig, keyframe_interval: u64) -> Vec<St
                 "-vaapi_device".to_string(),
                 "/dev/dri/renderD128".to_string(),
                 "-c:v".to_string(),
-                "h264_vaapi".to_string(),
+                codec_name.to_string(),
                 "-b:v".to_string(),
                 config.bitrate_bps.to_string(),
                 "-vf".to_string(),
@@ -521,7 +539,7 @@ fn build_ffmpeg_args(config: &StreamingConfig, keyframe_interval: u64) -> Vec<St
         HardwareEncoder::Nvenc => {
             vec![
                 "-c:v".to_string(),
-                "h264_nvenc".to_string(),
+                codec_name.to_string(),
                 "-preset".to_string(),
                 nvenc_preset.to_string(),
                 "-rc".to_string(),
@@ -533,22 +551,37 @@ fn build_ffmpeg_args(config: &StreamingConfig, keyframe_interval: u64) -> Vec<St
             ]
         }
         HardwareEncoder::Auto | HardwareEncoder::Software => {
-            vec![
-                "-c:v".to_string(),
-                "libx264".to_string(),
-                "-profile:v".to_string(),
-                profile_str,
-                "-preset".to_string(),
-                preset_str,
-                "-b:v".to_string(),
-                config.bitrate_bps.to_string(),
-                "-pix_fmt".to_string(),
-                "yuv420p".to_string(),
-                "-x264-params".to_string(),
-                format!("keyint={}:min-keyint=1", keyframe_interval),
-                "-tune".to_string(),
-                "zerolatency".to_string(),
-            ]
+            if is_hevc {
+                vec![
+                    "-c:v".to_string(),
+                    codec_name.to_string(), // libx265
+                    "-preset".to_string(),
+                    preset_str,
+                    "-b:v".to_string(),
+                    config.bitrate_bps.to_string(),
+                    "-pix_fmt".to_string(),
+                    "yuv420p".to_string(),
+                    "-x265-params".to_string(),
+                    format!("keyint={}:min-keyint=1", keyframe_interval),
+                ]
+            } else {
+                vec![
+                    "-c:v".to_string(),
+                    codec_name.to_string(), // libx264
+                    "-profile:v".to_string(),
+                    profile_str,
+                    "-preset".to_string(),
+                    preset_str,
+                    "-b:v".to_string(),
+                    config.bitrate_bps.to_string(),
+                    "-pix_fmt".to_string(),
+                    "yuv420p".to_string(),
+                    "-x264-params".to_string(),
+                    format!("keyint={}:min-keyint=1", keyframe_interval),
+                    "-tune".to_string(),
+                    "zerolatency".to_string(),
+                ]
+            }
         }
     };
 
@@ -573,10 +606,10 @@ fn build_ffmpeg_args(config: &StreamingConfig, keyframe_interval: u64) -> Vec<St
     // Append encoder-specific args
     args.extend(encoder_args);
 
-    // Output format: raw H.264 bitstream to stdout
+    // Output format: raw codec bitstream to stdout
     args.extend(vec![
         "-f".to_string(),
-        "h264".to_string(),
+        output_fmt.to_string(),
         "pipe:1".to_string(),
     ]);
 
@@ -668,6 +701,7 @@ mod tests {
             height: 1080,
             fps: 30,
             bitrate_bps: 5_000_000,
+            codec: VideoCodec::H264,
             profile: H264Profile::Baseline,
             preset: EncoderPreset::UltraFast,
             hardware_encoder: HardwareEncoder::Software,
@@ -695,6 +729,7 @@ mod tests {
             height: 720,
             fps: 60,
             bitrate_bps: 8_000_000,
+            codec: VideoCodec::H264,
             profile: H264Profile::High,
             preset: EncoderPreset::Medium,
             hardware_encoder: HardwareEncoder::Software,
@@ -718,6 +753,7 @@ mod tests {
             height: 240,
             fps: 30,
             bitrate_bps: 1_000_000,
+            codec: VideoCodec::H264,
             profile: H264Profile::Baseline,
             preset: EncoderPreset::UltraFast,
             hardware_encoder: HardwareEncoder::Auto,
@@ -779,6 +815,7 @@ mod tests {
             height: 240,
             fps: 30,
             bitrate_bps: 1_000_000,
+            codec: VideoCodec::H264,
             profile: H264Profile::Baseline,
             preset: EncoderPreset::UltraFast,
             hardware_encoder: HardwareEncoder::Auto,
@@ -815,6 +852,7 @@ mod tests {
             height: 240,
             fps: 30,
             bitrate_bps: 1_000_000,
+            codec: VideoCodec::H264,
             profile: H264Profile::Baseline,
             preset: EncoderPreset::UltraFast,
             hardware_encoder: HardwareEncoder::Auto,
@@ -858,6 +896,7 @@ mod tests {
             height: 240,
             fps: 30,
             bitrate_bps: 1_000_000,
+            codec: VideoCodec::H264,
             profile: H264Profile::Baseline,
             preset: EncoderPreset::UltraFast,
             hardware_encoder: HardwareEncoder::Auto,
@@ -899,6 +938,7 @@ mod tests {
             height: 240,
             fps: 30,
             bitrate_bps: 1_000_000,
+            codec: VideoCodec::H264,
             profile: H264Profile::Baseline,
             preset: EncoderPreset::UltraFast,
             hardware_encoder: HardwareEncoder::Auto,

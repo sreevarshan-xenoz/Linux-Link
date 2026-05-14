@@ -14,6 +14,8 @@ import '../rust_api_bridge.dart' as bridge;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/background_service.dart';
 import '../services/video_player_service.dart';
+import '../services/recording_service.dart';
+import '../services/audio_service.dart';
 import '../services/history_service.dart';
 
 class RemoteDesktopScreen extends ConsumerStatefulWidget {
@@ -40,6 +42,7 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
   final FocusNode _keyboardFocusNode = FocusNode();
   Timer? _streamingCheckTimer;
   Timer? _frameTimer;
+  Timer? _audioTimer;
   Timer? _latencyTimer;
   Timer? _statsTimer;
 
@@ -50,6 +53,10 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
   bool _isLocked = false;
   bool _lockEnabled = false;
 
+  // F5: Recording state
+  Timer? _recordingDurationTimer;
+  int _recordingDuration = 0;
+
   @override
   void initState() {
     super.initState();
@@ -57,9 +64,62 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
     _startStreaming();
     _startStreamingCheck();
     _startFramePolling();
+    _startAudioPolling();
     _startLatencyPolling();
     _startStatsPolling();
     _checkLockEnabled();
+  }
+
+  Future<void> _toggleRecording() async {
+    if (RecordingService.isRecording) {
+      final path = await RecordingService.stopRecording();
+      _recordingDurationTimer?.cancel();
+      _recordingDurationTimer = null;
+      if (mounted) {
+        ref.read(isRecordingProvider.notifier).state = false;
+        ref.read(recordingDurationProvider.notifier).state = 0;
+        if (path != null) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Recording saved: $path'),
+              duration: const Duration(seconds: 4),
+              action: SnackBarAction(
+                label: 'Share',
+                onPressed: () => RecordingService.shareLastRecording(),
+              ),
+            ),
+          );
+        }
+      }
+    } else {
+      final path = await RecordingService.startRecording();
+      if (mounted && path != null) {
+        ref.read(isRecordingProvider.notifier).state = true;
+        _recordingDuration = 0;
+        _recordingDurationTimer = Timer.periodic(
+          const Duration(seconds: 1),
+          (_) {
+            if (mounted) {
+              _recordingDuration++;
+              ref.read(recordingDurationProvider.notifier).state =
+                  _recordingDuration;
+            }
+          },
+        );
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Recording started'),
+            duration: Duration(seconds: 1),
+          ),
+        );
+      }
+    }
+  }
+
+  String _formatDuration(int seconds) {
+    final m = (seconds ~/ 60).toString().padLeft(2, '0');
+    final s = (seconds % 60).toString().padLeft(2, '0');
+    return '$m:$s';
   }
 
   Future<void> _checkLockEnabled() async {
@@ -80,12 +140,18 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
     _streamingCheckTimer = null;
     _frameTimer?.cancel();
     _frameTimer = null;
+    _audioTimer?.cancel();
+    _audioTimer = null;
     _latencyTimer?.cancel();
     _latencyTimer = null;
     _statsTimer?.cancel();
     _statsTimer = null;
+    _recordingDurationTimer?.cancel();
+    _recordingDurationTimer = null;
     _keyboardFocusNode.dispose();
     _transformController.dispose();
+    AudioService.stopAudio();
+    RecordingService.stopRecording();
     VideoPlayerService.dispose()
         .catchError((e) => debugPrint('Video dispose error: $e'));
     super.dispose();
@@ -93,7 +159,10 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
 
   Future<void> _initVideoDecoder() async {
     try {
-      await VideoPlayerService.initialize(width: 1920, height: 1080);
+      final codecType = ref.read(videoCodecTypeProvider);
+      final monitorIdx = ref.read(monitorIndexProvider);
+      debugPrint('Initializing video decoder: codec=$codecType, monitor=$monitorIdx');
+      await VideoPlayerService.initialize(width: 1920, height: 1080, codecType: codecType);
     } catch (e) {
       debugPrint('Video decoder init error: $e');
     }
@@ -101,12 +170,15 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
 
   Future<void> _startStreaming() async {
     try {
-      await bridge.rustApi.startStreaming(widget.address, widget.port);
+      final monitorIndex = ref.read(monitorIndexProvider);
+      await bridge.rustApi.startStreaming(widget.address, widget.port, monitorIndex: monitorIndex);
       if (mounted) {
         ref.read(isStreamingProvider.notifier).state = true;
         ref.read(reconnectStateProvider.notifier).state =
             const ReconnectState.idle();
         await startForegroundServiceWithPeer(widget.address, widget.port);
+        // F1: Start audio playback
+        AudioService.startAudio();
       }
     } catch (e) {
       if (mounted) {
@@ -121,8 +193,8 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
   Future<void> _attemptReconnect(int attempt) async {
     ref.read(reconnectStateProvider.notifier).state =
         ReconnectState.reconnecting(attempt: attempt);
-    final backoff = ReconnectState.reconnecting(attempt: attempt)
-        .backoffSeconds;
+    final backoff =
+        ReconnectState.reconnecting(attempt: attempt).backoffSeconds;
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -137,13 +209,15 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
     if (!mounted) return;
 
     try {
-      await bridge.rustApi.startStreaming(widget.address, widget.port);
+      final monitorIndex = ref.read(monitorIndexProvider);
+      await bridge.rustApi.startStreaming(widget.address, widget.port, monitorIndex: monitorIndex);
       if (mounted) {
         ref.read(isStreamingProvider.notifier).state = true;
         ref.read(reconnectStateProvider.notifier).state =
             const ReconnectState.idle();
         // Restart polling timers
         _startFramePolling();
+        _startAudioPolling();
         _startLatencyPolling();
         _startStatsPolling();
       }
@@ -185,6 +259,8 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
               // Cancel polling timers before attempting reconnect
               _frameTimer?.cancel();
               _frameTimer = null;
+              _audioTimer?.cancel();
+              _audioTimer = null;
               _latencyTimer?.cancel();
               _latencyTimer = null;
               _statsTimer?.cancel();
@@ -197,6 +273,22 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
     );
   }
 
+  /// Poll the Rust backend for Opus audio packets and feed them to AudioTrack.
+  void _startAudioPolling() {
+    _audioTimer = Timer.periodic(const Duration(milliseconds: 20), (_) async {
+      if (!mounted) return;
+      try {
+        final packets = await bridge.rustApi.receiveAudio(10);
+        for (final packet in packets) {
+          await AudioService.feedPacket(packet);
+        }
+      } catch (e) {
+        // Audio polling failures are non-fatal
+        debugPrint('Audio polling error: $e');
+      }
+    });
+  }
+
   /// Poll the Rust backend for H.264 frames and feed them to MediaCodec.
   void _startFramePolling() {
     _frameTimer = Timer.periodic(const Duration(milliseconds: 8), (_) async {
@@ -206,6 +298,11 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
         if (frames.isNotEmpty) {
           for (final frame in frames) {
             await VideoPlayerService.feedFrame(frame.data);
+            // F5: Feed frame to recording if active
+            await RecordingService.feedFrame(
+              frame.data,
+              isKeyframe: frame.isKeyframe,
+            );
           }
         }
       } catch (e) {
@@ -534,7 +631,8 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
         key == LogicalKeyboardKey.controlRight) {
       return 113;
     }
-    if (key == LogicalKeyboardKey.altLeft || key == LogicalKeyboardKey.altRight) {
+    if (key == LogicalKeyboardKey.altLeft ||
+        key == LogicalKeyboardKey.altRight) {
       return 57;
     }
     if (key == LogicalKeyboardKey.metaLeft ||
@@ -652,7 +750,8 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
     if (confirm != true) return;
 
     try {
-      await bridge.rustApi.sendPowerCommand(widget.address, widget.port, action);
+      await bridge.rustApi
+          .sendPowerCommand(widget.address, widget.port, action);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -685,10 +784,13 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
     _streamingCheckTimer = null;
     _frameTimer?.cancel();
     _frameTimer = null;
+    _audioTimer?.cancel();
+    _audioTimer = null;
     _latencyTimer?.cancel();
     _latencyTimer = null;
     _statsTimer?.cancel();
     _statsTimer = null;
+    AudioService.stopAudio();
     try {
       await bridge.rustApi.stopStreaming();
       await stopForegroundService();
@@ -860,8 +962,7 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
                 setState(() => _showStats = !_showStats);
               },
               child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
                   color: Colors.black87,
                   borderRadius: BorderRadius.circular(12),
@@ -911,8 +1012,7 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
               top: 48,
               left: 16,
               child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
                   color: Colors.black54,
                   borderRadius: BorderRadius.circular(12),
@@ -1038,6 +1138,23 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
                       child: const Icon(Icons.power_settings_new),
                     ),
                     IconButton.filledTonal(
+                      onPressed: _toggleRecording,
+                      icon: Icon(
+                        RecordingService.isRecording
+                            ? Icons.stop_circle
+                            : Icons.fiber_manual_record,
+                      ),
+                      style: IconButton.styleFrom(
+                        backgroundColor: RecordingService.isRecording
+                            ? Colors.red.withValues(alpha: 0.8)
+                            : null,
+                      ),
+                      tooltip: RecordingService.isRecording
+                          ? 'Stop recording (${_formatDuration(_recordingDuration)})'
+                          : 'Record session',
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton.filledTonal(
                       onPressed: _toggleKeyboardMode,
                       icon: Icon(
                         _keyboardMode
@@ -1063,8 +1180,7 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
                     ),
                     IconButton.filledTonal(
                       onPressed: () {
-                        setState(
-                            () => _showShortcuts = !_showShortcuts);
+                        setState(() => _showShortcuts = !_showShortcuts);
                       },
                       icon: const Icon(Icons.keyboard_command_key),
                       isSelected: _showShortcuts,

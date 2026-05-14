@@ -13,7 +13,8 @@ final isStreamingProvider = StateProvider<bool>((ref) => false);
 final latencyProvider = StateProvider<int>((ref) => 0);
 
 /// Current rotation mode for the stream display.
-final rotationModeProvider = StateProvider<RotationMode>((ref) => RotationMode.auto);
+final rotationModeProvider =
+    StateProvider<RotationMode>((ref) => RotationMode.auto);
 
 /// Auto-reconnect state.
 ///
@@ -69,3 +70,19 @@ class ReconnectState {
 final reconnectStateProvider = StateProvider<ReconnectState>(
   (ref) => const ReconnectState.idle(),
 );
+
+/// F2: Selected monitor index for multi-monitor support
+final monitorIndexProvider = StateProvider<int>((ref) => 0);
+
+/// F3: Video codec MIME type for the decoder.
+/// Defaults to H.264 AVC; set to 'video/hevc' for HEVC/H.265 when available.
+final videoCodecTypeProvider = StateProvider<String>((ref) => 'video/avc');
+
+/// Total monitors available on the remote server (detected at connection time)
+final totalMonitorsProvider = StateProvider<int>((ref) => 1);
+
+// F5: Session recording state
+final isRecordingProvider = StateProvider<bool>((ref) => false);
+
+/// Current recording duration in seconds (updated while recording).
+final recordingDurationProvider = StateProvider<int>((ref) => 0);

@@ -5,6 +5,9 @@ library rust_api_bridge;
 
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
+
+import 'package:flutter/foundation.dart';
 
 import 'api.dart' as frb;
 import 'frb_generated.dart';
@@ -55,7 +58,7 @@ class _RustApiBridge {
 
   /// Initialize the Rust backend (call once at app startup).
   Future<void> init() async {
-    await RustApi.init();
+    await RustLib.init();
   }
 
   /// Get the version string from the Rust crate.
@@ -124,8 +127,10 @@ class _RustApiBridge {
   }
 
   /// Start receiving remote screen streaming.
-  Future<void> startStreaming(String address, int port) async {
-    await frb.connectStreaming(address: address, port: port);
+  ///
+  /// [monitorIndex] selects which display to stream (0 = primary, null = default).
+  Future<void> startStreaming(String address, int port, {int? monitorIndex}) async {
+    await frb.connectStreaming(address: address, port: port, monitorIndex: monitorIndex);
   }
 
   /// Stop remote screen streaming.
@@ -318,6 +323,64 @@ class _RustApiBridge {
       }
     } finally {
       await socket.close();
+    }
+  }
+
+  /// Receive queued Opus-encoded audio packets from the streaming client (F1).
+  Future<List<List<int>>> receiveAudio(int timeoutMs) async {
+    final packets = await frb.receiveAudio(timeoutMs: BigInt.from(timeoutMs));
+    return packets;
+  }
+
+  /// Get the number of monitors available on the remote server (F2: multi-monitor).
+  /// Uses raw TCP to send a monitors query and parse the response.
+  Future<int> getMonitorCount(String address, int port) async {
+    try {
+      final socket = await Socket.connect(address, port,
+          timeout: const Duration(seconds: 5));
+      try {
+        // Step 1: Send LINUX_LINK_HELLO handshake
+        socket.write('LINUX_LINK_HELLO 1\n');
+        await socket.flush();
+
+        // Step 2: Drain identity response
+        try {
+          await socket
+              .cast<List<int>>()
+              .transform(utf8.decoder)
+              .transform(const LineSplitter())
+              .first
+              .timeout(const Duration(milliseconds: 500));
+        } catch (_) {
+          // Proceed
+        }
+
+        // Step 3: Send monitors query
+        final packet = jsonEncode({
+          'type': 'kdeconnect.linuxlink.monitors',
+          'body': {},
+        });
+        socket.write('$packet\n');
+        await socket.flush();
+
+        // Step 4: Read response
+        final line = await socket
+            .cast<List<int>>()
+            .transform(utf8.decoder)
+            .transform(const LineSplitter())
+            .first
+            .timeout(const Duration(seconds: 5));
+
+        final json = jsonDecode(line) as Map<String, dynamic>;
+        final body = json['body'] as Map<String, dynamic>?;
+        final count = (body?['count'] as num?)?.toInt() ?? 1;
+        return max(count, 1);
+      } finally {
+        await socket.close();
+      }
+    } catch (e) {
+      debugPrint('Failed to get monitor count: $e');
+      return 1;
     }
   }
 

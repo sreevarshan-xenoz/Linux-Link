@@ -11,13 +11,16 @@ class VideoPlayerService {
 
   /// Initialize the MediaCodec decoder. Call once at app startup.
   /// Returns the texture ID to use with the Texture widget.
+  /// [codecType] is the video MIME type (e.g., 'video/avc' for H.264, 'video/hevc' for H.265/HEVC).
   static Future<int> initialize({
     int width = 1920,
     int height = 1080,
+    String codecType = 'video/avc',
   }) async {
     final textureId = await _methodChannel.invokeMethod<int>('initialize', {
       'width': width,
       'height': height,
+      'codecType': codecType,
     });
     _currentTextureId = textureId;
     return textureId ?? -1;

@@ -24,10 +24,12 @@ class _PinButton extends StatelessWidget {
         borderRadius: BorderRadius.circular(36),
         child: InkWell(
           borderRadius: BorderRadius.circular(36),
-          onTap: onPressed != null ? () {
-            HapticFeedback.lightImpact();
-            onPressed!();
-          } : null,
+          onTap: onPressed != null
+              ? () {
+                  HapticFeedback.lightImpact();
+                  onPressed!();
+                }
+              : null,
           child: Center(
             child: icon != null
                 ? Icon(icon, color: Colors.white70, size: 28)
@@ -204,7 +206,8 @@ class _LockScreenState extends State<LockScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final isLockedState = _isLocked && _storedPin != null && _storedPin!.isNotEmpty;
+    final isLockedState =
+        _isLocked && _storedPin != null && _storedPin!.isNotEmpty;
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -232,9 +235,7 @@ class _LockScreenState extends State<LockScreen> {
             ),
             const SizedBox(height: 8),
             Text(
-              _isSettingPin
-                  ? 'Enter a 6-digit PIN'
-                  : 'Enter PIN to unlock',
+              _isSettingPin ? 'Enter a 6-digit PIN' : 'Enter PIN to unlock',
               style: const TextStyle(color: Colors.white54, fontSize: 14),
             ),
             const SizedBox(height: 32),
@@ -263,7 +264,8 @@ class _LockScreenState extends State<LockScreen> {
             if (_attempts > 0 && isLockedState)
               Text(
                 '${_maxAttempts - _attempts} attempts remaining',
-                style: const TextStyle(color: Colors.orangeAccent, fontSize: 12),
+                style:
+                    const TextStyle(color: Colors.orangeAccent, fontSize: 12),
               ),
             const Spacer(flex: 1),
             // PIN pad
@@ -327,7 +329,8 @@ class _LockScreenState extends State<LockScreen> {
             // Disconnect button
             TextButton.icon(
               onPressed: widget.onDisconnect,
-              icon: const Icon(Icons.power_settings_new, color: Colors.redAccent),
+              icon:
+                  const Icon(Icons.power_settings_new, color: Colors.redAccent),
               label: const Text(
                 'Disconnect',
                 style: TextStyle(color: Colors.redAccent),

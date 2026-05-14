@@ -33,12 +33,31 @@ impl HardwareEncoder {
         }
     }
 
-    /// FFmpeg encoder name for this selection
+    /// FFmpeg encoder name for this selection and codec.
+    /// Returns both the encoder name and whether it supports HEVC.
+    pub fn supports_hevc(&self) -> bool {
+        match self {
+            HardwareEncoder::Vaapi => true,
+            HardwareEncoder::Nvenc => true,
+            HardwareEncoder::Auto | HardwareEncoder::Software => true, // libx265
+        }
+    }
+
+    /// FFmpeg encoder name for H.264 encoding
     pub fn ffmpeg_encoder(&self) -> &'static str {
         match self {
             HardwareEncoder::Auto | HardwareEncoder::Software => "libx264",
             HardwareEncoder::Vaapi => "h264_vaapi",
             HardwareEncoder::Nvenc => "h264_nvenc",
+        }
+    }
+
+    /// FFmpeg encoder name for HEVC encoding
+    pub fn ffmpeg_encoder_hevc(&self) -> &'static str {
+        match self {
+            HardwareEncoder::Auto | HardwareEncoder::Software => "libx265",
+            HardwareEncoder::Vaapi => "hevc_vaapi",
+            HardwareEncoder::Nvenc => "hevc_nvenc",
         }
     }
 }
@@ -54,7 +73,8 @@ pub struct AvailableEncoders {
 /// Probe the system for available hardware encoders.
 ///
 /// Runs `ffmpeg -encoders` and parses the output to check for
-/// VAAPI and NVENC encoders. Always reports software as available.
+/// VAAPI and NVENC encoders (both H.264 and HEVC variants).
+/// Always reports software as available.
 pub fn probe_encoders() -> AvailableEncoders {
     let mut available = AvailableEncoders {
         vaapi: false,
@@ -79,12 +99,12 @@ pub fn probe_encoders() -> AvailableEncoders {
 
     for line in stdout.lines() {
         let trimmed = line.trim();
-        // VAAPI encoders show as "h264_vaapi" or "hevc_vaapi"
+        // VAAPI encoders
         if trimmed.contains("h264_vaapi") || trimmed.contains("hevc_vaapi") {
             available.vaapi = true;
             debug!("Detected VAAPI encoder: {trimmed}");
         }
-        // NVENC encoders show as "h264_nvenc" or "hevc_nvenc"
+        // NVENC encoders
         if trimmed.contains("h264_nvenc") || trimmed.contains("hevc_nvenc") {
             available.nvenc = true;
             debug!("Detected NVENC encoder: {trimmed}");

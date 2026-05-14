@@ -34,6 +34,9 @@ libspa = { workspace = true, optional = true }
 x11rb = { version = "0.13", features = ["shm"], optional = true }
 tokio-util.workspace = true
 
+# Audio encoding
+opus.workspace = true
+
 # Video encoding (Linux-only, optional)
 ffmpeg-sidecar = { workspace = true, optional = true }
 

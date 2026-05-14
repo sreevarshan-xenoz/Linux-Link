@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../rust_api_bridge.dart' as bridge;
+import '../providers/streaming_provider.dart';
 
 enum VideoQuality { ultraLow, low, balanced, high, ultraHigh, custom }
 
@@ -123,7 +124,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   Future<void> _saveCustomQuality(CustomQuality quality) async {
     _customQuality = quality;
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_keyCustomQuality, const JsonEncoder().convert(quality.toJson()));
+    await prefs.setString(
+        _keyCustomQuality, const JsonEncoder().convert(quality.toJson()));
   }
 
   Future<void> _loadVersion() async {
@@ -172,7 +174,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Container(
         decoration: BoxDecoration(
-          color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+          color:
+              theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
             color: theme.colorScheme.primary.withValues(alpha: 0.2),
@@ -251,18 +254,22 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
             DropdownButtonFormField<ResolutionPreset>(
               initialValue: ResolutionPreset.presets.firstWhere(
-                (r) => r.width == _customQuality.width && r.height == _customQuality.height,
+                (r) =>
+                    r.width == _customQuality.width &&
+                    r.height == _customQuality.height,
                 orElse: () => ResolutionPreset.presets[1],
               ),
               decoration: const InputDecoration(
                 isDense: true,
-                contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                contentPadding:
+                    EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 border: OutlineInputBorder(),
               ),
               items: ResolutionPreset.presets
                   .map((r) => DropdownMenuItem(
                         value: r,
-                        child: Text(r.label, style: const TextStyle(fontSize: 13)),
+                        child:
+                            Text(r.label, style: const TextStyle(fontSize: 13)),
                       ))
                   .toList(),
               onChanged: (ResolutionPreset? preset) {
@@ -284,12 +291,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                color: theme.colorScheme.tertiaryContainer.withValues(alpha: 0.3),
+                color:
+                    theme.colorScheme.tertiaryContainer.withValues(alpha: 0.3),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Row(
                 children: [
-                  Icon(Icons.info_outline, size: 14, color: theme.colorScheme.tertiary),
+                  Icon(Icons.info_outline,
+                      size: 14, color: theme.colorScheme.tertiary),
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
@@ -448,6 +457,45 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
           ),
           const Divider(),
+          // F2: Multi-Monitor selection
+          ListTile(
+            leading: const Icon(Icons.monitor),
+            title: const Text('Monitor'),
+            subtitle: Text(
+                'Monitor ${ref.watch(monitorIndexProvider) + 1} of ${ref.watch(totalMonitorsProvider)}'),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.chevron_left),
+                  onPressed: () {
+                    final current = ref.read(monitorIndexProvider);
+                    if (current > 0) {
+                      ref.read(monitorIndexProvider.notifier).state =
+                          current - 1;
+                    }
+                  },
+                ),
+                Text(
+                  '${ref.watch(monitorIndexProvider) + 1}',
+                  style: const TextStyle(
+                      fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.chevron_right),
+                  onPressed: () {
+                    final current = ref.read(monitorIndexProvider);
+                    final total = ref.read(totalMonitorsProvider);
+                    if (current < total - 1) {
+                      ref.read(monitorIndexProvider.notifier).state =
+                          current + 1;
+                    }
+                  },
+                ),
+              ],
+            ),
+          ),
+          const Divider(),
           // F26: Trusted Devices
           ListTile(
             leading: const Icon(Icons.shield_outlined),
@@ -467,7 +515,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ListTile(
             leading: const Icon(Icons.content_copy),
             title: const Text('Clipboard Auto-Sync'),
-            subtitle: const Text('Sync clipboard between devices automatically'),
+            subtitle:
+                const Text('Sync clipboard between devices automatically'),
             trailing: Switch(
               value: _clipboardAutoSync,
               onChanged: (value) {

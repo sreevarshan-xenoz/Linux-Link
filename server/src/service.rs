@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::input_injector::InputInjector;
 use crate::kde;
+use crate::notification_monitor::start_notification_monitor;
 use anyhow::{Context, Result, bail};
 use linux_link_core::protocol::connection::ConnectionManager;
 use linux_link_core::protocol::kdeconnect::{NetworkPacket, PluginRegistry, TcpDeviceSender};
@@ -56,6 +57,9 @@ pub async fn run(config: Config) -> Result<()> {
         .with_context(|| format!("failed to bind {bind_addr}"))?;
 
     tracing::info!("Control listener ready on {}", bind_addr);
+
+    // F19: Start notification monitor for forwarding PC notifications to Android clients
+    let _notification_tx = start_notification_monitor();
 
     // Start the QUIC streaming server in the background for real-time screen control.
     //

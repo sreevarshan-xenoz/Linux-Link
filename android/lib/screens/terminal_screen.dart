@@ -191,10 +191,9 @@ class _TerminalScreenState extends State<TerminalScreen> {
                       fontSize: 13,
                       height: 1.4,
                       color: _lineColor(line.style, isDark),
-                      fontWeight:
-                          line.style == _LineStyle.header
-                              ? FontWeight.bold
-                              : FontWeight.normal,
+                      fontWeight: line.style == _LineStyle.header
+                          ? FontWeight.bold
+                          : FontWeight.normal,
                     ),
                   );
                 },

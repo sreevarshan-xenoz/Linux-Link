@@ -205,9 +205,8 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
     final bookmarks = ref.watch(bookmarksProvider);
 
     // Split peers into bookmarked and unbookmarked
-    final favoritePeers = peers
-        .where((p) => bookmarks.any((b) => b.name == p.name))
-        .toList();
+    final favoritePeers =
+        peers.where((p) => bookmarks.any((b) => b.name == p.name)).toList();
     final otherPeers =
         peers.where((p) => !bookmarks.any((b) => b.name == p.name)).toList();
 
@@ -355,9 +354,8 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
                                     .textTheme
                                     .titleSmall
                                     ?.copyWith(
-                                      color: Theme.of(context)
-                                          .colorScheme
-                                          .primary,
+                                      color:
+                                          Theme.of(context).colorScheme.primary,
                                       fontWeight: FontWeight.w600,
                                     ),
                               ),
@@ -462,7 +460,8 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
                 color: isBookmarked ? Colors.amber : Colors.white24,
               ),
               onPressed: () => _toggleBookmark(peer),
-              tooltip: isBookmarked ? 'Remove from favorites' : 'Add to favorites',
+              tooltip:
+                  isBookmarked ? 'Remove from favorites' : 'Add to favorites',
               splashRadius: 16,
             ),
           ),

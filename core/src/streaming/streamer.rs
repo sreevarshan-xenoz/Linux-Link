@@ -3,12 +3,15 @@
 //! Wires together capture → encoder → QUIC send into a single coordinated pipeline.
 //! Manages lifecycle, error handling, and graceful shutdown.
 
+use std::time::Duration;
+
 use anyhow::{Context, Result};
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
+use super::audio::{AudioConfig, AudioEncoder as AudioOpusEncoder};
 use super::bitrate::AdaptiveBitrate;
 use super::capture;
 use super::encoder::VideoEncoder;
@@ -127,6 +130,13 @@ impl StreamingServer {
         connection: quinn::Connection,
         _server: StreamServer,
     ) -> Result<()> {
+        // Read optional client config stream before starting the pipeline.
+        // The client may send a config packet (monitor index) immediately after
+        // establishing the QUIC connection. This is a small 6-byte message:
+        //   [0..2] marker [0xFF, 0x00]
+        //   [2..6] monitor_index (u32 LE)
+        read_client_config(&connection, &mut self.config).await;
+
         let cancel = self.cancel.clone();
         let (frame_tx, mut frame_rx) = mpsc::channel::<VideoFrame>(4);
         let (packet_tx, mut packet_rx) = mpsc::channel::<EncodedPacket>(8);
@@ -146,6 +156,7 @@ impl StreamingServer {
         // Clone connection for use across multiple tasks
         let conn_for_transport = connection.clone();
         let conn_for_monitor = connection.clone();
+        let conn_for_audio = connection.clone();
 
         // Task 2: Video encoding
         // Clone config for encoder (bitrate will be updated via watch channel)
@@ -269,6 +280,7 @@ impl StreamingServer {
                                 // Build and send header
                                 let header = transport::PacketHeader {
                                     sequence: packet.sequence,
+                                    stream_kind: transport::STREAM_KIND_VIDEO,
                                     is_keyframe: packet.is_keyframe,
                                     timestamp_us: packet.timestamp.elapsed().as_micros() as u64,
                                 };
@@ -409,6 +421,117 @@ impl StreamingServer {
             });
         }
 
+        // Task 6: Audio capture + Opus encoding + QUIC send (F1: Audio Streaming)
+        //
+        // Captures system audio (currently silence fallback, PipeWire in future),
+        // encodes to Opus at 48 kHz / stereo / 64 kbps, and sends over the QUIC
+        // connection as individual unidirectional streams with STREAM_KIND_AUDIO.
+        let audio_cancel = cancel.clone();
+        tasks.spawn(async move {
+            info!("Audio capture task started");
+
+            let audio_config = AudioConfig {
+                sample_rate: 48000,
+                channels: 2,
+                bitrate_bps: 64_000,
+                frame_duration_ms: 20,
+            };
+
+            let mut encoder = match AudioOpusEncoder::new(audio_config) {
+                Ok(e) => e,
+                Err(e) => {
+                    error!("Failed to create Opus encoder: {e}");
+                    return;
+                }
+            };
+
+            let frame_samples = encoder.config().samples_per_frame();
+            let channels = encoder.config().channels;
+            let frame_size_ms = encoder.config().frame_duration_ms as u64;
+
+            // Create a silence PCM buffer for the fallback capture
+            let pcm_buffer = vec![0i16; frame_samples * channels as usize];
+
+            let mut interval = tokio::time::interval(Duration::from_millis(frame_size_ms));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+            let mut packet_seq = 0u64;
+            let mut packets_sent = 0u64;
+            let mut connection_closed = false;
+
+            loop {
+                tokio::select! {
+                    biased;
+
+                    _ = audio_cancel.cancelled() => {
+                        info!("Audio capture task cancelled after {packets_sent} packets");
+                        break;
+                    }
+
+                    _ = interval.tick() => {
+                        if connection_closed {
+                            break;
+                        }
+
+                        // TODO: Replace with PipeWire audio loopback capture
+                        // Currently encoding silence PCM frames.
+                        let packet = match encoder.encode(&pcm_buffer) {
+                            Ok(Some(p)) => p,
+                            Ok(None) => continue,
+                            Err(e) => {
+                                debug!("Audio encode error: {e}");
+                                continue;
+                            }
+                        };
+
+                        // Send over QUIC with STREAM_KIND_AUDIO header
+                        match conn_for_audio.open_uni().await {
+                            Ok(mut send_stream) => {
+                                let header = transport::PacketHeader {
+                                    sequence: packet_seq,
+                                    stream_kind: transport::STREAM_KIND_AUDIO,
+                                    is_keyframe: false,
+                                    timestamp_us: packet.timestamp.elapsed().as_micros() as u64,
+                                };
+
+                                if let Err(e) = send_stream.write_all(&header.as_bytes()).await {
+                                    warn!("Audio send failed: {e}");
+                                    connection_closed = true;
+                                    continue;
+                                }
+                                if let Err(e) = send_stream.write_all(&packet.data).await {
+                                    warn!("Audio data send failed: {e}");
+                                    connection_closed = true;
+                                    continue;
+                                }
+                                if let Err(e) = send_stream.finish() {
+                                    warn!("Audio finish failed: {e}");
+                                    connection_closed = true;
+                                    continue;
+                                }
+
+                                packets_sent += 1;
+                                packet_seq += 1;
+
+                                if packets_sent.is_multiple_of(600) {
+                                    info!(
+                                        "Audio streamed: {packets_sent} packets ({}s of audio)",
+                                        packets_sent * frame_size_ms / 1000
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                warn!("Failed to open audio stream: {e}");
+                                connection_closed = true;
+                            }
+                        }
+                    }
+                }
+            }
+
+            info!("Audio capture task complete: {packets_sent} Opus packets sent");
+        });
+
         // Wait for all tasks to complete or connection to close
         let result = tasks.join_next().await;
 
@@ -458,6 +581,56 @@ fn trace_packet_stats(packet: &EncodedPacket) {
     );
 }
 
+/// Read an optional client config stream from the QUIC connection.
+///
+/// The client may send a small config packet (6 bytes) immediately after
+/// establishing the connection to request a specific monitor index.
+/// This is read with a short timeout so the pipeline is not blocked if
+/// no config is sent.
+async fn read_client_config(connection: &quinn::Connection, config: &mut StreamingConfig) {
+    tokio::select! {
+        biased;
+        result = connection.accept_uni() => {
+            match result {
+                Ok(mut stream) => {
+                    let mut buf = [0u8; 6];
+                    match tokio::time::timeout(Duration::from_millis(500), stream.read_exact(&mut buf)).await {
+                        Ok(Ok(())) => {
+                            if buf[0..2] == [0xFF, 0x00] {
+                                let monitor_index = u32::from_le_bytes(
+                                    buf[2..6].try_into().unwrap_or([0u8; 4]),
+                                );
+                                config.monitor_index = monitor_index;
+                                info!(
+                                    "Client config: monitor_index={}",
+                                    monitor_index
+                                );
+                            } else {
+                                debug!(
+                                    "Unknown config marker: {:02X?}",
+                                    &buf[0..2]
+                                );
+                            }
+                        }
+                        Ok(Err(e)) => {
+                            debug!("Config stream read error: {e}");
+                        }
+                        Err(_) => {
+                            debug!("Config stream timeout — no client config");
+                        }
+                    }
+                }
+                Err(e) => {
+                    debug!("No config stream from client: {e}");
+                }
+            }
+        }
+        _ = tokio::time::sleep(Duration::from_millis(200)) => {
+            debug!("No client config stream within 200ms");
+        }
+    }
+}
+
 /// Monitors QUIC connection stats and feeds RTT to the adaptive bitrate controller
 struct AdaptiveBitrateMonitor {
     controller: AdaptiveBitrate,
@@ -496,7 +669,7 @@ impl AdaptiveBitrateMonitor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::streaming::{EncoderPreset, H264Profile, HardwareEncoder};
+    use crate::streaming::{EncoderPreset, H264Profile, HardwareEncoder, VideoCodec};
 
     #[test]
     fn test_streaming_server_creation() {
@@ -532,9 +705,11 @@ mod tests {
             height: 720,
             fps: 30,
             bitrate_bps: 2_000_000,
+            codec: VideoCodec::H264,
             profile: H264Profile::Baseline,
             preset: EncoderPreset::UltraFast,
             hardware_encoder: HardwareEncoder::Auto,
+            monitor_index: 0,
         };
         assert_eq!(low.bitrate_bps, 2_000_000);
 
@@ -544,9 +719,11 @@ mod tests {
             height: 2160,
             fps: 60,
             bitrate_bps: 20_000_000,
+            codec: VideoCodec::H264,
             profile: H264Profile::High,
             preset: EncoderPreset::Medium,
             hardware_encoder: HardwareEncoder::Auto,
+            monitor_index: 0,
         };
         assert_eq!(high.bitrate_bps, 20_000_000);
     }
@@ -554,15 +731,16 @@ mod tests {
     #[test]
     fn test_packet_header_export() {
         // Verify PacketHeader is accessible from transport module
-        use super::transport::PacketHeader;
+        use super::transport::{PacketHeader, STREAM_KIND_VIDEO};
 
         let header = PacketHeader {
             sequence: 42,
+            stream_kind: STREAM_KIND_VIDEO,
             is_keyframe: true,
             timestamp_us: 1_000_000,
         };
 
         let bytes = header.as_bytes();
-        assert_eq!(bytes.len(), 17);
+        assert_eq!(bytes.len(), 18);
     }
 }

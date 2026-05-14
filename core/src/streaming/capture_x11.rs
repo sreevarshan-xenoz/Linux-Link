@@ -63,14 +63,8 @@ pub async fn start_x11_capture(
     );
 
     let frame_interval = Duration::from_secs_f64(1.0 / config.fps as f64);
-    let monitor_idx = 0; // Primary monitor
-
-    // Verify xcap works before entering the loop
-    let test_frame = capture_frame(monitor_idx)?;
-    info!(
-        "X11 capture verified: {}x{} frame captured",
-        test_frame.width, test_frame.height
-    );
+    let monitor_idx = config.monitor_index as usize;
+    info!("Using X11 monitor index: {}", monitor_idx);
 
     tokio::spawn(async move {
         let mut frame_count: u64 = 0;

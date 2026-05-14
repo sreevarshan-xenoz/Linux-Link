@@ -22,6 +22,9 @@ pub(crate) fn init_app_impl() {
 /// Maximum number of H.264 frames to drain per `receive_frames` call.
 pub(crate) const MAX_FRAMES_PER_RECEIVE: usize = 16;
 
+/// Maximum number of audio packets to drain per `receive_audio` call.
+pub(crate) const MAX_AUDIO_PACKETS_PER_RECEIVE: usize = 32;
+
 /// Global handle for the active control connection writer.
 pub(crate) static CONTROL_WRITER: LazyLock<Mutex<Option<Arc<Mutex<OwnedWriteHalf>>>>> =
     LazyLock::new(|| Mutex::new(None));
@@ -49,6 +52,9 @@ pub(crate) struct StreamingHandle {
     /// Receiver so the consumer (Flutter) can receive packets.
     #[allow(dead_code)]
     pub(crate) packet_rx: tokio::sync::mpsc::Receiver<linux_link_core::streaming::EncodedPacket>,
+    /// Receiver for decoded audio packets (F1: Audio Streaming).
+    #[allow(dead_code)]
+    pub(crate) audio_rx: tokio::sync::mpsc::Receiver<linux_link_core::streaming::AudioPacket>,
     /// The QUIC connection, kept alive for sending input events.
     pub(crate) connection: quinn::Connection,
 }

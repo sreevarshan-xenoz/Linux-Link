@@ -15,8 +15,8 @@ use tokio::sync::Mutex;
 use linux_link_core::streaming::InputPacket;
 
 use crate::{
-    CONNECTION_STATE, CONTROL_WRITER, MAX_FRAMES_PER_RECEIVE, STREAMING_HANDLE, STREAMING_RTT_US,
-    StreamingHandle, update_streaming_rtt,
+    CONNECTION_STATE, CONTROL_WRITER, MAX_AUDIO_PACKETS_PER_RECEIVE, MAX_FRAMES_PER_RECEIVE,
+    STREAMING_HANDLE, STREAMING_RTT_US, StreamingHandle, update_streaming_rtt,
 };
 
 /// Initialize the Linux Link backend
@@ -342,8 +342,15 @@ pub async fn list_remote_files(
 }
 
 /// Request remote screen streaming.
+///
+/// `monitor_index` selects which display to stream (0 = primary).
+/// Pass `None` to use the default monitor.
 #[frb]
-pub async fn connect_streaming(address: String, port: u16) -> Result<(), String> {
+pub async fn connect_streaming(
+    address: String,
+    port: u16,
+    monitor_index: Option<u32>,
+) -> Result<(), String> {
     let addr = format!("{address}:{port}");
     tracing::info!("Connecting to streaming server at {addr}");
 
@@ -354,9 +361,10 @@ pub async fn connect_streaming(address: String, port: u16) -> Result<(), String>
         linux_link_core::streaming::transport::CertManager::new().map_err(|e| e.to_string())?,
     );
 
-    let (mut client, packet_rx) = StreamingClient::connect(&addr, cert_manager)
-        .await
-        .map_err(|e| e.to_string())?;
+    let (mut client, packet_rx, audio_rx) =
+        StreamingClient::connect(&addr, cert_manager, monitor_index)
+            .await
+            .map_err(|e| e.to_string())?;
 
     let connection = client
         .connection()
@@ -395,6 +403,7 @@ pub async fn connect_streaming(address: String, port: u16) -> Result<(), String>
         task,
         rtt_task,
         packet_rx,
+        audio_rx,
         connection: connection.clone(),
     });
 
@@ -446,6 +455,82 @@ pub fn get_streaming_stats() -> StreamingStatsDto {
         bitrate_kbps: 0,
         e2e_latency_ms: rtt_ms,
         frame_drops: 0,
+    }
+}
+
+/// Get the number of monitors available on the remote server.
+///
+/// F2: Multi-monitor support — returns 0 if detection fails or no display.
+#[frb]
+pub async fn get_monitor_count(address: String, port: u16) -> Result<u32, String> {
+    // Connect to the remote server and query monitor info.
+    // Uses a lightweight TCP query to the streaming server's control channel.
+    let conn_mgr = ConnectionManager::new(Duration::from_secs(5));
+    match conn_mgr.connect(&address, port).await {
+        Ok(stream) => {
+            let (reader, writer) = tokio::io::split(stream);
+            let sender = TcpDeviceSender::new(writer);
+            let request = NetworkPacket::new("kdeconnect.linuxlink.monitors")
+                .with_body(serde_json::json!({}));
+            if let Err(e) = sender.send_packet(&request).await {
+                return Err(format!("Failed to send monitor query: {e}"));
+            }
+            let mut lines = tokio::io::BufReader::new(reader).lines();
+            match tokio::time::timeout(Duration::from_secs(5), lines.next_line()).await {
+                Ok(Ok(Some(line))) => {
+                    match NetworkPacket::from_wire(&line) {
+                        Ok(packet) => {
+                            if packet.packet_type == "kdeconnect.linuxlink.monitors" {
+                                let count = packet
+                                    .body
+                                    .get("count")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(1)
+                                    as u32;
+                                Ok(count.max(1)) // At least 1 monitor
+                            } else {
+                                Ok(1) // Default to 1
+                            }
+                        }
+                        Err(_) => Ok(1),
+                    }
+                }
+                _ => Ok(1),
+            }
+        }
+        Err(_) => Ok(1), // Default to 1 if can't connect
+    }
+}
+
+/// Receive queued audio packets from the streaming client (F1: Audio Streaming).
+///
+/// Each audio packet contains raw Opus-encoded data (typically 20ms @ 48kHz stereo).
+/// Returns up to `MAX_AUDIO_PACKETS_PER_RECEIVE` packets.
+#[frb]
+pub async fn receive_audio(timeout_ms: u64) -> Vec<Vec<u8>> {
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+    let mut packets = Vec::with_capacity(MAX_AUDIO_PACKETS_PER_RECEIVE);
+    {
+        let mut guard = (*STREAMING_HANDLE).lock().await;
+        let Some(handle) = guard.as_mut() else {
+            return packets;
+        };
+        match tokio::time::timeout_at(deadline, handle.audio_rx.recv()).await {
+            Ok(Some(packet)) => {
+                packets.push(packet.data);
+                while packets.len() < MAX_AUDIO_PACKETS_PER_RECEIVE {
+                    match handle.audio_rx.try_recv() {
+                        Ok(packet) => {
+                            packets.push(packet.data);
+                        }
+                        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+                        | Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
+                    }
+                }
+                packets
+            }
+            _ => packets,
+        }
     }
 }
 

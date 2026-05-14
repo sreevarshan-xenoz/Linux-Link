@@ -70,7 +70,8 @@ class _StreamStatsOverlayState extends State<StreamStatsOverlay> {
               // Header row with toggle hint
               Row(
                 children: [
-                  Icon(Icons.bar_chart, size: 12, color: theme.colorScheme.primary),
+                  Icon(Icons.bar_chart,
+                      size: 12, color: theme.colorScheme.primary),
                   const SizedBox(width: 4),
                   Text(
                     'Stream Stats',
@@ -83,7 +84,8 @@ class _StreamStatsOverlayState extends State<StreamStatsOverlay> {
                   const Spacer(),
                   GestureDetector(
                     onTap: widget.onToggle,
-                    child: const Icon(Icons.close, size: 12, color: Colors.white38),
+                    child: const Icon(Icons.close,
+                        size: 12, color: Colors.white38),
                   ),
                 ],
               ),
@@ -165,14 +167,13 @@ class _StreamStatsOverlayState extends State<StreamStatsOverlay> {
     final range = (maxLatency - minLatency).clamp(1.0, double.infinity);
 
     return CustomPaint(
-      size: const Size(double.infinity, 20),
-      painter: _LatencyChartPainter(
-        samples: _latencyHistory,
-        min: minLatency,
-        range: range,
-        color: theme.colorScheme.primary,
-      )
-    );
+        size: const Size(double.infinity, 20),
+        painter: _LatencyChartPainter(
+          samples: _latencyHistory,
+          min: minLatency,
+          range: range,
+          color: theme.colorScheme.primary,
+        ));
   }
 }
 

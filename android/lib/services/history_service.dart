@@ -85,7 +85,8 @@ class HistoryService {
     if (history.length > _maxRecords) {
       history.removeRange(_maxRecords, history.length);
     }
-    await prefs.setString(_key, jsonEncode(history.map((r) => r.toJson()).toList()));
+    await prefs.setString(
+        _key, jsonEncode(history.map((r) => r.toJson()).toList()));
   }
 
   static Future<void> clearHistory() async {
@@ -109,6 +110,7 @@ class HistoryService {
       bytesTransferred: bytesTransferred,
     );
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_key, jsonEncode(history.map((r) => r.toJson()).toList()));
+    await prefs.setString(
+        _key, jsonEncode(history.map((r) => r.toJson()).toList()));
   }
 }

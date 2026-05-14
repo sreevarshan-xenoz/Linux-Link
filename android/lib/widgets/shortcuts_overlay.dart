@@ -128,7 +128,8 @@ class ShortcutsOverlay extends StatelessWidget {
                         Text(
                           entry.key,
                           style: theme.textTheme.titleSmall?.copyWith(
-                            color: theme.colorScheme.primary.withValues(alpha: 0.8),
+                            color: theme.colorScheme.primary
+                                .withValues(alpha: 0.8),
                             fontWeight: FontWeight.w600,
                           ),
                         ),

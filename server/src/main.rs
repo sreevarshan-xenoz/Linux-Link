@@ -10,6 +10,7 @@ mod cli;
 mod config;
 mod input_injector;
 mod kde;
+mod notification_monitor;
 mod plugins;
 mod service;
 

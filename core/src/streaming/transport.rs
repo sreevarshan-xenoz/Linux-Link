@@ -419,6 +419,7 @@ pub async fn send_packets(
         // Send packet header
         let header = PacketHeader {
             sequence: packet.sequence,
+            stream_kind: STREAM_KIND_VIDEO,
             is_keyframe: packet.is_keyframe,
             timestamp_us: packet.timestamp.elapsed().as_micros() as u64,
         };
@@ -460,8 +461,8 @@ pub async fn receive_packets(
             }
         };
 
-        // Read header (17 bytes)
-        let mut header_bytes = [0u8; 17];
+        // Read header (18 bytes)
+        let mut header_bytes = [0u8; 18];
         recv_stream
             .read_exact(&mut header_bytes)
             .await
@@ -491,28 +492,44 @@ pub async fn receive_packets(
     Ok(())
 }
 
+/// Stream kind identifiers
+pub const STREAM_KIND_VIDEO: u8 = 0;
+pub const STREAM_KIND_AUDIO: u8 = 1;
+
 /// Packet header for streaming transport
+///
+/// Bytes:
+///   [0..8]  sequence     (u64 LE)
+///   [8..9]  stream_kind  (0=video, 1=audio, etc.)
+///   [9..10] flags        (bit 0 = is_keyframe)
+///   [10..18] timestamp_us (u64 LE)
+/// Total: 18 bytes
 #[derive(Debug, Clone, Copy)]
 pub struct PacketHeader {
     pub sequence: u64,
+    pub stream_kind: u8,
     pub is_keyframe: bool,
     pub timestamp_us: u64,
 }
 
 impl PacketHeader {
-    pub fn as_bytes(&self) -> [u8; 17] {
-        let mut bytes = [0u8; 17];
+    pub const SIZE: usize = 18;
+
+    pub fn as_bytes(&self) -> [u8; 18] {
+        let mut bytes = [0u8; 18];
         bytes[0..8].copy_from_slice(&self.sequence.to_le_bytes());
-        bytes[8] = if self.is_keyframe { 1 } else { 0 };
-        bytes[9..17].copy_from_slice(&self.timestamp_us.to_le_bytes());
+        bytes[8] = self.stream_kind;
+        bytes[9] = if self.is_keyframe { 1 } else { 0 };
+        bytes[10..18].copy_from_slice(&self.timestamp_us.to_le_bytes());
         bytes
     }
 
-    pub fn from_bytes(bytes: &[u8; 17]) -> Result<Self> {
+    pub fn from_bytes(bytes: &[u8; 18]) -> Result<Self> {
         Ok(Self {
             sequence: u64::from_le_bytes(bytes[0..8].try_into()?),
-            is_keyframe: bytes[8] != 0,
-            timestamp_us: u64::from_le_bytes(bytes[9..17].try_into()?),
+            stream_kind: bytes[8],
+            is_keyframe: bytes[9] != 0,
+            timestamp_us: u64::from_le_bytes(bytes[10..18].try_into()?),
         })
     }
 }
@@ -525,6 +542,7 @@ mod tests {
     fn test_packet_header_roundtrip() {
         let header = PacketHeader {
             sequence: 12345,
+            stream_kind: STREAM_KIND_VIDEO,
             is_keyframe: true,
             timestamp_us: 999999,
         };
@@ -533,6 +551,7 @@ mod tests {
         let recovered = PacketHeader::from_bytes(&bytes).unwrap();
 
         assert_eq!(recovered.sequence, 12345);
+        assert_eq!(recovered.stream_kind, STREAM_KIND_VIDEO);
         assert!(recovered.is_keyframe);
         assert_eq!(recovered.timestamp_us, 999999);
     }

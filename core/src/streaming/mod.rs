@@ -3,6 +3,7 @@
 //! Provides screen capture via PipeWire/XDG Desktop Portal,
 //! video encoding via FFmpeg, and QUIC-based streaming transport.
 
+pub mod audio;
 pub mod bitrate;
 pub mod client;
 pub mod encoder_detect;
@@ -20,6 +21,7 @@ pub mod encoder;
 #[cfg(feature = "server")]
 pub mod streamer;
 
+pub use audio::{AudioConfig, AudioEncoder, AudioPacket};
 pub use bitrate::AdaptiveBitrate;
 #[cfg(feature = "capture")]
 pub use capture_x11::{check_x11_availability, start_x11_capture};
@@ -44,12 +46,17 @@ pub struct StreamingConfig {
     pub fps: u32,
     /// Target bitrate in bits per second
     pub bitrate_bps: u32,
+    /// Video codec (H.264 or H.265/HEVC)
+    pub codec: VideoCodec,
     /// H.264 profile (baseline, main, high)
     pub profile: H264Profile,
     /// Encoder preset (speed vs quality tradeoff)
     pub preset: EncoderPreset,
     /// Hardware encoder selection
     pub hardware_encoder: HardwareEncoder,
+    /// Monitor index for multi-monitor support (F2).
+    /// 0 = primary monitor.
+    pub monitor_index: u32,
 }
 
 /// H.264 encoding profile
@@ -72,6 +79,50 @@ pub enum EncoderPreset {
     Fast,
     Medium,
     Slow,
+}
+
+/// Video codec selection (F3: H.265/HEVC support).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum VideoCodec {
+    /// H.264/AVC (widest compatibility)
+    #[default]
+    H264,
+    /// H.265/HEVC (up to 50% bandwidth savings)
+    H265,
+}
+
+impl VideoCodec {
+    /// Human-readable display name.
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            VideoCodec::H264 => "H.264",
+            VideoCodec::H265 => "H.265 (HEVC)",
+        }
+    }
+
+    /// MIME type for MediaCodec.
+    pub fn mime_type(&self) -> &'static str {
+        match self {
+            VideoCodec::H264 => "video/avc",
+            VideoCodec::H265 => "video/hevc",
+        }
+    }
+
+    /// FFmpeg codec name for encoding.
+    pub fn ffmpeg_codec(&self) -> &'static str {
+        match self {
+            VideoCodec::H264 => "h264",
+            VideoCodec::H265 => "hevc",
+        }
+    }
+
+    /// Bitrate multiplier: H.265 can deliver similar quality at ~50% bitrate.
+    pub fn bitrate_multiplier(&self) -> f64 {
+        match self {
+            VideoCodec::H264 => 1.0,
+            VideoCodec::H265 => 0.5,
+        }
+    }
 }
 
 /// User-facing video quality preset with concrete encoding parameters.
@@ -125,9 +176,11 @@ impl Default for StreamingConfig {
             height: 1080,
             fps: 60,
             bitrate_bps: 8_000_000, // 8 Mbps
+            codec: VideoCodec::H264,
             profile: H264Profile::Main,
             preset: EncoderPreset::VeryFast,
             hardware_encoder: HardwareEncoder::Auto,
+            monitor_index: 0,
         }
     }
 }
