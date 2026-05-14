@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'rust_api_bridge.dart' as bridge;
 import 'screens/connection_screen.dart';
+import 'screens/connection_history_screen.dart';
 import 'screens/remote_desktop_screen.dart';
 import 'screens/file_browser_screen.dart';
 import 'screens/settings_screen.dart';
@@ -38,6 +39,10 @@ final _router = GoRouter(
     GoRoute(
       path: '/settings',
       builder: (context, state) => const SettingsScreen(),
+    ),
+    GoRoute(
+      path: '/history',
+      builder: (context, state) => const ConnectionHistoryScreen(),
     ),
   ],
 );

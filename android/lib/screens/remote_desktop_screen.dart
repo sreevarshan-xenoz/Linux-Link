@@ -11,6 +11,7 @@ import '../widgets/stream_stats_overlay.dart';
 import '../rust_api_bridge.dart' as bridge;
 import '../services/background_service.dart';
 import '../services/video_player_service.dart';
+import '../services/history_service.dart';
 
 class RemoteDesktopScreen extends ConsumerStatefulWidget {
   final String address;
@@ -39,9 +40,9 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
   Timer? _latencyTimer;
   Timer? _statsTimer;
 
-  // Pinch-to-zoom state
   final TransformationController _transformController =
       TransformationController();
+  final DateTime _connectTime = DateTime.now();
 
   @override
   void initState() {
@@ -551,6 +552,10 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
     try {
       await bridge.rustApi.stopStreaming();
       await stopForegroundService();
+      // Record disconnection in history
+      HistoryService.updateLastConnection(
+        duration: DateTime.now().difference(_connectTime),
+      );
     } catch (e) {
       debugPrint('Stop streaming error: $e');
     }

@@ -5,6 +5,7 @@ import '../providers/connection_provider.dart' as conn;
 import '../providers/bookmarks_provider.dart';
 import '../widgets/peer_list_tile.dart';
 import '../rust_api_bridge.dart' as bridge;
+import '../services/history_service.dart';
 
 class ConnectionScreen extends ConsumerStatefulWidget {
   const ConnectionScreen({super.key});
@@ -60,6 +61,13 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
           case bridge.ConnectionState.connected:
             ref.read(conn.connectionStateProvider.notifier).state =
                 conn.ConnectionState.connected;
+            // Record connection in history
+            HistoryService.addRecord(ConnectionRecord(
+              peerName: peer.name,
+              peerAddress: address,
+              port: port,
+              connectedAt: DateTime.now(),
+            ));
             Navigator.of(context).pushNamed(
               '/remote',
               arguments: {'address': address, 'port': port},
@@ -123,7 +131,7 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
           IconButton(
             icon: const Icon(Icons.history),
             onPressed: () {
-              // TODO: Navigate to connection history (Phase 7c)
+              Navigator.of(context).pushNamed('/history');
             },
             tooltip: 'Connection history',
           ),
