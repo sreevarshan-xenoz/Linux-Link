@@ -1,9 +1,55 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../rust_api_bridge.dart' as bridge;
 
-enum VideoQuality { low, medium, high }
+enum VideoQuality { ultraLow, low, balanced, high, ultraHigh, custom }
+
+/// Custom quality configuration for the streaming session.
+class CustomQuality {
+  final int bitrateKbps;
+  final int targetFps;
+  final int width;
+  final int height;
+
+  const CustomQuality({
+    this.bitrateKbps = 5000,
+    this.targetFps = 30,
+    this.width = 1280,
+    this.height = 720,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'bitrateKbps': bitrateKbps,
+        'targetFps': targetFps,
+        'width': width,
+        'height': height,
+      };
+
+  factory CustomQuality.fromJson(Map<String, dynamic> json) => CustomQuality(
+        bitrateKbps: json['bitrateKbps'] as int? ?? 5000,
+        targetFps: json['targetFps'] as int? ?? 30,
+        width: json['width'] as int? ?? 1280,
+        height: json['height'] as int? ?? 720,
+      );
+}
+
+/// Resolution presets for custom mode.
+class ResolutionPreset {
+  final String label;
+  final int width;
+  final int height;
+
+  const ResolutionPreset(this.label, this.width, this.height);
+
+  static const List<ResolutionPreset> presets = [
+    ResolutionPreset('480p (854×480)', 854, 480),
+    ResolutionPreset('720p (1280×720)', 1280, 720),
+    ResolutionPreset('1080p (1920×1080)', 1920, 1080),
+    ResolutionPreset('1440p (2560×1440)', 2560, 1440),
+  ];
+}
 
 enum InputMode { trackpad, touch, mouse }
 
@@ -21,11 +67,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   int _connectionTimeout = 30;
   String _version = '1.0.0';
   bool _isTestingConnection = false;
+  CustomQuality _customQuality = const CustomQuality();
+  bool _clipboardAutoSync = false;
 
   static const _keyTailscaleEnabled = 'tailscale_enabled';
   static const _keyVideoQuality = 'video_quality';
   static const _keyInputMode = 'input_mode';
   static const _keyConnectionTimeout = 'connection_timeout';
+  static const _keyCustomQuality = 'custom_quality';
+  static const _keyClipboardAutoSync = 'clipboard_auto_sync';
 
   @override
   void initState() {
@@ -45,6 +95,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           (e) => e.name == prefs.getString(_keyInputMode),
           orElse: () => InputMode.trackpad);
       _connectionTimeout = prefs.getInt(_keyConnectionTimeout) ?? 30;
+      _clipboardAutoSync = prefs.getBool(_keyClipboardAutoSync) ?? false;
+      final customJson = prefs.getString(_keyCustomQuality);
+      if (customJson != null) {
+        try {
+          _customQuality = CustomQuality.fromJson(
+            const JsonDecoder().convert(customJson) as Map<String, dynamic>,
+          );
+        } catch (_) {
+          _customQuality = const CustomQuality();
+        }
+      }
     });
   }
 
@@ -57,6 +118,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     } else if (value is int) {
       await prefs.setInt(key, value);
     }
+  }
+
+  Future<void> _saveCustomQuality(CustomQuality quality) async {
+    _customQuality = quality;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_keyCustomQuality, const JsonEncoder().convert(quality.toJson()));
   }
 
   Future<void> _loadVersion() async {
@@ -98,6 +165,148 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         setState(() => _isTestingConnection = false);
       }
     }
+  }
+
+  Widget _buildCustomQualitySection(ThemeData theme) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Container(
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: theme.colorScheme.primary.withValues(alpha: 0.2),
+          ),
+        ),
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.tune, size: 16, color: theme.colorScheme.primary),
+                const SizedBox(width: 8),
+                Text(
+                  'Custom Quality Settings',
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    color: theme.colorScheme.primary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            // Bitrate slider
+            Text(
+              'Bitrate: ${_customQuality.bitrateKbps} Kbps',
+              style: const TextStyle(fontSize: 13),
+            ),
+            Slider(
+              value: _customQuality.bitrateKbps.toDouble(),
+              min: 500,
+              max: 50000,
+              divisions: 99,
+              label: '${_customQuality.bitrateKbps} Kbps',
+              onChanged: (value) {
+                setState(() {
+                  _customQuality = CustomQuality(
+                    bitrateKbps: value.round(),
+                    targetFps: _customQuality.targetFps,
+                    width: _customQuality.width,
+                    height: _customQuality.height,
+                  );
+                });
+                _saveCustomQuality(_customQuality);
+              },
+            ),
+            const SizedBox(height: 4),
+            // FPS selector
+            Text(
+              'Target FPS: ${_customQuality.targetFps}',
+              style: const TextStyle(fontSize: 13),
+            ),
+            Slider(
+              value: _customQuality.targetFps.toDouble(),
+              min: 10,
+              max: 60,
+              divisions: 10,
+              label: '${_customQuality.targetFps} FPS',
+              onChanged: (value) {
+                setState(() {
+                  _customQuality = CustomQuality(
+                    bitrateKbps: _customQuality.bitrateKbps,
+                    targetFps: value.round(),
+                    width: _customQuality.width,
+                    height: _customQuality.height,
+                  );
+                });
+                _saveCustomQuality(_customQuality);
+              },
+            ),
+            const SizedBox(height: 4),
+            // Resolution dropdown
+            Text(
+              'Resolution: ${_customQuality.width}×${_customQuality.height}',
+              style: const TextStyle(fontSize: 13),
+            ),
+            DropdownButtonFormField<ResolutionPreset>(
+              initialValue: ResolutionPreset.presets.firstWhere(
+                (r) => r.width == _customQuality.width && r.height == _customQuality.height,
+                orElse: () => ResolutionPreset.presets[1],
+              ),
+              decoration: const InputDecoration(
+                isDense: true,
+                contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                border: OutlineInputBorder(),
+              ),
+              items: ResolutionPreset.presets
+                  .map((r) => DropdownMenuItem(
+                        value: r,
+                        child: Text(r.label, style: const TextStyle(fontSize: 13)),
+                      ))
+                  .toList(),
+              onChanged: (ResolutionPreset? preset) {
+                if (preset != null) {
+                  setState(() {
+                    _customQuality = CustomQuality(
+                      bitrateKbps: _customQuality.bitrateKbps,
+                      targetFps: _customQuality.targetFps,
+                      width: preset.width,
+                      height: preset.height,
+                    );
+                  });
+                  _saveCustomQuality(_customQuality);
+                }
+              },
+            ),
+            const SizedBox(height: 8),
+            // Summary
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.tertiaryContainer.withValues(alpha: 0.3),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.info_outline, size: 14, color: theme.colorScheme.tertiary),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      'Requires ~${_customQuality.bitrateKbps ~/ 1000}.${(_customQuality.bitrateKbps % 1000) ~/ 100} Mbps bandwidth',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: theme.colorScheme.tertiary,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -151,7 +360,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
           RadioGroup<VideoQuality>(
             groupValue: _videoQuality,
-            onChanged: (value) {
+            onChanged: (VideoQuality? value) {
               if (value != null) {
                 setState(() {
                   _videoQuality = value;
@@ -162,23 +371,41 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             child: const Column(
               children: [
                 RadioListTile<VideoQuality>(
-                  title: Text('High'),
-                  subtitle: Text('1080p, higher bitrate'),
-                  value: VideoQuality.high,
-                ),
-                RadioListTile<VideoQuality>(
-                  title: Text('Medium'),
-                  subtitle: Text('720p, balanced'),
-                  value: VideoQuality.medium,
+                  title: Text('Ultra Low'),
+                  subtitle: Text('480p, 15 FPS, 1 Mbps'),
+                  value: VideoQuality.ultraLow,
                 ),
                 RadioListTile<VideoQuality>(
                   title: Text('Low'),
-                  subtitle: Text('480p, lower bandwidth'),
+                  subtitle: Text('480p, 24 FPS, 2 Mbps'),
                   value: VideoQuality.low,
+                ),
+                RadioListTile<VideoQuality>(
+                  title: Text('Balanced'),
+                  subtitle: Text('720p, 30 FPS, 5 Mbps'),
+                  value: VideoQuality.balanced,
+                ),
+                RadioListTile<VideoQuality>(
+                  title: Text('High'),
+                  subtitle: Text('1080p, 30 FPS, 10 Mbps'),
+                  value: VideoQuality.high,
+                ),
+                RadioListTile<VideoQuality>(
+                  title: Text('Ultra High'),
+                  subtitle: Text('1080p, 60 FPS, 20 Mbps'),
+                  value: VideoQuality.ultraHigh,
+                ),
+                RadioListTile<VideoQuality>(
+                  title: Text('Custom'),
+                  subtitle: Text('Manual bitrate, resolution & FPS'),
+                  value: VideoQuality.custom,
                 ),
               ],
             ),
           ),
+          // Custom quality configuration (only shown when 'Custom' is selected)
+          if (_videoQuality == VideoQuality.custom)
+            _buildCustomQualitySection(theme),
           const Divider(),
           // Input mode
           Padding(
@@ -192,7 +419,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
           RadioGroup<InputMode>(
             groupValue: _inputMode,
-            onChanged: (value) {
+            onChanged: (InputMode? value) {
               if (value != null) {
                 setState(() {
                   _inputMode = value;
@@ -218,6 +445,22 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   value: InputMode.mouse,
                 ),
               ],
+            ),
+          ),
+          const Divider(),
+          // Clipboard auto-sync
+          ListTile(
+            leading: const Icon(Icons.content_copy),
+            title: const Text('Clipboard Auto-Sync'),
+            subtitle: const Text('Sync clipboard between devices automatically'),
+            trailing: Switch(
+              value: _clipboardAutoSync,
+              onChanged: (value) {
+                setState(() {
+                  _clipboardAutoSync = value;
+                });
+                _saveSetting(_keyClipboardAutoSync, value);
+              },
             ),
           ),
           const Divider(),

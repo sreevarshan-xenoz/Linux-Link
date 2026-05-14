@@ -13,6 +13,28 @@ import 'providers/connection_provider.dart';
 /// `rust_api_bridge.ConnectionState` without ambiguity.
 export 'providers/connection_provider.dart' show ConnectionState;
 
+/// Wrapper for streaming statistics with BigInt → int conversion.
+class StreamingStats {
+  final double fps;
+  final int bitrateKbps;
+  final int e2eLatencyMs;
+  final int frameDrops;
+
+  const StreamingStats({
+    required this.fps,
+    required this.bitrateKbps,
+    required this.e2eLatencyMs,
+    required this.frameDrops,
+  });
+
+  factory StreamingStats.fromDto(frb.StreamingStatsDto dto) => StreamingStats(
+        fps: dto.fps,
+        bitrateKbps: dto.bitrateKbps.toInt(),
+        e2eLatencyMs: dto.e2ELatencyMs.toInt(),
+        frameDrops: dto.frameDrops.toInt(),
+      );
+}
+
 /// Wrapper for frame data returned by the Rust backend.
 class FrameDtoWrapper {
   final List<int> data;
@@ -30,7 +52,7 @@ class _RustApiBridge {
 
   /// Initialize the Rust backend (call once at app startup).
   Future<void> init() async {
-    await RustLib.init();
+    await RustApi.init();
   }
 
   /// Get the version string from the Rust crate.
@@ -83,10 +105,19 @@ class _RustApiBridge {
     int port,
     String remotePath,
   ) async {
-    // FIXME: This requires flutter_rust_bridge codegen to be regenerated.
-    // Run `flutter_rust_bridge_codegen` in android/ folder after merging this PR.
-    // Until then, return empty list to pass lint checks.
-    return [];
+    final dtos = await frb.listRemoteFiles(
+      address: address,
+      port: port,
+      remotePath: remotePath,
+    );
+    return dtos
+        .map((dto) => RemoteFile(
+              name: dto.name,
+              isDirectory: dto.isDirectory,
+              size: dto.size.toInt(),
+              modified: dto.modified.toInt(),
+            ))
+        .toList();
   }
 
   /// Start receiving remote screen streaming.
@@ -118,6 +149,15 @@ class _RustApiBridge {
   /// Get the current RTT to the streaming server in microseconds.
   int getStreamingRtt() {
     return frb.getStreamingRtt().toInt();
+  }
+
+  /// Get detailed streaming session statistics.
+  StreamingStats? getStreamingStats() {
+    try {
+      return StreamingStats.fromDto(frb.getStreamingStats());
+    } catch (_) {
+      return null;
+    }
   }
 
   /// Send mouse event (movement, click, drag).

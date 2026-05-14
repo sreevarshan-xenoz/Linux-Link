@@ -8,41 +8,42 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'api.freezed.dart';
 
+// These functions are ignored because they are not marked as `pub`: `android_to_evdev_keycode`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `DiscoveryEvent`
 
 /// Get version string
-Future<String> version() => RustLib.instance.api.crateApiVersion();
+Future<String> version() => RustApi.instance.api.crateApiVersion();
 
 /// Check Tailscale status
 Future<bool> checkTailscaleStatus() =>
-    RustLib.instance.api.crateApiCheckTailscaleStatus();
+    RustApi.instance.api.crateApiCheckTailscaleStatus();
 
 /// Get list of peers on the tailnet
-Future<List<PeerInfoDto>> getPeers() => RustLib.instance.api.crateApiGetPeers();
+Future<List<PeerInfoDto>> getPeers() => RustApi.instance.api.crateApiGetPeers();
 
 /// Connect to a peer
 Future<ConnectionState> connectToPeer(
         {required String address, required int port}) =>
-    RustLib.instance.api.crateApiConnectToPeer(address: address, port: port);
+    RustApi.instance.api.crateApiConnectToPeer(address: address, port: port);
 
 /// Send clipboard content to peer using KDE Connect protocol.
 Future<void> sendClipboard(
         {required String address,
         required int port,
         required String content}) =>
-    RustLib.instance.api
+    RustApi.instance.api
         .crateApiSendClipboard(address: address, port: port, content: content);
 
 /// Get clipboard content from peer.
 Future<String> getClipboard({required String address, required int port}) =>
-    RustLib.instance.api.crateApiGetClipboard(address: address, port: port);
+    RustApi.instance.api.crateApiGetClipboard(address: address, port: port);
 
 /// Send file to peer using KDE Share protocol.
 Future<void> sendFile(
         {required String address,
         required int port,
         required String filePath}) =>
-    RustLib.instance.api
+    RustApi.instance.api
         .crateApiSendFile(address: address, port: port, filePath: filePath);
 
 /// List files in a remote directory using the file browse protocol.
@@ -50,31 +51,33 @@ Future<List<RemoteFileDto>> listRemoteFiles(
         {required String address,
         required int port,
         required String remotePath}) =>
-    RustLib.instance.api.crateApiListRemoteFiles(
+    RustApi.instance.api.crateApiListRemoteFiles(
         address: address, port: port, remotePath: remotePath);
 
 /// Request remote screen streaming.
 Future<void> connectStreaming({required String address, required int port}) =>
-    RustLib.instance.api.crateApiConnectStreaming(address: address, port: port);
+    RustApi.instance.api.crateApiConnectStreaming(address: address, port: port);
 
 /// Stop remote screen streaming.
-Future<void> stopStreaming() => RustLib.instance.api.crateApiStopStreaming();
+Future<void> stopStreaming() => RustApi.instance.api.crateApiStopStreaming();
 
 /// Check if streaming is active by inspecting the streaming handle.
-bool isStreamingActive() => RustLib.instance.api.crateApiIsStreamingActive();
+bool isStreamingActive() => RustApi.instance.api.crateApiIsStreamingActive();
 
 /// Get the current RTT to the streaming server in microseconds.
-BigInt getStreamingRtt() => RustLib.instance.api.crateApiGetStreamingRtt();
+BigInt getStreamingRtt() => RustApi.instance.api.crateApiGetStreamingRtt();
 
 /// Get detailed streaming session statistics.
 StreamingStatsDto getStreamingStats() =>
-    RustLib.instance.api.crateApiGetStreamingStats();
+    RustApi.instance.api.crateApiGetStreamingStats();
 
 /// Receive queued H.264 frames from the streaming client.
 Future<List<FrameDto>> receiveFrames({required BigInt timeoutMs}) =>
-    RustLib.instance.api.crateApiReceiveFrames(timeoutMs: timeoutMs);
+    RustApi.instance.api.crateApiReceiveFrames(timeoutMs: timeoutMs);
 
-/// Send mouse event to remote using KDE mousepad protocol.
+/// Send mouse event to remote, preferring the low-latency QUIC streaming channel.
+///
+/// Falls back to KDE Connect TCP protocol if streaming is not active.
 Future<void> sendMouseEvent(
         {required String address,
         required int port,
@@ -82,7 +85,7 @@ Future<void> sendMouseEvent(
         required double y,
         required int button,
         required bool isPressed}) =>
-    RustLib.instance.api.crateApiSendMouseEvent(
+    RustApi.instance.api.crateApiSendMouseEvent(
         address: address,
         port: port,
         x: x,
@@ -90,13 +93,15 @@ Future<void> sendMouseEvent(
         button: button,
         isPressed: isPressed);
 
-/// Send keyboard event to remote using KDE mousepad protocol.
+/// Send keyboard event to remote, preferring the low-latency QUIC streaming channel.
+///
+/// Falls back to KDE Connect TCP protocol if streaming is not active.
 Future<void> sendKeyboardEvent(
         {required String address,
         required int port,
         required int keyCode,
         required String text}) =>
-    RustLib.instance.api.crateApiSendKeyboardEvent(
+    RustApi.instance.api.crateApiSendKeyboardEvent(
         address: address, port: port, keyCode: keyCode, text: text);
 
 @freezed

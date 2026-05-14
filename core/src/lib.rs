@@ -3,6 +3,9 @@
 //! Shared protocol types and cross-platform logic.
 
 pub mod error;
+
+// Input injection is Linux-only (requires evdev)
+#[cfg(feature = "injection")]
 pub mod input;
 pub mod protocol;
 pub mod streaming;

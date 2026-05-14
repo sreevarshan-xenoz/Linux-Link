@@ -4,29 +4,38 @@ version.workspace = true
 edition.workspace = true
 
 [features]
-default = ["wayland-portal", "x11-capture"]
-wayland-portal = ["ashpd/screencast"]
-x11-capture = ["xcap"]
+default = ["server"]
+
+# Linux server features
+server = ["capture", "encode", "injection"]
+capture = ["dep:ashpd", "dep:pipewire", "dep:libspa", "dep:x11rb", "dep:xcap", "wayland-portal"]
+encode = ["dep:ffmpeg-sidecar"]
+injection = ["dep:evdev"]
+wayland-portal = ["ashpd?/screencast"]
+x11-capture = ["dep:xcap"]
+
+# Client-only (Android) features
+client = []
 
 [dependencies]
 anyhow.workspace = true
 serde.workspace = true
 tokio.workspace = true
 serde_json = "1"
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 tracing.workspace = true
 uuid.workspace = true
 async-trait.workspace = true
 
-# Screen capture
-ashpd.workspace = true
-pipewire.workspace = true
-libspa.workspace = true
+# Screen capture (Linux-only, optional)
+ashpd = { workspace = true, optional = true }
+pipewire = { workspace = true, optional = true }
+libspa = { workspace = true, optional = true }
+x11rb = { version = "0.13", features = ["shm"], optional = true }
 tokio-util.workspace = true
-x11rb = { version = "0.13", features = ["shm"] }
 
-# Video encoding
-ffmpeg-sidecar.workspace = true
+# Video encoding (Linux-only, optional)
+ffmpeg-sidecar = { workspace = true, optional = true }
 
 # mDNS service discovery
 mdns-sd = "0.13"
@@ -44,11 +53,11 @@ quinn.workspace = true
 rcgen.workspace = true
 rustls.workspace = true
 
-# X11 screen capture fallback (feature-gated)
+# X11 screen capture fallback (optional)
 xcap = { workspace = true, optional = true }
 
-# Input injection via uinput (universal fallback)
-evdev.workspace = true
+# Input injection via uinput (Linux-only, optional)
+evdev = { workspace = true, optional = true }
 
 # Directories / home paths
 dirs.workspace = true

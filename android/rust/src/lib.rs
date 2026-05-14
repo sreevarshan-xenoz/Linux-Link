@@ -49,6 +49,8 @@ pub(crate) struct StreamingHandle {
     /// Receiver so the consumer (Flutter) can receive packets.
     #[allow(dead_code)]
     pub(crate) packet_rx: tokio::sync::mpsc::Receiver<linux_link_core::streaming::EncodedPacket>,
+    /// The QUIC connection, kept alive for sending input events.
+    pub(crate) connection: quinn::Connection,
 }
 
 /// Update the global streaming RTT value (called from the stats task).

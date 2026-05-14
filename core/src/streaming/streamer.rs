@@ -12,6 +12,7 @@ use tracing::{debug, error, info, warn};
 use super::bitrate::AdaptiveBitrate;
 use super::capture;
 use super::encoder::VideoEncoder;
+use super::input_packet::InputPacket;
 use super::transport::{self, CertManager, StreamServer, StreamTransportConfig};
 use super::{EncodedPacket, StreamingConfig, VideoFrame};
 
@@ -25,6 +26,8 @@ pub struct StreamingServer {
     bitrate_tx: watch::Sender<u32>,
     /// Adaptive bitrate controller (optional)
     adaptive_bitrate: Option<AdaptiveBitrate>,
+    /// Channel for routing input events received from client over this QUIC connection
+    input_tx: Option<mpsc::Sender<InputPacket>>,
 }
 
 impl StreamingServer {
@@ -42,6 +45,7 @@ impl StreamingServer {
             cancel: CancellationToken::new(),
             bitrate_tx,
             adaptive_bitrate: None,
+            input_tx: None,
         }
     }
 
@@ -50,6 +54,14 @@ impl StreamingServer {
         adaptive.attach(self.bitrate_tx.clone());
         self.adaptive_bitrate = Some(adaptive);
         self
+    }
+
+    /// Set a channel to receive input events from the remote client.
+    ///
+    /// When set, the server will parse incoming QUIC streams as binary `InputPacket`
+    /// values and forward them through this channel for injection on the host system.
+    pub fn set_input_channel(&mut self, tx: mpsc::Sender<InputPacket>) {
+        self.input_tx = Some(tx);
     }
 
     /// Update the target bitrate dynamically (for adaptive bitrate control)
@@ -314,7 +326,12 @@ impl StreamingServer {
         });
 
         // Task 4: Monitor connection state and handle input streams from client
+        //
+        // Accepts unidirectional QUIC streams from the client, parses them as
+        // binary `InputPacket` values, and forwards them to the input channel
+        // for injection on the host system.
         let monitor_cancel = cancel.clone();
+        let input_tx = self.input_tx.clone();
         tasks.spawn(async move {
             info!("Connection monitor started");
 
@@ -330,13 +347,34 @@ impl StreamingServer {
                         match result {
                             Ok(mut stream) => {
                                 debug!("Received client stream");
-                                // Read and discard client data (input events would be handled here)
-                                let data = stream.read_to_end(4096).await;
+                                // Read the entire payload (max 64KB per input packet)
+                                let data = stream.read_to_end(64 * 1024).await;
                                 match data {
                                     Ok(data) if !data.is_empty() => {
                                         debug!("Received {} bytes from client", data.len());
-                                        // In full implementation, parse input events here
-                                        // and route to the input injection module
+
+                                        // Skip 16-byte packets: these are stats feedback
+                                        // (RTT + lost packets) from the client's
+                                        // send_stats_loop, not input events.
+                                        if data.len() == 16 {
+                                            debug!("Skipping stats packet");
+                                            continue;
+                                        }
+
+                                        // Parse as binary InputPacket
+                                        match InputPacket::decode(&data) {
+                                            Ok(packet) => {
+                                                // Forward to input injector via channel
+                                                if let Some(ref tx) = input_tx
+                                                    && tx.send(packet).await.is_err()
+                                                {
+                                                    debug!("Input receiver dropped");
+                                                }
+                                            }
+                                            Err(e) => {
+                                                debug!("Failed to parse input packet: {e}");
+                                            }
+                                        }
                                     }
                                     Ok(_) => {
                                         debug!("Client stream closed (empty)");

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/peer_info.dart';
 import '../providers/connection_provider.dart' as conn;
+import '../providers/bookmarks_provider.dart';
 import '../widgets/peer_list_tile.dart';
 import '../rust_api_bridge.dart' as bridge;
 
@@ -59,7 +60,6 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
           case bridge.ConnectionState.connected:
             ref.read(conn.connectionStateProvider.notifier).state =
                 conn.ConnectionState.connected;
-            // Navigate to remote desktop screen
             Navigator.of(context).pushNamed(
               '/remote',
               arguments: {'address': address, 'port': port},
@@ -91,6 +91,11 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
     }
   }
 
+  Future<void> _toggleBookmark(PeerInfo peer) async {
+    final bookmarks = ref.read(bookmarksProvider.notifier);
+    await bookmarks.toggle(peer);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -101,14 +106,38 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
   Widget build(BuildContext context) {
     final peers = ref.watch(conn.peersProvider);
     final connectionState = ref.watch(conn.connectionStateProvider);
+    final bookmarks = ref.watch(bookmarksProvider);
+
+    // Split peers into bookmarked and unbookmarked
+    final favoritePeers = peers
+        .where((p) => bookmarks.any((b) => b.name == p.name))
+        .toList();
+    final otherPeers =
+        peers.where((p) => !bookmarks.any((b) => b.name == p.name)).toList();
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Linux Link'),
         actions: [
+          // Recent connections / history button
+          IconButton(
+            icon: const Icon(Icons.history),
+            onPressed: () {
+              // TODO: Navigate to connection history (Phase 7c)
+            },
+            tooltip: 'Connection history',
+          ),
+          // Settings button
+          IconButton(
+            icon: const Icon(Icons.settings),
+            onPressed: () {
+              Navigator.of(context).pushNamed('/settings');
+            },
+            tooltip: 'Settings',
+          ),
           if (_isLoading)
             const Padding(
-              padding: EdgeInsets.all(12.0),
+              padding: EdgeInsets.all(12),
               child: SizedBox(
                 width: 20,
                 height: 20,
@@ -132,7 +161,8 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
               color: switch (connectionState) {
                 conn.ConnectionState.connecting =>
                   Colors.orange.withValues(alpha: 0.1),
-                conn.ConnectionState.connected => Colors.green.withValues(alpha: 0.1),
+                conn.ConnectionState.connected =>
+                  Colors.green.withValues(alpha: 0.1),
                 conn.ConnectionState.error => Colors.red.withValues(alpha: 0.1),
                 conn.ConnectionState.disconnected => Colors.transparent,
               },
@@ -209,19 +239,123 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
                       ],
                     ),
                   )
-                : ListView.builder(
-                    itemCount: peers.length,
-                    itemBuilder: (context, index) {
-                      final peer = peers[index];
-                      return PeerListTile(
-                        peer: peer,
-                        onTap: peer.online ? () => _connectToPeer(peer) : null,
-                      );
-                    },
+                : ListView(
+                    children: [
+                      // Favorites section
+                      if (favoritePeers.isNotEmpty) ...[
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                          child: Row(
+                            children: [
+                              const Icon(
+                                Icons.star,
+                                size: 16,
+                                color: Colors.amber,
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                'Favorites',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .titleSmall
+                                    ?.copyWith(
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .primary,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        ...favoritePeers.map(
+                          (peer) => _buildPeerTile(peer, isBookmarked: true),
+                        ),
+                        const Divider(indent: 16, endIndent: 16),
+                      ],
+                      // All peers section
+                      if (otherPeers.isNotEmpty && favoritePeers.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                          child: Row(
+                            children: [
+                              Icon(
+                                Icons.group,
+                                size: 16,
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurfaceVariant,
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                'All Peers',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .titleSmall
+                                    ?.copyWith(
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .onSurfaceVariant,
+                                    ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ...otherPeers.map(
+                        (peer) => _buildPeerTile(peer, isBookmarked: false),
+                      ),
+                      // Empty state for other peers when all are favorited
+                      if (otherPeers.isEmpty && favoritePeers.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.all(24),
+                          child: Center(
+                            child: Text(
+                              'All peers are favorited',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodySmall
+                                  ?.copyWith(
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onSurfaceVariant,
+                                  ),
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildPeerTile(PeerInfo peer, {required bool isBookmarked}) {
+    return Stack(
+      children: [
+        PeerListTile(
+          peer: peer,
+          onTap: peer.online ? () => _connectToPeer(peer) : null,
+        ),
+        // Bookmark star button
+        Positioned(
+          right: 40,
+          top: 0,
+          bottom: 0,
+          child: Center(
+            child: IconButton(
+              icon: Icon(
+                isBookmarked ? Icons.star : Icons.star_border,
+                size: 20,
+                color: isBookmarked ? Colors.amber : Colors.white24,
+              ),
+              onPressed: () => _toggleBookmark(peer),
+              tooltip: isBookmarked ? 'Remove from favorites' : 'Add to favorites',
+              splashRadius: 16,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

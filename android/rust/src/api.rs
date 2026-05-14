@@ -12,6 +12,8 @@ use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 
+use linux_link_core::streaming::InputPacket;
+
 use crate::{
     CONNECTION_STATE, CONTROL_WRITER, MAX_FRAMES_PER_RECEIVE, STREAMING_HANDLE, STREAMING_RTT_US,
     StreamingHandle, update_streaming_rtt,
@@ -393,6 +395,7 @@ pub async fn connect_streaming(address: String, port: u16) -> Result<(), String>
         task,
         rtt_task,
         packet_rx,
+        connection: connection.clone(),
     });
 
     tracing::info!("Streaming session connected to {addr}");
@@ -483,7 +486,9 @@ pub async fn receive_frames(timeout_ms: u64) -> Vec<FrameDto> {
     }
 }
 
-/// Send mouse event to remote using KDE mousepad protocol.
+/// Send mouse event to remote, preferring the low-latency QUIC streaming channel.
+///
+/// Falls back to KDE Connect TCP protocol if streaming is not active.
 #[frb]
 pub async fn send_mouse_event(
     _address: String,
@@ -493,6 +498,47 @@ pub async fn send_mouse_event(
     button: i32,
     is_pressed: bool,
 ) -> Result<(), String> {
+    // Try QUIC streaming channel first (lower latency, compact binary protocol)
+    let streaming_conn = {
+        let guard = (*STREAMING_HANDLE).lock().await;
+        guard.as_ref().map(|h| h.connection.clone())
+    };
+
+    if let Some(conn) = streaming_conn {
+        let packet = if button == 2 {
+            // Scroll event (button=2 is reserved for scroll on the Flutter side)
+            InputPacket::MouseScroll {
+                dx: x as i16,
+                dy: y as i16,
+            }
+        } else if button != 0 {
+            InputPacket::MouseClick {
+                button: button as u8,
+                pressed: is_pressed,
+            }
+        } else {
+            InputPacket::MouseMove {
+                dx: x as i16,
+                dy: y as i16,
+            }
+        };
+
+        let data = packet.encode();
+        let mut send_stream = conn
+            .open_uni()
+            .await
+            .map_err(|e| format!("QUIC open stream: {e}"))?;
+        send_stream
+            .write_all(&data)
+            .await
+            .map_err(|e| format!("QUIC write: {e}"))?;
+        send_stream
+            .finish()
+            .map_err(|e| format!("QUIC finish: {e}"))?;
+        return Ok(());
+    }
+
+    // Fall back to TCP/KDE Connect protocol
     let writer_arc = {
         let guard = (*CONTROL_WRITER).lock().await;
         guard
@@ -518,7 +564,9 @@ pub async fn send_mouse_event(
     Ok(())
 }
 
-/// Send keyboard event to remote using KDE mousepad protocol.
+/// Send keyboard event to remote, preferring the low-latency QUIC streaming channel.
+///
+/// Falls back to KDE Connect TCP protocol if streaming is not active.
 #[frb]
 pub async fn send_keyboard_event(
     _address: String,
@@ -526,6 +574,111 @@ pub async fn send_keyboard_event(
     key_code: i32,
     text: String,
 ) -> Result<(), String> {
+    // Try QUIC streaming channel first (lower latency, compact binary protocol)
+    let streaming_conn = {
+        let guard = (*STREAMING_HANDLE).lock().await;
+        guard.as_ref().map(|h| h.connection.clone())
+    };
+
+    if let Some(conn) = streaming_conn {
+        if !text.is_empty() {
+            // Send as text packet
+            let packet = InputPacket::Text(text);
+            let data = packet.encode();
+            let mut send_stream = conn
+                .open_uni()
+                .await
+                .map_err(|e| format!("QUIC open stream: {e}"))?;
+            send_stream
+                .write_all(&data)
+                .await
+                .map_err(|e| format!("QUIC write: {e}"))?;
+            send_stream
+                .finish()
+                .map_err(|e| format!("QUIC finish: {e}"))?;
+            return Ok(());
+        }
+
+        if key_code != 0 {
+            // Decode modifier encoding:
+            //   key_code > 100000 = modifier release   (subtract 100000)
+            //   key_code > 50000  = modifier press      (subtract 50000)
+            //   otherwise         = regular key          (press + release)
+            const MOD_RELEASE_OFFSET: i32 = 100000;
+            const MOD_PRESS_OFFSET: i32 = 50000;
+
+            let evdev_key = android_to_evdev_keycode(if key_code > MOD_RELEASE_OFFSET {
+                key_code - MOD_RELEASE_OFFSET
+            } else if key_code > MOD_PRESS_OFFSET {
+                key_code - MOD_PRESS_OFFSET
+            } else {
+                key_code
+            });
+
+            if key_code > MOD_RELEASE_OFFSET {
+                // Modifier release: send single release packet
+                let packet = InputPacket::KeyEvent {
+                    key: evdev_key,
+                    pressed: false,
+                };
+                let data = packet.encode();
+                let mut send_stream = conn
+                    .open_uni()
+                    .await
+                    .map_err(|e| format!("QUIC open stream: {e}"))?;
+                send_stream
+                    .write_all(&data)
+                    .await
+                    .map_err(|e| format!("QUIC write: {e}"))?;
+                send_stream
+                    .finish()
+                    .map_err(|e| format!("QUIC finish: {e}"))?;
+            } else if key_code > MOD_PRESS_OFFSET {
+                // Modifier press: send single press packet
+                let packet = InputPacket::KeyEvent {
+                    key: evdev_key,
+                    pressed: true,
+                };
+                let data = packet.encode();
+                let mut send_stream = conn
+                    .open_uni()
+                    .await
+                    .map_err(|e| format!("QUIC open stream: {e}"))?;
+                send_stream
+                    .write_all(&data)
+                    .await
+                    .map_err(|e| format!("QUIC write: {e}"))?;
+                send_stream
+                    .finish()
+                    .map_err(|e| format!("QUIC finish: {e}"))?;
+            } else {
+                // Regular key: press + release (current behavior)
+                for pressed in [true, false] {
+                    let packet = InputPacket::KeyEvent {
+                        key: evdev_key,
+                        pressed,
+                    };
+                    let data = packet.encode();
+                    let mut send_stream = conn
+                        .open_uni()
+                        .await
+                        .map_err(|e| format!("QUIC open stream: {e}"))?;
+                    send_stream
+                        .write_all(&data)
+                        .await
+                        .map_err(|e| format!("QUIC write: {e}"))?;
+                    send_stream
+                        .finish()
+                        .map_err(|e| format!("QUIC finish: {e}"))?;
+                }
+            }
+            return Ok(());
+        }
+
+        return Ok(());
+    }
+
+    // Fall back to TCP/KDE Connect protocol
     let writer_arc = {
         let guard = (*CONTROL_WRITER).lock().await;
         guard
@@ -557,4 +710,23 @@ pub async fn send_keyboard_event(
         .await
         .map_err(|e: anyhow::Error| e.to_string())?;
     Ok(())
+}
+
+/// Roughly map Android keycodes to Linux evdev keycodes for QUIC input.
+fn android_to_evdev_keycode(android_keycode: i32) -> u16 {
+    match android_keycode {
+        66 => 28,                    // Enter
+        67 => 14,                    // Backspace
+        19 => 103,                   // Up
+        20 => 108,                   // Down
+        21 => 105,                   // Left
+        22 => 106,                   // Right
+        62 => 57,                    // Space
+        4 => 1,                      // Escape
+        61 => 15,                    // Tab
+        112 => 14,                   // Delete
+        85 => 111,                   // Volume Up
+        86 => 114,                   // Volume Down
+        _ => android_keycode as u16, // Passthrough for keycodes that might match
+    }
 }

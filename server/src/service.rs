@@ -1,9 +1,13 @@
 use crate::config::Config;
+use crate::input_injector::{InputInjector, button_id_to_mouse};
 use crate::kde;
 use anyhow::{Context, Result, bail};
 use linux_link_core::protocol::connection::ConnectionManager;
 use linux_link_core::protocol::kdeconnect::{NetworkPacket, PluginRegistry, TcpDeviceSender};
 use linux_link_core::protocol::{HANDSHAKE_HELLO, HANDSHAKE_OK};
+use linux_link_core::streaming::StreamingServer;
+use linux_link_core::streaming::input_packet::InputPacket;
+use linux_link_core::streaming::transport::{CertManager, StreamTransportConfig};
 use linux_link_core::tailscale::{DiscoveryEvent, DiscoveryService, TailscaleClient};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -52,6 +56,59 @@ pub async fn run(config: Config) -> Result<()> {
         .with_context(|| format!("failed to bind {bind_addr}"))?;
 
     tracing::info!("Control listener ready on {}", bind_addr);
+
+    // Start the QUIC streaming server in the background for real-time screen control.
+    //
+    // This runs as a tokio task and accepts one QUIC connection. Input events
+    // received from the client over QUIC are forwarded to the InputInjector.
+    {
+        let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<InputPacket>(128);
+
+        let streaming_config = config.video_quality.to_streaming_config();
+        let transport_config = StreamTransportConfig {
+            address: format!("0.0.0.0:{}", config.streaming_port)
+                .parse()
+                .unwrap(),
+            ..StreamTransportConfig::default()
+        };
+        let cert_manager = Arc::new(CertManager::new().expect("Failed to create CertManager"));
+
+        let mut streaming_server =
+            StreamingServer::new(streaming_config, transport_config, cert_manager);
+        streaming_server.set_input_channel(input_tx);
+
+        tokio::spawn(async move {
+            tracing::info!(
+                "Streaming server starting on port {}",
+                config.streaming_port
+            );
+            if let Err(e) = streaming_server.run().await {
+                tracing::error!("Streaming server error: {e}");
+            }
+        });
+
+        // Spawn input injection task — receives InputPacket from the QUIC
+        // streaming channel and injects them into the host system.
+        tokio::spawn(async move {
+            tracing::info!("Input injection task started");
+            let mut injector = match InputInjector::new() {
+                Ok(inj) => inj,
+                Err(e) => {
+                    tracing::error!("Failed to create InputInjector: {e}");
+                    return;
+                }
+            };
+
+            while let Some(packet) = input_rx.recv().await {
+                if let Err(e) = handle_input_packet(&mut injector, packet) {
+                    tracing::warn!("Input injection error: {e}");
+                }
+            }
+
+            tracing::info!("Input injection task ended");
+        });
+    }
+
     tracing::info!("Press Ctrl+C to stop");
 
     loop {
@@ -450,6 +507,71 @@ fn generate_pin() -> String {
         .map(|d| d.subsec_nanos())
         .unwrap_or(0);
     format!("{:06}", nanos % 1_000_000)
+}
+
+/// Handle an `InputPacket` received over the QUIC streaming channel by injecting
+/// it into the host system via the `InputInjector`.
+fn handle_input_packet(injector: &mut InputInjector, packet: InputPacket) -> Result<()> {
+    match packet {
+        InputPacket::MouseMove { dx, dy } => {
+            injector.move_mouse_relative(dx as i32, dy as i32)?;
+        }
+        InputPacket::MouseClick { button, pressed } => {
+            let mouse_key = button_id_to_mouse(button as i32);
+            injector.mouse_button(mouse_key, pressed)?;
+        }
+        InputPacket::MouseScroll { dx, dy } => {
+            injector.scroll(dx as i32, dy as i32)?;
+        }
+        InputPacket::KeyEvent { key, pressed } => {
+            let enigo_key = evdev_to_enigo_key(key);
+            injector.key(enigo_key, pressed)?;
+        }
+        InputPacket::Text(text) => {
+            injector.text(&text)?;
+        }
+    }
+    Ok(())
+}
+
+/// Map a Linux evdev keycode to an enigo `Key` for input injection.
+fn evdev_to_enigo_key(evdev_keycode: u16) -> enigo::Key {
+    match evdev_keycode {
+        28 => enigo::Key::Return,
+        14 => enigo::Key::Backspace,
+        57 => enigo::Key::Space,
+        15 => enigo::Key::Tab,
+        1 => enigo::Key::Escape,
+        103 => enigo::Key::UpArrow,
+        108 => enigo::Key::DownArrow,
+        105 => enigo::Key::LeftArrow,
+        106 => enigo::Key::RightArrow,
+        111 => enigo::Key::Delete, // KEY_DELETE
+        110 => enigo::Key::Insert, // KEY_INSERT
+        102 => enigo::Key::Home,
+        107 => enigo::Key::End,
+        104 => enigo::Key::PageUp,
+        109 => enigo::Key::PageDown,
+        59 => enigo::Key::F1,
+        60 => enigo::Key::F2,
+        61 => enigo::Key::F3,
+        62 => enigo::Key::F4,
+        63 => enigo::Key::F5,
+        64 => enigo::Key::F6,
+        65 => enigo::Key::F7,
+        66 => enigo::Key::F8,
+        67 => enigo::Key::F9,
+        68 => enigo::Key::F10,
+        87 => enigo::Key::F11,
+        88 => enigo::Key::F12,
+        other => {
+            // Unmapped evdev keycode — log and return a safe placeholder.
+            // We cannot map by numeric value since evdev keycodes don't
+            // correspond to Unicode codepoints.
+            tracing::debug!("Unmapped evdev keycode: {other}");
+            enigo::Key::Unicode('?')
+        }
+    }
 }
 
 struct PidFileGuard {

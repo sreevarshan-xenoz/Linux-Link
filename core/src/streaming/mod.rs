@@ -4,21 +4,29 @@
 //! video encoding via FFmpeg, and QUIC-based streaming transport.
 
 pub mod bitrate;
-pub mod capture;
-#[cfg(feature = "x11-capture")]
-pub mod capture_x11;
 pub mod client;
-pub mod encoder;
+pub mod input_packet;
 pub mod session;
-pub mod streamer;
 pub mod transport;
 
+// Server-only modules — these require Linux-specific dependencies
+#[cfg(feature = "capture")]
+pub mod capture;
+#[cfg(feature = "capture")]
+pub mod capture_x11;
+#[cfg(feature = "encode")]
+pub mod encoder;
+#[cfg(feature = "server")]
+pub mod streamer;
+
 pub use bitrate::AdaptiveBitrate;
-#[cfg(feature = "x11-capture")]
+#[cfg(feature = "capture")]
 pub use capture_x11::{check_x11_availability, start_x11_capture};
 pub use client::DEFAULT_STREAMING_PORT;
 pub use client::StreamingClient;
+pub use input_packet::InputPacket;
 pub use session::{SessionType, detect_session_type};
+#[cfg(feature = "server")]
 pub use streamer::StreamingServer;
 
 use serde::{Deserialize, Serialize};

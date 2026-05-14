@@ -12,15 +12,15 @@ import 'frb_generated.io.dart'
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 /// Main entrypoint of the Rust API
-class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
+class RustApi extends BaseEntrypoint<RustApiApi, RustApiApiImpl, RustApiWire> {
   @internal
-  static final instance = RustLib._();
+  static final instance = RustApi._();
 
-  RustLib._();
+  RustApi._();
 
   /// Initialize flutter_rust_bridge
   static Future<void> init({
-    RustLibApi? api,
+    RustApiApi? api,
     BaseHandler? handler,
     ExternalLibrary? externalLibrary,
     bool forceSameCodegenVersion = true,
@@ -36,7 +36,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   /// Initialize flutter_rust_bridge in mock mode.
   /// No libraries for FFI are loaded.
   static void initMock({
-    required RustLibApi api,
+    required RustApiApi api,
   }) {
     instance.initMockImpl(
       api: api,
@@ -50,12 +50,12 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   static void dispose() => instance.disposeImpl();
 
   @override
-  ApiImplConstructor<RustLibApiImpl, RustLibWire> get apiImplConstructor =>
-      RustLibApiImpl.new;
+  ApiImplConstructor<RustApiApiImpl, RustApiWire> get apiImplConstructor =>
+      RustApiApiImpl.new;
 
   @override
-  WireConstructor<RustLibWire> get wireConstructor =>
-      RustLibWire.fromExternalLibrary;
+  WireConstructor<RustApiWire> get wireConstructor =>
+      RustApiWire.fromExternalLibrary;
 
   @override
   Future<void> executeRustInitializers() async {
@@ -81,7 +81,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   );
 }
 
-abstract class RustLibApi extends BaseApi {
+abstract class RustApiApi extends BaseApi {
   Future<bool> crateApiCheckTailscaleStatus();
 
   Future<void> crateApiConnectStreaming(
@@ -133,8 +133,8 @@ abstract class RustLibApi extends BaseApi {
   Future<String> crateApiVersion();
 }
 
-class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
-  RustLibApiImpl({
+class RustApiApiImpl extends RustApiApiImplPlatform implements RustApiApi {
+  RustApiApiImpl({
     required super.handler,
     required super.wire,
     required super.generalizedFrbRustBinding,

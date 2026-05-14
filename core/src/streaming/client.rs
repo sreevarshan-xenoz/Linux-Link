@@ -12,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use super::EncodedPacket;
+use super::input_packet::InputPacket;
 use super::transport::{self, CertManager, StreamClient, StreamTransportConfig};
 
 /// Default port for the streaming service.
@@ -178,6 +179,32 @@ impl StreamingClient {
     /// Return a `CancellationToken` that can be used to cancel this client from outside.
     pub fn cancel_token(&self) -> CancellationToken {
         self.cancel.clone()
+    }
+
+    /// Send an input event over the QUIC connection.
+    ///
+    /// Encodes the packet as compact binary and sends it over a unidirectional
+    /// QUIC stream. The server's Task 4 will parse and inject it.
+    pub async fn send_input(&self, packet: &InputPacket) -> Result<()> {
+        let connection = self.connection.as_ref().context("No active connection")?;
+
+        let data = packet.encode();
+        let mut send_stream = connection
+            .open_uni()
+            .await
+            .context("Failed to open input stream")?;
+
+        send_stream
+            .write_all(&data)
+            .await
+            .context("Failed to send input packet")?;
+
+        send_stream
+            .finish()
+            .context("Failed to finish input stream")?;
+
+        debug!("Sent input packet: {} bytes over QUIC", data.len());
+        Ok(())
     }
 }
 

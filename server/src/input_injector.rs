@@ -165,7 +165,6 @@ impl InputInjector {
     }
 
     /// Scroll the mouse wheel
-    #[allow(dead_code)]
     pub fn scroll(&mut self, x: i32, y: i32) -> Result<()> {
         match &mut self.backend {
             InputBackend::Enigo(enigo) => {
@@ -301,7 +300,7 @@ pub fn button_id_to_mouse(button: i32) -> MouseKey {
 }
 
 /// Map a Linux evdev keycode to an enigo Key.
-#[allow(dead_code)]
+#[cfg(test)]
 fn keycode_to_enigo(code: u16) -> Key {
     match code {
         36 => Key::Return,

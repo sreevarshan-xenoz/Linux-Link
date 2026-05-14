@@ -1,4 +1,5 @@
 import 'package:flutter_background_service/flutter_background_service.dart';
+import 'clipboard_sync_service.dart';
 
 /// Initialize the Android foreground service for keeping streaming alive.
 ///
@@ -27,9 +28,21 @@ Future<void> startForegroundService() async {
   await service.startService();
 }
 
-/// Stop the foreground service.
+/// Start the foreground service and set up background features.
+/// Call this with the peer's address and port when streaming begins.
+Future<void> startForegroundServiceWithPeer(String address, int port) async {
+  await startForegroundService();
+  // Start clipboard auto-sync if enabled
+  final syncEnabled = await ClipboardSyncService.isEnabled();
+  if (syncEnabled) {
+    clipboardSyncService.start(address, port);
+  }
+}
+
+/// Stop the foreground service and all background features.
 Future<void> stopForegroundService() async {
   final service = FlutterBackgroundService();
+  clipboardSyncService.stop();
   service.invoke('stop');
   // Give Android time to process the stop request
   await Future.delayed(const Duration(milliseconds: 200));
