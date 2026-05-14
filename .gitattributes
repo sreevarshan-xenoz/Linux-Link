@@ -1,0 +1,4 @@
+android/.dart_tool/**/sdk.sum filter=lfs diff=lfs merge=lfs -text
+android/.dart_tool/**/*.dill filter=lfs diff=lfs merge=lfs -text
+android/.dart_tool/**/*.snapshot filter=lfs diff=lfs merge=lfs -text
+android/.dart_tool/**/*.so filter=lfs diff=lfs merge=lfs -text
