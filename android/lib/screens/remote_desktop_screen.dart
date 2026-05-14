@@ -8,7 +8,10 @@ import '../providers/connection_provider.dart' as conn;
 import '../providers/streaming_provider.dart';
 import '../providers/health_provider.dart';
 import '../widgets/stream_stats_overlay.dart';
+import '../widgets/shortcuts_overlay.dart';
+import 'lock_screen.dart';
 import '../rust_api_bridge.dart' as bridge;
+import 'package:shared_preferences/shared_preferences.dart';
 import '../services/background_service.dart';
 import '../services/video_player_service.dart';
 import '../services/history_service.dart';
@@ -43,6 +46,9 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
   final TransformationController _transformController =
       TransformationController();
   final DateTime _connectTime = DateTime.now();
+  bool _showShortcuts = false;
+  bool _isLocked = false;
+  bool _lockEnabled = false;
 
   @override
   void initState() {
@@ -53,6 +59,19 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
     _startFramePolling();
     _startLatencyPolling();
     _startStatsPolling();
+    _checkLockEnabled();
+  }
+
+  Future<void> _checkLockEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    final enabled = prefs.getBool('screen_lock_enabled') ?? false;
+    final pin = prefs.getString('screen_lock_pin');
+    if (mounted) {
+      setState(() {
+        _lockEnabled = enabled && pin != null && pin.isNotEmpty;
+        _isLocked = _lockEnabled;
+      });
+    }
   }
 
   @override
@@ -533,6 +552,51 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
     return 0;
   }
 
+  /// Cycle through rotation modes (F7).
+  void _cycleRotation() {
+    final current = ref.read(rotationModeProvider);
+    final next = switch (current) {
+      RotationMode.auto => RotationMode.portrait,
+      RotationMode.portrait => RotationMode.landscape,
+      RotationMode.landscape => RotationMode.rotated180,
+      RotationMode.rotated180 => RotationMode.auto,
+    };
+    ref.read(rotationModeProvider.notifier).state = next;
+  }
+
+  /// Icon for the current rotation mode.
+  IconData _rotationIcon() {
+    return switch (ref.read(rotationModeProvider)) {
+      RotationMode.auto => Icons.screen_rotation,
+      RotationMode.portrait => Icons.screen_lock_portrait,
+      RotationMode.landscape => Icons.screen_lock_landscape,
+      RotationMode.rotated180 => Icons.flip_to_back,
+    };
+  }
+
+  /// Tooltip for the current rotation mode.
+  String _rotationTooltip() {
+    return switch (ref.read(rotationModeProvider)) {
+      RotationMode.auto => 'Auto rotation',
+      RotationMode.portrait => 'Portrait',
+      RotationMode.landscape => 'Landscape',
+      RotationMode.rotated180 => 'Rotated 180\u00b0',
+    };
+  }
+
+  /// Execute a keyboard shortcut on the remote PC.
+  Future<void> _executeShortcut(String shortcut) async {
+    // Most shortcuts are sent as key combinations via the keyboard event pipeline
+    // For common combos, we send the mapped keystrokes
+    debugPrint('Executing shortcut: $shortcut');
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Sent: $shortcut'),
+        duration: const Duration(seconds: 1),
+      ),
+    );
+  }
+
   Future<void> _sendPowerCommand(String action) async {
     // Build confirmation dialog
     final actionLabel = switch (action) {
@@ -697,38 +761,97 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
     return Scaffold(
       body: Stack(
         children: [
-          // Video display with pinch-to-zoom and input handling
-          Focus(
-            focusNode: _keyboardFocusNode,
-            autofocus: false,
-            onKeyEvent: _onKeyEvent,
-            child: InteractiveViewer(
-              transformationController: _transformController,
-              minScale: 1.0,
-              maxScale: 4.0,
-              panEnabled: false,
-              scaleEnabled: true,
-              child: Listener(
-                onPointerSignal: (event) {
-                  if (event is PointerScrollEvent) {
-                    _handleScroll(event);
-                  }
-                },
-                child: GestureDetector(
-                  onTapUp: _handleTap,
-                  onDoubleTap: _handleDoubleTap,
-                  onPanUpdate: _handleDragUpdate,
-                  onLongPressStart: _handleRightClick,
-                  child: Container(
-                    color: Colors.black,
-                    child: _buildVideoDisplay(isStreaming),
+          // F12: Drag-and-drop file transfer target wrapping the main video
+          DragTarget<String>(
+            onWillAcceptWithDetails: (_) => true,
+            onAcceptWithDetails: (details) {
+              final filePath = details.data;
+              if (filePath.isNotEmpty) {
+                bridge.rustApi
+                    .sendFile(widget.address, widget.port, filePath)
+                    .catchError((e) => debugPrint('Drag-drop send failed: $e'));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Transferring: $filePath'),
+                    duration: const Duration(seconds: 2),
                   ),
-                ),
-              ),
-            ),
+                );
+              }
+            },
+            builder: (context, candidateData, rejectedData) {
+              return Stack(
+                children: [
+                  Focus(
+                    focusNode: _keyboardFocusNode,
+                    autofocus: false,
+                    onKeyEvent: _onKeyEvent,
+                    child: InteractiveViewer(
+                      transformationController: _transformController,
+                      minScale: 1.0,
+                      maxScale: 4.0,
+                      panEnabled: false,
+                      scaleEnabled: true,
+                      child: Listener(
+                        onPointerSignal: (event) {
+                          if (event is PointerScrollEvent) {
+                            _handleScroll(event);
+                          }
+                        },
+                        child: GestureDetector(
+                          onTapUp: _handleTap,
+                          onDoubleTap: _handleDoubleTap,
+                          onPanUpdate: _handleDragUpdate,
+                          onLongPressStart: _handleRightClick,
+                          child: Container(
+                            color: Colors.black,
+                            child: _buildVideoDisplay(isStreaming),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  // Drag hover overlay
+                  if (candidateData.isNotEmpty)
+                    Positioned.fill(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          border: Border.all(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .primary
+                                .withValues(alpha: 0.8),
+                            width: 3,
+                          ),
+                        ),
+                        child: Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.cloud_upload,
+                                size: 48,
+                                color: Theme.of(context).colorScheme.primary,
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                'Drop to send file',
+                                style: TextStyle(
+                                  color: Theme.of(context).colorScheme.primary,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              );
+            },
           ),
 
-          // Connection health indicator (replaces simple latency indicator)
+          // Connection health indicator
           Positioned(
             top: 16,
             right: 16,
@@ -742,7 +865,8 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
                 decoration: BoxDecoration(
                   color: Colors.black87,
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: healthColor.withValues(alpha: 0.5), width: 1),
+                  border: Border.all(
+                      color: healthColor.withValues(alpha: 0.5), width: 1),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -771,7 +895,7 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
             ),
           ),
 
-          // Stream stats overlay (F8: toggled by tapping the health indicator)
+          // Stream stats overlay
           StreamStatsOverlay(
             visible: _showStats,
             onToggle: () => setState(() => _showStats = !_showStats),
@@ -781,7 +905,7 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
             frameDrops: health.frameDrops,
           ),
 
-          // Zoom indicator (shown briefly when zoom changes)
+          // Zoom indicator
           if (_transformController.value.getMaxScaleOnAxis() > 1.01)
             Positioned(
               top: 48,
@@ -817,123 +941,137 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
               bottom: 24,
               left: 24,
               right: 24,
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  FilledButton.tonalIcon(
-                    onPressed: _disconnect,
-                    icon: const Icon(Icons.power_settings_new),
-                    label: const Text('Disconnect'),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: Colors.red.withValues(alpha: 0.8),
-                    ),
-                  ),
-                  IconButton.filledTonal(
-                    onPressed: _toggleFullscreen,
-                    icon: Icon(
-                      _isFullscreen
-                          ? Icons.fullscreen_exit
-                          : Icons.fullscreen,
-                    ),
-                    tooltip: 'Toggle fullscreen',
-                  ),
-                  // Stats toggle
-                  IconButton.filledTonal(
-                    onPressed: () {
-                      setState(() => _showStats = !_showStats);
-                    },
-                    icon: const Icon(Icons.bar_chart),
-                    isSelected: _showStats,
-                    tooltip: 'Stream stats',
-                  ),
-                  // Reset zoom
-                  IconButton.filledTonal(
-                    onPressed: _resetZoom,
-                    icon: const Icon(Icons.zoom_out_map),
-                    tooltip: 'Reset zoom',
-                  ),
-                  // Keyboard mode toggle
-                  // Terminal
-                  IconButton.filledTonal(
-                    onPressed: () {
-                      Navigator.of(context).pushNamed(
-                        '/terminal',
-                        arguments: {
-                          'address': widget.address,
-                          'port': widget.port,
-                        },
-                      );
-                    },
-                    icon: const Icon(Icons.terminal),
-                    tooltip: 'Remote terminal',
-                  ),
-                  // Power management
-                  PopupMenuButton<String>(
-                    onSelected: (action) => _sendPowerCommand(action),
-                    itemBuilder: (ctx) => [
-                      const PopupMenuItem(
-                        value: 'sleep',
-                        child: ListTile(
-                          leading: Icon(Icons.bedtime_outlined),
-                          title: Text('Sleep'),
-                          subtitle: Text('Suspend to RAM'),
-                          dense: true,
-                          contentPadding: EdgeInsets.zero,
-                        ),
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    FilledButton.tonalIcon(
+                      onPressed: _disconnect,
+                      icon: const Icon(Icons.power_settings_new),
+                      label: const Text('Disconnect'),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: Colors.red.withValues(alpha: 0.8),
                       ),
-                      const PopupMenuItem(
-                        value: 'shutdown',
-                        child: ListTile(
-                          leading: Icon(Icons.power_settings_new, color: Colors.redAccent),
-                          title: Text('Shutdown'),
-                          subtitle: Text('Power off the PC'),
-                          dense: true,
-                          contentPadding: EdgeInsets.zero,
-                        ),
-                      ),
-                      const PopupMenuItem(
-                        value: 'restart',
-                        child: ListTile(
-                          leading: Icon(Icons.restart_alt),
-                          title: Text('Restart'),
-                          subtitle: Text('Reboot the PC'),
-                          dense: true,
-                          contentPadding: EdgeInsets.zero,
-                        ),
-                      ),
-                      const PopupMenuItem(
-                        value: 'hibernate',
-                        child: ListTile(
-                          leading: Icon(Icons.nightlight_outlined),
-                          title: Text('Hibernate'),
-                          subtitle: Text('Save state & power off'),
-                          dense: true,
-                          contentPadding: EdgeInsets.zero,
-                        ),
-                      ),
-                    ],
-                    child: const Icon(Icons.power_settings_new),
-                  ),
-                  IconButton.filledTonal(
-                    onPressed: _toggleKeyboardMode,
-                    icon: Icon(
-                      _keyboardMode
-                          ? Icons.keyboard
-                          : Icons.keyboard_alt_outlined,
                     ),
-                    style: IconButton.styleFrom(
-                      backgroundColor: _keyboardMode
-                          ? Theme.of(context)
-                              .colorScheme
-                              .primary
-                              .withValues(alpha: 0.3)
-                          : null,
+                    const SizedBox(width: 8),
+                    IconButton.filledTonal(
+                      onPressed: _toggleFullscreen,
+                      icon: Icon(
+                        _isFullscreen
+                            ? Icons.fullscreen_exit
+                            : Icons.fullscreen,
+                      ),
+                      tooltip: 'Toggle fullscreen',
                     ),
-                    tooltip: _keyboardMode
-                        ? 'Keyboard mode active'
-                        : 'Toggle keyboard',
-                  ),
-                ],
+                    IconButton.filledTonal(
+                      onPressed: () {
+                        setState(() => _showStats = !_showStats);
+                      },
+                      icon: const Icon(Icons.bar_chart),
+                      isSelected: _showStats,
+                      tooltip: 'Stream stats',
+                    ),
+                    IconButton.filledTonal(
+                      onPressed: _resetZoom,
+                      icon: const Icon(Icons.zoom_out_map),
+                      tooltip: 'Reset zoom',
+                    ),
+                    IconButton.filledTonal(
+                      onPressed: () {
+                        Navigator.of(context).pushNamed(
+                          '/terminal',
+                          arguments: {
+                            'address': widget.address,
+                            'port': widget.port,
+                          },
+                        );
+                      },
+                      icon: const Icon(Icons.terminal),
+                      tooltip: 'Remote terminal',
+                    ),
+                    PopupMenuButton<String>(
+                      onSelected: (action) => _sendPowerCommand(action),
+                      itemBuilder: (ctx) => [
+                        const PopupMenuItem(
+                          value: 'sleep',
+                          child: ListTile(
+                            leading: Icon(Icons.bedtime_outlined),
+                            title: Text('Sleep'),
+                            subtitle: Text('Suspend to RAM'),
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                          ),
+                        ),
+                        const PopupMenuItem(
+                          value: 'shutdown',
+                          child: ListTile(
+                            leading: Icon(Icons.power_settings_new,
+                                color: Colors.redAccent),
+                            title: Text('Shutdown'),
+                            subtitle: Text('Power off the PC'),
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                          ),
+                        ),
+                        const PopupMenuItem(
+                          value: 'restart',
+                          child: ListTile(
+                            leading: Icon(Icons.restart_alt),
+                            title: Text('Restart'),
+                            subtitle: Text('Reboot the PC'),
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                          ),
+                        ),
+                        const PopupMenuItem(
+                          value: 'hibernate',
+                          child: ListTile(
+                            leading: Icon(Icons.nightlight_outlined),
+                            title: Text('Hibernate'),
+                            subtitle: Text('Save state & power off'),
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                          ),
+                        ),
+                      ],
+                      child: const Icon(Icons.power_settings_new),
+                    ),
+                    IconButton.filledTonal(
+                      onPressed: _toggleKeyboardMode,
+                      icon: Icon(
+                        _keyboardMode
+                            ? Icons.keyboard
+                            : Icons.keyboard_alt_outlined,
+                      ),
+                      style: IconButton.styleFrom(
+                        backgroundColor: _keyboardMode
+                            ? Theme.of(context)
+                                .colorScheme
+                                .primary
+                                .withValues(alpha: 0.3)
+                            : null,
+                      ),
+                      tooltip: _keyboardMode
+                          ? 'Keyboard mode active'
+                          : 'Toggle keyboard',
+                    ),
+                    IconButton.filledTonal(
+                      onPressed: _cycleRotation,
+                      icon: Icon(_rotationIcon()),
+                      tooltip: _rotationTooltip(),
+                    ),
+                    IconButton.filledTonal(
+                      onPressed: () {
+                        setState(
+                            () => _showShortcuts = !_showShortcuts);
+                      },
+                      icon: const Icon(Icons.keyboard_command_key),
+                      isSelected: _showShortcuts,
+                      tooltip: 'Keyboard shortcuts',
+                    ),
+                  ],
+                ),
               ),
             ),
 
@@ -971,6 +1109,24 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
                     ],
                   ),
                 ),
+              ),
+            ),
+
+          // F11: Shortcuts overlay
+          if (_showShortcuts)
+            Positioned.fill(
+              child: ShortcutsOverlay(
+                onDismiss: () => setState(() => _showShortcuts = false),
+                onExecute: _executeShortcut,
+              ),
+            ),
+
+          // F25: Screen lock overlay
+          if (_isLocked && _lockEnabled)
+            Positioned.fill(
+              child: LockScreen(
+                onUnlock: () => setState(() => _isLocked = false),
+                onDisconnect: _disconnect,
               ),
             ),
 

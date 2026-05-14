@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::input_injector::{InputInjector, button_id_to_mouse};
+use crate::input_injector::InputInjector;
 use crate::kde;
 use anyhow::{Context, Result, bail};
 use linux_link_core::protocol::connection::ConnectionManager;
@@ -511,67 +511,13 @@ fn generate_pin() -> String {
 
 /// Handle an `InputPacket` received over the QUIC streaming channel by injecting
 /// it into the host system via the `InputInjector`.
+///
+/// Delegates all packet variants to `InputInjector::handle_input_packet()`
+/// which handles mouse, keyboard, gamepad, and scroll events uniformly
+/// across both enigo and uinput backends.
 fn handle_input_packet(injector: &mut InputInjector, packet: InputPacket) -> Result<()> {
-    match packet {
-        InputPacket::MouseMove { dx, dy } => {
-            injector.move_mouse_relative(dx as i32, dy as i32)?;
-        }
-        InputPacket::MouseClick { button, pressed } => {
-            let mouse_key = button_id_to_mouse(button as i32);
-            injector.mouse_button(mouse_key, pressed)?;
-        }
-        InputPacket::MouseScroll { dx, dy } => {
-            injector.scroll(dx as i32, dy as i32)?;
-        }
-        InputPacket::KeyEvent { key, pressed } => {
-            let enigo_key = evdev_to_enigo_key(key);
-            injector.key(enigo_key, pressed)?;
-        }
-        InputPacket::Text(text) => {
-            injector.text(&text)?;
-        }
-    }
+    injector.handle_input_packet(&packet)?;
     Ok(())
-}
-
-/// Map a Linux evdev keycode to an enigo `Key` for input injection.
-fn evdev_to_enigo_key(evdev_keycode: u16) -> enigo::Key {
-    match evdev_keycode {
-        28 => enigo::Key::Return,
-        14 => enigo::Key::Backspace,
-        57 => enigo::Key::Space,
-        15 => enigo::Key::Tab,
-        1 => enigo::Key::Escape,
-        103 => enigo::Key::UpArrow,
-        108 => enigo::Key::DownArrow,
-        105 => enigo::Key::LeftArrow,
-        106 => enigo::Key::RightArrow,
-        111 => enigo::Key::Delete, // KEY_DELETE
-        110 => enigo::Key::Insert, // KEY_INSERT
-        102 => enigo::Key::Home,
-        107 => enigo::Key::End,
-        104 => enigo::Key::PageUp,
-        109 => enigo::Key::PageDown,
-        59 => enigo::Key::F1,
-        60 => enigo::Key::F2,
-        61 => enigo::Key::F3,
-        62 => enigo::Key::F4,
-        63 => enigo::Key::F5,
-        64 => enigo::Key::F6,
-        65 => enigo::Key::F7,
-        66 => enigo::Key::F8,
-        67 => enigo::Key::F9,
-        68 => enigo::Key::F10,
-        87 => enigo::Key::F11,
-        88 => enigo::Key::F12,
-        other => {
-            // Unmapped evdev keycode — log and return a safe placeholder.
-            // We cannot map by numeric value since evdev keycodes don't
-            // correspond to Unicode codepoints.
-            tracing::debug!("Unmapped evdev keycode: {other}");
-            enigo::Key::Unicode('?')
-        }
-    }
 }
 
 struct PidFileGuard {

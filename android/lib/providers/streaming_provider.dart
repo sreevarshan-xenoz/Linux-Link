@@ -1,8 +1,19 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+/// Stream rotation mode for F7.
+enum RotationMode {
+  auto,
+  portrait,
+  landscape,
+  rotated180,
+}
+
 final isStreamingProvider = StateProvider<bool>((ref) => false);
 
 final latencyProvider = StateProvider<int>((ref) => 0);
+
+/// Current rotation mode for the stream display.
+final rotationModeProvider = StateProvider<RotationMode>((ref) => RotationMode.auto);
 
 /// Auto-reconnect state.
 ///

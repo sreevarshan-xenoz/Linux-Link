@@ -12,6 +12,7 @@ const TAG_MOUSE_CLICK: u8 = 1;
 const TAG_MOUSE_SCROLL: u8 = 2;
 const TAG_KEY_EVENT: u8 = 3;
 const TAG_TEXT: u8 = 4;
+const TAG_GAMEPAD: u8 = 5;
 
 /// A compact binary input event for real-time remote control.
 ///
@@ -38,6 +39,15 @@ pub enum InputPacket {
     },
     /// Raw text input (typed via clipboard paste or IME).
     Text(String),
+    /// Gamepad state: 6 analog axes + 16-bit button bitmask.
+    Gamepad {
+        /// Left stick X, Left stick Y, Right stick X, Right stick Y, L2, R2.
+        axes: [i16; 6],
+        /// Bitmask of digital buttons (A=0, B=1, X=2, Y=3, LB=4, RB=5,
+        /// Select=6, Start=7, Home=8, LSB=9, RSB=10, DPadUp=11,
+        /// DPadDown=12, DPadLeft=13, DPadRight=14).
+        buttons: u16,
+    },
 }
 
 impl InputPacket {
@@ -66,6 +76,15 @@ impl InputPacket {
                 let mut buf = vec![TAG_KEY_EVENT];
                 buf.extend_from_slice(&key.to_le_bytes());
                 buf.push(if *pressed { 1 } else { 0 });
+                buf
+            }
+            InputPacket::Gamepad { axes, buttons } => {
+                let mut buf = Vec::with_capacity(1 + 12 + 2);
+                buf.push(TAG_GAMEPAD);
+                for &axis in axes {
+                    buf.extend_from_slice(&axis.to_le_bytes());
+                }
+                buf.extend_from_slice(&buttons.to_le_bytes());
                 buf
             }
             InputPacket::Text(text) => {
@@ -110,6 +129,16 @@ impl InputPacket {
                 let key = u16::from_le_bytes(data[1..3].try_into().unwrap());
                 let pressed = data[3] != 0;
                 Ok(InputPacket::KeyEvent { key, pressed })
+            }
+            TAG_GAMEPAD => {
+                anyhow::ensure!(data.len() >= 15, "Gamepad packet too short");
+                let mut axes = [0i16; 6];
+                for (i, axis) in axes.iter_mut().enumerate() {
+                    let offset = 1 + i * 2;
+                    *axis = i16::from_le_bytes(data[offset..offset + 2].try_into().unwrap());
+                }
+                let buttons = u16::from_le_bytes(data[13..15].try_into().unwrap());
+                Ok(InputPacket::Gamepad { axes, buttons })
             }
             TAG_TEXT => {
                 anyhow::ensure!(data.len() >= 5, "Text packet too short");
@@ -211,6 +240,52 @@ mod tests {
     fn test_truncated_packet() {
         // MouseMove needs 5 bytes total, we give 2
         assert!(InputPacket::decode(&[0x00, 0x01]).is_err());
+    }
+
+    #[test]
+    fn test_gamepad_roundtrip() {
+        let packet = InputPacket::Gamepad {
+            axes: [0, 32767, -32768, 100, -100, 0],
+            buttons: 0b1010_0101,
+        };
+        let data = packet.encode();
+        assert_eq!(data.len(), 15); // 1 tag + 12 axes + 2 buttons
+        let decoded = InputPacket::decode(&data).unwrap();
+        match decoded {
+            InputPacket::Gamepad { axes, buttons } => {
+                assert_eq!(axes[0], 0);
+                assert_eq!(axes[1], 32767);
+                assert_eq!(axes[2], -32768);
+                assert_eq!(axes[3], 100);
+                assert_eq!(axes[4], -100);
+                assert_eq!(axes[5], 0);
+                assert_eq!(buttons, 0b1010_0101);
+            }
+            _ => panic!("Wrong variant"),
+        }
+    }
+
+    #[test]
+    fn test_gamepad_truncated() {
+        // Need 15 bytes, give 3
+        assert!(InputPacket::decode(&[5, 0, 1]).is_err());
+    }
+
+    #[test]
+    fn test_gamepad_all_buttons() {
+        let packet = InputPacket::Gamepad {
+            axes: [0; 6],
+            buttons: 0xFFFF,
+        };
+        let data = packet.encode();
+        let decoded = InputPacket::decode(&data).unwrap();
+        match decoded {
+            InputPacket::Gamepad { axes, buttons } => {
+                assert_eq!(buttons, 0xFFFF);
+                assert!(axes.iter().all(|&a| a == 0));
+            }
+            _ => panic!("Wrong variant"),
+        }
     }
 
     #[test]

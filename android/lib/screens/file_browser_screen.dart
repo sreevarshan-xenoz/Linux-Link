@@ -266,28 +266,72 @@ class _FileBrowserScreenState extends ConsumerState<FileBrowserScreen>
                   itemCount: _remoteFiles.length,
                   itemBuilder: (context, index) {
                     final file = _remoteFiles[index];
-                    return ListTile(
-                      leading: Icon(
-                        file.isDirectory
-                            ? Icons.folder
-                            : Icons.insert_drive_file,
-                        color: file.isDirectory
-                            ? Colors.amber
-                            : Theme.of(context).colorScheme.primary,
+                    final dragFile = file.isDirectory ? null : file;
+                    return LongPressDraggable<String>(
+                      data: dragFile != null ? '$_currentRemotePath${dragFile.name}' : null,
+                      feedback: Material(
+                        elevation: 4,
+                        borderRadius: BorderRadius.circular(8),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: Theme.of(context).colorScheme.primaryContainer,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.download, size: 16),
+                              const SizedBox(width: 6),
+                              Text(
+                                file.name,
+                                style: const TextStyle(fontSize: 13),
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
-                      title: Text(file.name),
-                      subtitle: file.isDirectory
-                          ? null
-                          : Text(
-                              '${file.formattedSize}  \u2022  ${file.formattedModified}'),
-                      onTap: () {
-                        if (file.isDirectory) {
-                          _navigateInto(file.name);
-                        }
-                      },
-                      onLongPress: file.isDirectory
-                          ? null
-                          : () => _showFileOptions(file),
+                      childWhenDragging: Opacity(
+                        opacity: 0.4,
+                        child: ListTile(
+                          leading: Icon(
+                            file.isDirectory
+                                ? Icons.folder
+                                : Icons.insert_drive_file,
+                            color: file.isDirectory
+                                ? Colors.amber
+                                : Theme.of(context).colorScheme.primary,
+                          ),
+                          title: Text(file.name),
+                          subtitle: file.isDirectory
+                              ? null
+                              : Text(
+                                  '${file.formattedSize}  ·  ${file.formattedModified}'),
+                        ),
+                      ),
+                      child: ListTile(
+                        leading: Icon(
+                          file.isDirectory
+                              ? Icons.folder
+                              : Icons.insert_drive_file,
+                          color: file.isDirectory
+                              ? Colors.amber
+                              : Theme.of(context).colorScheme.primary,
+                        ),
+                        title: Text(file.name),
+                        subtitle: file.isDirectory
+                            ? null
+                            : Text(
+                                '${file.formattedSize}  ·  ${file.formattedModified}'),
+                        onTap: () {
+                          if (file.isDirectory) {
+                            _navigateInto(file.name);
+                          }
+                        },
+                        onLongPress: file.isDirectory
+                            ? null
+                            : () => _showFileOptions(file),
+                      ),
                     );
                   },
                 ),

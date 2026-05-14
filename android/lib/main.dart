@@ -8,6 +8,7 @@ import 'screens/remote_desktop_screen.dart';
 import 'screens/file_browser_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/terminal_screen.dart';
+import 'screens/trust_screen.dart';
 import 'services/background_service.dart';
 
 final _router = GoRouter(
@@ -52,6 +53,19 @@ final _router = GoRouter(
         return TerminalScreen(
           address: args?['address'] as String? ?? '',
           port: args?['port'] as int? ?? 1716,
+        );
+      },
+    ),
+    GoRoute(
+      path: '/trust',
+      builder: (context, state) {
+        final args = state.extra as Map<String, dynamic>?;
+        return TrustScreen(
+          address: args?['address'] as String? ?? '',
+          fingerprint: args?['fingerprint'] as String? ?? '',
+          onAccept: args?['onAccept'] as VoidCallback?,
+          onReject: args?['onReject'] as VoidCallback?,
+          showTrustedDevices: args?['showTrustedDevices'] as bool? ?? false,
         );
       },
     ),

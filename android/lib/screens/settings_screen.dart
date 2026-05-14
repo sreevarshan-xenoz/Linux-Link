@@ -448,6 +448,21 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
           ),
           const Divider(),
+          // F26: Trusted Devices
+          ListTile(
+            leading: const Icon(Icons.shield_outlined),
+            title: const Text('Trusted Devices'),
+            subtitle: const Text('Manage trusted certificate fingerprints'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Navigator.of(context).pushNamed('/trust', arguments: {
+                'address': '',
+                'fingerprint': '',
+                'showTrustedDevices': true,
+              });
+            },
+          ),
+          const Divider(),
           // Clipboard auto-sync
           ListTile(
             leading: const Icon(Icons.content_copy),

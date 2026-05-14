@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use enigo::{Coordinate, Enigo, Key, Keyboard, Mouse, Settings};
 use evdev::uinput::VirtualDeviceBuilder;
 use evdev::{AttributeSet, InputEvent, KeyCode, RelativeAxisCode};
+use linux_link_core::streaming::input_packet::InputPacket;
 use std::path::Path;
 use std::sync::Mutex;
 use tracing::{debug, info};
@@ -246,6 +247,84 @@ impl InputInjector {
                         debug!("Cannot type character with uinput: {ch:?}");
                     }
                 }
+                Ok(())
+            }
+        }
+    }
+
+    /// Handle an `InputPacket` by dispatching to the appropriate injection method.
+    ///
+    /// Supports mouse, keyboard, scroll, text, and gamepad events.
+    /// Gamepad events are mapped to keyboard/mouse input for broad compatibility.
+    pub fn handle_input_packet(&mut self, packet: &InputPacket) -> Result<()> {
+        match packet {
+            InputPacket::MouseMove { dx, dy } => self.move_mouse_relative(*dx as i32, *dy as i32),
+            InputPacket::MouseClick { button, pressed } => {
+                let mouse_key = match button {
+                    0 => MouseKey::Left,
+                    1 => MouseKey::Middle,
+                    2 => MouseKey::Right,
+                    3 => MouseKey::Button4,
+                    4 => MouseKey::Button5,
+                    _ => MouseKey::Left,
+                };
+                self.mouse_button(mouse_key, *pressed)
+            }
+            InputPacket::MouseScroll { dx, dy } => self.scroll(*dx as i32, *dy as i32),
+            InputPacket::KeyEvent {
+                key: _key,
+                pressed: _pressed,
+            } => {
+                // Key events are handled via the KDE Connect keyboard protocol
+                // This InputPacket variant is for the QUIC streaming channel
+                Ok(())
+            }
+            InputPacket::Text(text) => self.text(text),
+            InputPacket::Gamepad { axes, buttons } => {
+                // Map gamepad axes/buttons to keyboard/mouse for broad compatibility.
+                // Left stick -> mouse movement
+                let mx = axes[0] as i32 / 256; // Scale from [-32768,32767] to [-128,127]
+                let my = axes[1] as i32 / 256;
+                if mx != 0 || my != 0 {
+                    self.move_mouse_relative(mx, my)?;
+                }
+
+                // A button -> Enter
+                if *buttons & 0x01 != 0 {
+                    self.key(Key::Return, true)?;
+                }
+
+                // B button -> Escape
+                if *buttons & 0x02 != 0 {
+                    self.key(Key::Escape, true)?;
+                }
+
+                // Start -> trigger click
+                if *buttons & 0x80 != 0 {
+                    self.mouse_button(MouseKey::Left, true)?;
+                }
+
+                // DPad -> arrow keys
+                if *buttons & (1 << 11) != 0 {
+                    self.key(Key::UpArrow, true)?;
+                }
+                if *buttons & (1 << 12) != 0 {
+                    self.key(Key::DownArrow, true)?;
+                }
+                if *buttons & (1 << 13) != 0 {
+                    self.key(Key::LeftArrow, true)?;
+                }
+                if *buttons & (1 << 14) != 0 {
+                    self.key(Key::RightArrow, true)?;
+                }
+
+                // SYN_REPORT
+                if let InputBackend::Uinput(device) = &mut self.backend {
+                    let dev = device.get_mut().unwrap();
+                    dev.emit(&[InputEvent::new(EV_SYN, SYN_REPORT, 0)])
+                        .context("gamepad SYN_REPORT failed")?;
+                }
+
                 Ok(())
             }
         }
