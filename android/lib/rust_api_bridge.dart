@@ -262,6 +262,65 @@ class _RustApiBridge {
     }
   }
 
+  /// Execute a command on the remote server via KDE Connect exec protocol.
+  /// Returns stdout, stderr, and exit code as a formatted string.
+  Future<String> executeCommand(
+    String address,
+    int port,
+    String command,
+  ) async {
+    final socket = await Socket.connect(address, port,
+        timeout: const Duration(seconds: 5));
+    try {
+      // Step 1: Send LINUX_LINK_HELLO handshake
+      socket.write('LINUX_LINK_HELLO 1\n');
+      await socket.flush();
+
+      // Step 2: Read/discard identity response with timeout
+      try {
+        await socket
+            .cast<List<int>>()
+            .transform(utf8.decoder)
+            .transform(const LineSplitter())
+            .first
+            .timeout(const Duration(milliseconds: 500));
+      } catch (_) {
+        // Proceed regardless
+      }
+
+      // Step 3: Send exec command packet
+      final packet = jsonEncode({
+        'type': 'kdeconnect.linuxlink.exec',
+        'body': {'command': command},
+      });
+      socket.write('$packet\n');
+      await socket.flush();
+
+      // Step 4: Read response packet
+      final line = await socket
+          .cast<List<int>>()
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .first
+          .timeout(const Duration(seconds: 10));
+
+      // Step 5: Parse response
+      try {
+        final json = jsonDecode(line) as Map<String, dynamic>;
+        final body = json['body'] as Map<String, dynamic>?;
+        final stdout = body?['stdout'] as String? ?? '';
+        final stderr = body?['stderr'] as String? ?? '';
+        final exitCode = (body?['exit_code'] as num?)?.toInt() ?? -1;
+
+        return '$stdout\n---END-OUTPUT---\n$stderr\n---END-ERROR---\n$exitCode';
+      } catch (e) {
+        return '\n---END-OUTPUT---\nFailed to parse server response: $e\n---END-ERROR---\n-1';
+      }
+    } finally {
+      await socket.close();
+    }
+  }
+
   /// Send keyboard event (text typing or key code).
   Future<void> sendKeyboardEvent(
     String address,

@@ -853,6 +853,20 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
                     tooltip: 'Reset zoom',
                   ),
                   // Keyboard mode toggle
+                  // Terminal
+                  IconButton.filledTonal(
+                    onPressed: () {
+                      Navigator.of(context).pushNamed(
+                        '/terminal',
+                        arguments: {
+                          'address': widget.address,
+                          'port': widget.port,
+                        },
+                      );
+                    },
+                    icon: const Icon(Icons.terminal),
+                    tooltip: 'Remote terminal',
+                  ),
                   // Power management
                   PopupMenuButton<String>(
                     onSelected: (action) => _sendPowerCommand(action),

@@ -3,8 +3,9 @@ use linux_link_core::protocol::kdeconnect::{DeviceIdentity, KdeConnectService, T
 use std::path::PathBuf;
 
 use crate::plugins::{
-    battery::BatteryPlugin, clipboard::ClipboardPlugin, file_browse::FileBrowsePlugin,
-    input::InputPlugin, notification::NotificationPlugin, power::PowerPlugin, share::SharePlugin,
+    battery::BatteryPlugin, clipboard::ClipboardPlugin, exec::ExecPlugin,
+    file_browse::FileBrowsePlugin, input::InputPlugin, notification::NotificationPlugin,
+    power::PowerPlugin, share::SharePlugin,
 };
 
 pub fn build_default_service() -> Result<KdeConnectService> {
@@ -17,6 +18,7 @@ pub fn build_default_service() -> Result<KdeConnectService> {
     service.register_plugin(InputPlugin::new());
     service.register_plugin(FileBrowsePlugin::new());
     service.register_plugin(PowerPlugin::new());
+    service.register_plugin(ExecPlugin::new());
 
     let (incoming, outgoing) = service.registry.capability_sets();
 
