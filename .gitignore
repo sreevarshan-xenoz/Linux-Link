@@ -122,6 +122,9 @@ local.properties
 # Flutter Android lib (exclude from generic lib/ pattern)
 !android/lib/
 
+# Flutter build artifacts (large .dill files)
+.dart_tool/
+
 # Logs
 audit.log
 *.log
