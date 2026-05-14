@@ -5,6 +5,7 @@
 
 pub mod bitrate;
 pub mod client;
+pub mod encoder_detect;
 pub mod input_packet;
 pub mod session;
 pub mod transport;
@@ -24,6 +25,7 @@ pub use bitrate::AdaptiveBitrate;
 pub use capture_x11::{check_x11_availability, start_x11_capture};
 pub use client::DEFAULT_STREAMING_PORT;
 pub use client::StreamingClient;
+pub use encoder_detect::{AvailableEncoders, HardwareEncoder, probe_encoders, resolve_encoder};
 pub use input_packet::InputPacket;
 pub use session::{SessionType, detect_session_type};
 #[cfg(feature = "server")]
@@ -46,6 +48,8 @@ pub struct StreamingConfig {
     pub profile: H264Profile,
     /// Encoder preset (speed vs quality tradeoff)
     pub preset: EncoderPreset,
+    /// Hardware encoder selection
+    pub hardware_encoder: HardwareEncoder,
 }
 
 /// H.264 encoding profile
@@ -123,6 +127,7 @@ impl Default for StreamingConfig {
             bitrate_bps: 8_000_000, // 8 Mbps
             profile: H264Profile::Main,
             preset: EncoderPreset::VeryFast,
+            hardware_encoder: HardwareEncoder::Auto,
         }
     }
 }

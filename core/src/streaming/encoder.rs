@@ -12,6 +12,7 @@ use ffmpeg_sidecar::child::FfmpegChild;
 use ffmpeg_sidecar::command::FfmpegCommand;
 use tracing::{debug, error, info, trace, warn};
 
+use super::encoder_detect::HardwareEncoder;
 use super::{EncodedPacket, EncoderPreset, H264Profile, StreamingConfig, VideoFrame};
 
 /// Set a file descriptor to non-blocking mode.
@@ -482,7 +483,76 @@ fn build_ffmpeg_args(config: &StreamingConfig, keyframe_interval: u64) -> Vec<St
         EncoderPreset::Slow => "slow".to_string(),
     };
 
-    vec![
+    // Map EncoderPreset to NVENC presets (p1-p7, fastest to slowest)
+    let nvenc_preset = match config.preset {
+        EncoderPreset::UltraFast | EncoderPreset::SuperFast => "p1",
+        EncoderPreset::VeryFast | EncoderPreset::Faster => "p3",
+        EncoderPreset::Fast => "p4",
+        EncoderPreset::Medium => "p5",
+        EncoderPreset::Slow => "p7",
+    };
+
+    // Resolve Auto to the best available hardware encoder
+    use super::encoder_detect::{probe_encoders, resolve_encoder};
+    let resolved = if config.hardware_encoder == HardwareEncoder::Auto {
+        let available = probe_encoders();
+        resolve_encoder(config.hardware_encoder, &available)
+    } else {
+        config.hardware_encoder
+    };
+
+    // Select encoder-specific args based on resolved encoder
+    let encoder_args: Vec<String> = match resolved {
+        HardwareEncoder::Vaapi => {
+            vec![
+                "-vaapi_device".to_string(),
+                "/dev/dri/renderD128".to_string(),
+                "-c:v".to_string(),
+                "h264_vaapi".to_string(),
+                "-b:v".to_string(),
+                config.bitrate_bps.to_string(),
+                "-vf".to_string(),
+                format!(
+                    "format=nv12,hwupload,scale_vaapi=w={}:h={}",
+                    config.width, config.height
+                ),
+            ]
+        }
+        HardwareEncoder::Nvenc => {
+            vec![
+                "-c:v".to_string(),
+                "h264_nvenc".to_string(),
+                "-preset".to_string(),
+                nvenc_preset.to_string(),
+                "-rc".to_string(),
+                "vbr".to_string(),
+                "-b:v".to_string(),
+                config.bitrate_bps.to_string(),
+                "-pix_fmt".to_string(),
+                "yuv420p".to_string(),
+            ]
+        }
+        HardwareEncoder::Auto | HardwareEncoder::Software => {
+            vec![
+                "-c:v".to_string(),
+                "libx264".to_string(),
+                "-profile:v".to_string(),
+                profile_str,
+                "-preset".to_string(),
+                preset_str,
+                "-b:v".to_string(),
+                config.bitrate_bps.to_string(),
+                "-pix_fmt".to_string(),
+                "yuv420p".to_string(),
+                "-x264-params".to_string(),
+                format!("keyint={}:min-keyint=1", keyframe_interval),
+                "-tune".to_string(),
+                "zerolatency".to_string(),
+            ]
+        }
+    };
+
+    let mut args = vec![
         // Suppress banner and informational output to stderr
         "-hide_banner".to_string(),
         "-loglevel".to_string(),
@@ -498,28 +568,19 @@ fn build_ffmpeg_args(config: &StreamingConfig, keyframe_interval: u64) -> Vec<St
         config.fps.to_string(),
         "-i".to_string(),
         "pipe:0".to_string(),
-        // Output encoding: H.264 via libx264
-        "-c:v".to_string(),
-        "libx264".to_string(),
-        "-profile:v".to_string(),
-        profile_str,
-        "-preset".to_string(),
-        preset_str,
-        "-b:v".to_string(),
-        format!("{}", config.bitrate_bps),
-        // Convert from BGRA (4:4:4) to yuv420p (4:2:0) which all H.264 profiles support
-        "-pix_fmt".to_string(),
-        "yuv420p".to_string(),
-        "-x264-params".to_string(),
-        format!("keyint={}:min-keyint=1", keyframe_interval),
-        // Reduce encoder latency for real-time streaming
-        "-tune".to_string(),
-        "zerolatency".to_string(),
-        // Output format: raw H.264 bitstream to stdout
+    ];
+
+    // Append encoder-specific args
+    args.extend(encoder_args);
+
+    // Output format: raw H.264 bitstream to stdout
+    args.extend(vec![
         "-f".to_string(),
         "h264".to_string(),
         "pipe:1".to_string(),
-    ]
+    ]);
+
+    args
 }
 
 #[cfg(test)]
@@ -609,6 +670,7 @@ mod tests {
             bitrate_bps: 5_000_000,
             profile: H264Profile::Baseline,
             preset: EncoderPreset::UltraFast,
+            hardware_encoder: HardwareEncoder::Software,
         };
         let args = build_ffmpeg_args(&config, 60);
 
@@ -635,6 +697,7 @@ mod tests {
             bitrate_bps: 8_000_000,
             profile: H264Profile::High,
             preset: EncoderPreset::Medium,
+            hardware_encoder: HardwareEncoder::Software,
         };
         let args = build_ffmpeg_args(&config, 120);
 
@@ -657,6 +720,7 @@ mod tests {
             bitrate_bps: 1_000_000,
             profile: H264Profile::Baseline,
             preset: EncoderPreset::UltraFast,
+            hardware_encoder: HardwareEncoder::Auto,
         };
 
         let mut encoder = VideoEncoder::new(config).expect("FFmpeg should be installed");
@@ -717,6 +781,7 @@ mod tests {
             bitrate_bps: 1_000_000,
             profile: H264Profile::Baseline,
             preset: EncoderPreset::UltraFast,
+            hardware_encoder: HardwareEncoder::Auto,
         };
 
         let mut encoder = VideoEncoder::new(config).expect("FFmpeg should be installed");
@@ -752,6 +817,7 @@ mod tests {
             bitrate_bps: 1_000_000,
             profile: H264Profile::Baseline,
             preset: EncoderPreset::UltraFast,
+            hardware_encoder: HardwareEncoder::Auto,
         };
         config.fps = 30;
 
@@ -794,6 +860,7 @@ mod tests {
             bitrate_bps: 1_000_000,
             profile: H264Profile::Baseline,
             preset: EncoderPreset::UltraFast,
+            hardware_encoder: HardwareEncoder::Auto,
         };
 
         let mut encoder = VideoEncoder::new(config).expect("FFmpeg should be installed");
@@ -834,6 +901,7 @@ mod tests {
             bitrate_bps: 1_000_000,
             profile: H264Profile::Baseline,
             preset: EncoderPreset::UltraFast,
+            hardware_encoder: HardwareEncoder::Auto,
         };
 
         let mut encoder = VideoEncoder::new(config).expect("FFmpeg should be installed");

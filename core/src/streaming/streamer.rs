@@ -496,7 +496,7 @@ impl AdaptiveBitrateMonitor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::streaming::{EncoderPreset, H264Profile};
+    use crate::streaming::{EncoderPreset, H264Profile, HardwareEncoder};
 
     #[test]
     fn test_streaming_server_creation() {
@@ -534,6 +534,7 @@ mod tests {
             bitrate_bps: 2_000_000,
             profile: H264Profile::Baseline,
             preset: EncoderPreset::UltraFast,
+            hardware_encoder: HardwareEncoder::Auto,
         };
         assert_eq!(low.bitrate_bps, 2_000_000);
 
@@ -545,6 +546,7 @@ mod tests {
             bitrate_bps: 20_000_000,
             profile: H264Profile::High,
             preset: EncoderPreset::Medium,
+            hardware_encoder: HardwareEncoder::Auto,
         };
         assert_eq!(high.bitrate_bps, 20_000_000);
     }
