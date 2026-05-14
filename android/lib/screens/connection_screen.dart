@@ -104,6 +104,94 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
     await bookmarks.toggle(peer);
   }
 
+  void _wakePeer(PeerInfo peer) {
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        var macController = TextEditingController();
+        return AlertDialog(
+          title: const Text('Wake on LAN'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Enter the MAC address for ${peer.name} to send a Wake-on-LAN magic packet.',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Format: AA:BB:CC:DD:EE:FF',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      fontFamily: 'monospace',
+                    ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: macController,
+                decoration: const InputDecoration(
+                  labelText: 'MAC Address',
+                  hintText: 'AA:BB:CC:DD:EE:FF',
+                  helperText: 'Required to wake the machine on your LAN',
+                  border: OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.wifi),
+                ),
+                textInputAction: TextInputAction.done,
+                textCapitalization: TextCapitalization.characters,
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton.icon(
+              onPressed: () async {
+                final mac = macController.text.trim();
+                if (mac.isEmpty) return;
+                Navigator.pop(ctx);
+
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Sending Wake-on-LAN magic packet...'),
+                    duration: Duration(seconds: 5),
+                  ),
+                );
+
+                try {
+                  // Use standard LAN broadcast address
+                  await bridge.rustApi.sendWol(mac, '255.255.255.255');
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Wake signal sent to ${peer.name}'),
+                        backgroundColor: Colors.green,
+                        duration: const Duration(seconds: 3),
+                      ),
+                    );
+                  }
+                } catch (e) {
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Failed to send wake signal: $e'),
+                        backgroundColor: Colors.red,
+                      ),
+                    );
+                  }
+                }
+              },
+              icon: const Icon(Icons.power_settings_new),
+              label: const Text('Send Wake Signal'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -345,9 +433,25 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
           peer: peer,
           onTap: peer.online ? () => _connectToPeer(peer) : null,
         ),
+        // Wake button (only for offline peers)
+        if (!peer.online)
+          Positioned(
+            right: 40,
+            top: 0,
+            bottom: 0,
+            child: Center(
+              child: IconButton(
+                icon: const Icon(Icons.wifi_find, size: 20),
+                color: Colors.orange,
+                onPressed: () => _wakePeer(peer),
+                tooltip: 'Wake on LAN',
+                splashRadius: 16,
+              ),
+            ),
+          ),
         // Bookmark star button
         Positioned(
-          right: 40,
+          right: peer.online ? 40 : 80,
           top: 0,
           bottom: 0,
           child: Center(
