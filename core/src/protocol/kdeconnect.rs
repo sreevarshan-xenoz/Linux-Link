@@ -118,6 +118,14 @@ pub struct TcpDeviceSender<W> {
     writer: Arc<Mutex<W>>,
 }
 
+impl<W> Clone for TcpDeviceSender<W> {
+    fn clone(&self) -> Self {
+        Self {
+            writer: self.writer.clone(),
+        }
+    }
+}
+
 impl<W> TcpDeviceSender<W>
 where
     W: tokio::io::AsyncWrite + Unpin + Send,

@@ -1,7 +1,7 @@
 use crate::config::Config;
 use crate::input_injector::InputInjector;
 use crate::kde;
-use crate::notification_monitor::start_notification_monitor;
+use crate::notification_monitor::{start_notification_monitor, ForwardedNotification};
 use anyhow::{Context, Result, bail};
 use linux_link_core::protocol::connection::ConnectionManager;
 use linux_link_core::protocol::kdeconnect::{NetworkPacket, PluginRegistry, TcpDeviceSender};
@@ -12,11 +12,17 @@ use linux_link_core::streaming::transport::{CertManager, StreamTransportConfig};
 use linux_link_core::tailscale::{DiscoveryEvent, DiscoveryService, TailscaleClient};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::tcp::OwnedWriteHalf;
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::time::timeout;
+
+/// Active KDE Connect client connections for broadcasting notifications.
+static ACTIVE_CLIENTS: LazyLock<Mutex<Vec<TcpDeviceSender<OwnedWriteHalf>>>> =
+    LazyLock::new(|| Mutex::new(Vec::new()));
 
 pub async fn run(config: Config) -> Result<()> {
     let pid_file = pid_file_path()?;
@@ -24,13 +30,23 @@ pub async fn run(config: Config) -> Result<()> {
     let _pid_guard = PidFileGuard { path: pid_file };
 
     let tailscale = TailscaleClient::new().context("failed to initialize Tailscale client")?;
-    tailscale
-        .wait_for_ready(Duration::from_secs(30))
-        .await
-        .context("tailscale is not ready")?;
+    let tailscale_ready = match tailscale.wait_for_ready(Duration::from_secs(5)).await {
+        Ok(_) => true,
+        Err(e) => {
+            tracing::warn!("Tailscale not ready: {e}");
+            false
+        }
+    };
 
-    let self_ip = tailscale.get_self_ip().await?;
-    tracing::info!("Tailscale online at {}", self_ip);
+    let mut local_ips = linux_link_core::tailscale::lan::get_local_ips().await;
+    if tailscale_ready {
+        if let Ok(ip) = tailscale.get_self_ip().await {
+            tracing::info!("Tailscale online at {}", ip);
+            if !local_ips.contains(&ip) {
+                local_ips.push(ip);
+            }
+        }
+    }
 
     let kde_service = kde::build_default_service().context("failed to initialize KDE service")?;
     let plugin_count = kde_service.registry.plugin_names().len();
@@ -45,10 +61,26 @@ pub async fn run(config: Config) -> Result<()> {
         trusted_count
     );
 
+    // Register mDNS service for LAN discovery
+    let lan_discovery = linux_link_core::tailscale::lan::LanDiscoveryService::new()?;
+    let host_name = kde_service
+        .identity
+        .as_ref()
+        .map(|i| i.device_name.clone())
+        .unwrap_or_else(|| "linux-link-host".to_string());
+
+    lan_discovery.register_service(&host_name, config.control_port, local_ips)?;
+
     let discovery = DiscoveryService::new(tailscale.clone());
     let mut discovery_rx = discovery.subscribe();
     tokio::spawn(async move {
         discovery.run(Duration::from_secs(10)).await;
+    });
+
+    // Also run LAN discovery browser to detect other Linux Link servers
+    let mut lan_rx = lan_discovery.subscribe();
+    tokio::spawn(async move {
+        lan_discovery.run(Duration::from_secs(30)).await;
     });
 
     let bind_addr = format!("0.0.0.0:{}", config.control_port);
@@ -59,7 +91,47 @@ pub async fn run(config: Config) -> Result<()> {
     tracing::info!("Control listener ready on {}", bind_addr);
 
     // F19: Start notification monitor for forwarding PC notifications to Android clients
-    let _notification_tx = start_notification_monitor();
+    let notification_tx = start_notification_monitor();
+    // Spawn a task that broadcasts captured notifications to all connected clients
+    {
+        let mut notify_rx = notification_tx.subscribe();
+        tokio::spawn(async move {
+            tracing::info!("Notification broadcast task started");
+            loop {
+                match notify_rx.recv().await {
+                    Ok(notification) => {
+                        let packet_json = notification.to_kdeconnect_payload();
+                        match NetworkPacket::from_wire(&packet_json) {
+                            Ok(packet) => {
+                                let mut clients = ACTIVE_CLIENTS.lock().await;
+                                let mut alive = Vec::new();
+                                for sender in clients.iter() {
+                                    match sender.send_packet(&packet).await {
+                                        Ok(()) => alive.push(sender.clone()),
+                                        Err(e) => {
+                                            tracing::debug!("Removing dead client from broadcast: {e}");
+                                        }
+                                    }
+                                }
+                                *clients = alive;
+                                if clients.len() > 0 {
+                                    tracing::debug!("Forwarded notification to {} client(s)", clients.len());
+                                }
+                            }
+                            Err(e) => tracing::warn!("Failed to parse notification packet: {e}"),
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        tracing::info!("Notification broadcast channel closed");
+                        break;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!("Notification broadcast lagged by {n} messages");
+                    }
+                }
+            }
+        });
+    }
 
     // Start the QUIC streaming server in the background for real-time screen control.
     //
@@ -143,6 +215,17 @@ pub async fn run(config: Config) -> Result<()> {
                 match event {
                     Ok(event) => handle_discovery_event(event),
                     Err(error) => tracing::warn!("Discovery channel error: {}", error),
+                }
+            }
+            lan_event = lan_rx.recv() => {
+                match lan_event {
+                    Ok(linux_link_core::tailscale::lan::LanEvent::PeerDiscovered(peer)) => {
+                        handle_discovery_event(DiscoveryEvent::PeerDiscovered(peer));
+                    }
+                    Ok(linux_link_core::tailscale::lan::LanEvent::PeerOffline(name)) => {
+                        handle_discovery_event(DiscoveryEvent::PeerOffline(name));
+                    }
+                    _ => {}
                 }
             }
         }
@@ -264,26 +347,10 @@ pub async fn connect_peer(peer: String, port: u16) -> Result<()> {
     let address = resolve_peer_address(&tailscale, &peer).await?;
 
     let manager = ConnectionManager::new(Duration::from_secs(10));
-    let mut stream = manager
+    let _stream = manager
         .connect(&address, port)
         .await
         .with_context(|| format!("failed to connect to {}:{}", address, port))?;
-
-    stream
-        .write_all(format!("{}\n", HANDSHAKE_HELLO).as_bytes())
-        .await
-        .context("failed to write handshake")?;
-
-    let mut reader = BufReader::new(stream);
-    let mut response = String::new();
-    timeout(Duration::from_secs(5), reader.read_line(&mut response))
-        .await
-        .context("handshake timeout")?
-        .context("failed to read handshake response")?;
-
-    if response.trim() != HANDSHAKE_OK {
-        bail!("handshake failed: {}", response.trim());
-    }
 
     println!("Connected to {}:{} ({})", address, port, HANDSHAKE_OK);
     Ok(())
@@ -299,6 +366,9 @@ async fn handle_connection_with_kde(
     registry: &Arc<PluginRegistry>,
 ) -> Result<()> {
     use tokio::io::AsyncWriteExt;
+
+    let peer_addr = stream.peer_addr().ok();
+    tracing::info!("Handling new connection from {:?}", peer_addr);
 
     let (reader_half, writer_half) = stream.into_split();
     let mut reader = BufReader::new(reader_half);
@@ -317,12 +387,25 @@ async fn handle_connection_with_kde(
         bail!("connection closed before handshake")
     }
 
+    tracing::debug!("Received handshake line from {:?}: {:?}", peer_addr, line.trim());
+
     if line.trim() != HANDSHAKE_HELLO {
+        tracing::warn!("Invalid handshake preface from {:?}: {:?}", peer_addr, line.trim());
         let mut w = writer.lock().await;
         w.write_all(b"LINUX_LINK_ERR 1\n")
             .await
             .context("failed writing error handshake")?;
         bail!("invalid handshake preface")
+    }
+
+    // Step 1.5: Send HANDSHAKE_OK back to client
+    {
+        tracing::info!("Handshake successful for {:?}, sending HANDSHAKE_OK", peer_addr);
+        let mut w = writer.lock().await;
+        w.write_all(format!("{}\n", HANDSHAKE_OK).as_bytes())
+            .await
+            .context("failed writing handshake OK")?;
+        w.flush().await?;
     }
 
     // Step 2: Send identity packet
@@ -338,6 +421,13 @@ async fn handle_connection_with_kde(
     // Step 3: Enter KDE Connect packet loop
     let sender = TcpDeviceSender::from_arc(writer);
     let sender_ref = &sender;
+
+    // Register this client for notification broadcasting.
+    // Dead writers are automatically pruned on send failure.
+    {
+        let mut clients = ACTIVE_CLIENTS.lock().await;
+        clients.push(sender.clone());
+    }
 
     loop {
         let mut line = String::new();
