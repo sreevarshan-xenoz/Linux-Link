@@ -13,6 +13,8 @@ pub mod transport;
 
 // Server-only modules — these require Linux-specific dependencies
 #[cfg(feature = "capture")]
+pub mod audio_capture;
+#[cfg(feature = "capture")]
 pub mod capture;
 #[cfg(feature = "capture")]
 pub mod capture_x11;

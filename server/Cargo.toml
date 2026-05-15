@@ -31,3 +31,6 @@ evdev.workspace = true
 
 # Cancellation tokens and utilities
 tokio-util.workspace = true
+
+# UUID for persistent device ID
+uuid.workspace = true

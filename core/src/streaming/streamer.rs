@@ -12,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use super::audio::{AudioConfig, AudioEncoder as AudioOpusEncoder};
+use super::audio_capture;
 use super::bitrate::AdaptiveBitrate;
 use super::capture;
 use super::encoder::VideoEncoder;
@@ -423,10 +424,12 @@ impl StreamingServer {
 
         // Task 6: Audio capture + Opus encoding + QUIC send (F1: Audio Streaming)
         //
-        // Captures system audio (currently silence fallback, PipeWire in future),
-        // encodes to Opus at 48 kHz / stereo / 64 kbps, and sends over the QUIC
-        // connection as individual unidirectional streams with STREAM_KIND_AUDIO.
+        // Captures system audio via PipeWire loopback when available,
+        // encodes to Opus at 48 kHz / stereo / 64 kbps, and sends over QUIC
+        // as unidirectional streams with STREAM_KIND_AUDIO.
+        // Falls back to silence if PipeWire audio capture is unavailable.
         let audio_cancel = cancel.clone();
+        let audio_pipeline_cancel = cancel.clone();
         tasks.spawn(async move {
             info!("Audio capture task started");
 
@@ -449,80 +452,106 @@ impl StreamingServer {
             let channels = encoder.config().channels;
             let frame_size_ms = encoder.config().frame_duration_ms as u64;
 
-            // Create a silence PCM buffer for the fallback capture
-            let pcm_buffer = vec![0i16; frame_samples * channels as usize];
+            // Try PipeWire audio loopback capture
+            let (pcm_tx, mut pcm_rx) = mpsc::channel::<audio_capture::PcmBuffer>(8);
+            let pw_cancel = audio_pipeline_cancel.clone();
+            let pw_err = match audio_capture::start_audio_capture(
+                48000, 2, 20, pcm_tx, pw_cancel,
+            )
+            .await
+            {
+                Ok(_session) => {
+                    info!("Using PipeWire audio loopback capture");
+                    None
+                }
+                Err(e) => {
+                    info!("PipeWire audio capture unavailable: {e}, falling back to silence");
+                    Some(e)
+                }
+            };
+            let using_pipewire = pw_err.is_none();
 
-            let mut interval = tokio::time::interval(Duration::from_millis(frame_size_ms));
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            // Silence fallback buffer
+            let silence_buffer = vec![0i16; frame_samples * channels as usize];
+            let mut silence_interval = tokio::time::interval(Duration::from_millis(frame_size_ms));
+            silence_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
             let mut packet_seq = 0u64;
             let mut packets_sent = 0u64;
             let mut connection_closed = false;
 
-            loop {
-                tokio::select! {
-                    biased;
-
-                    _ = audio_cancel.cancelled() => {
-                        info!("Audio capture task cancelled after {packets_sent} packets");
-                        break;
-                    }
-
-                    _ = interval.tick() => {
-                        if connection_closed {
+            if using_pipewire {
+                // Audio capture with real PCM frames from PipeWire
+                loop {
+                    tokio::select! {
+                        biased;
+                        _ = audio_cancel.cancelled() => {
+                            info!("Audio capture task cancelled after {packets_sent} packets");
                             break;
                         }
+                        pcm = pcm_rx.recv() => {
+                            let Some(pcm) = pcm else {
+                                info!("PipeWire audio capture ended");
+                                break;
+                            };
+                            if connection_closed { break; }
 
-                        // TODO: Replace with PipeWire audio loopback capture
-                        // Currently encoding silence PCM frames.
-                        let packet = match encoder.encode(&pcm_buffer) {
-                            Ok(Some(p)) => p,
-                            Ok(None) => continue,
-                            Err(e) => {
-                                debug!("Audio encode error: {e}");
+                            let packet = match encoder.encode(&pcm.data) {
+                                Ok(Some(p)) => p,
+                                Ok(None) => continue,
+                                Err(e) => { debug!("Audio encode error: {e}"); continue; }
+                            };
+
+                            if let Err(e) = send_audio_packet(
+                                &conn_for_audio, packet, packet_seq, &mut connection_closed,
+                            ).await {
+                                warn!("Audio send failed: {e}");
+                                connection_closed = true;
                                 continue;
                             }
-                        };
 
-                        // Send over QUIC with STREAM_KIND_AUDIO header
-                        match conn_for_audio.open_uni().await {
-                            Ok(mut send_stream) => {
-                                let header = transport::PacketHeader {
-                                    sequence: packet_seq,
-                                    stream_kind: transport::STREAM_KIND_AUDIO,
-                                    is_keyframe: false,
-                                    timestamp_us: packet.timestamp.elapsed().as_micros() as u64,
-                                };
+                            packets_sent += 1;
+                            packet_seq += 1;
 
-                                if let Err(e) = send_stream.write_all(&header.as_bytes()).await {
-                                    warn!("Audio send failed: {e}");
-                                    connection_closed = true;
-                                    continue;
-                                }
-                                if let Err(e) = send_stream.write_all(&packet.data).await {
-                                    warn!("Audio data send failed: {e}");
-                                    connection_closed = true;
-                                    continue;
-                                }
-                                if let Err(e) = send_stream.finish() {
-                                    warn!("Audio finish failed: {e}");
-                                    connection_closed = true;
-                                    continue;
-                                }
-
-                                packets_sent += 1;
-                                packet_seq += 1;
-
-                                if packets_sent.is_multiple_of(600) {
-                                    info!(
-                                        "Audio streamed: {packets_sent} packets ({}s of audio)",
-                                        packets_sent * frame_size_ms / 1000
-                                    );
-                                }
+                            if packets_sent.is_multiple_of(600) {
+                                info!("Audio streamed: {packets_sent} packets ({}s of audio)",
+                                    packets_sent * frame_size_ms / 1000);
                             }
-                            Err(e) => {
-                                warn!("Failed to open audio stream: {e}");
+                        }
+                    }
+                }
+            } else {
+                // Fallback: encode silence at frame interval
+                loop {
+                    tokio::select! {
+                        biased;
+                        _ = audio_cancel.cancelled() => {
+                            info!("Silence audio task cancelled after {packets_sent} packets");
+                            break;
+                        }
+                        _ = silence_interval.tick() => {
+                            if connection_closed { break; }
+
+                            let packet = match encoder.encode(&silence_buffer) {
+                                Ok(Some(p)) => p,
+                                Ok(None) => continue,
+                                Err(e) => { debug!("Audio encode error: {e}"); continue; }
+                            };
+
+                            if let Err(e) = send_audio_packet(
+                                &conn_for_audio, packet, packet_seq, &mut connection_closed,
+                            ).await {
+                                warn!("Audio send failed: {e}");
                                 connection_closed = true;
+                                continue;
+                            }
+
+                            packets_sent += 1;
+                            packet_seq += 1;
+
+                            if packets_sent.is_multiple_of(600) {
+                                info!("Audio streamed (silence): {packets_sent} packets ({}s)",
+                                    packets_sent * frame_size_ms / 1000);
                             }
                         }
                     }
@@ -662,6 +691,33 @@ impl AdaptiveBitrateMonitor {
                     self.controller.update_rtt(rtt_ms);
                 }
             }
+        }
+    }
+}
+
+/// Helper: send an encoded audio packet over the QUIC connection.
+async fn send_audio_packet(
+    conn: &quinn::Connection,
+    packet: super::AudioPacket,
+    sequence: u64,
+    connection_closed: &mut bool,
+) -> Result<()> {
+    match conn.open_uni().await {
+        Ok(mut send_stream) => {
+            let header = transport::PacketHeader {
+                sequence,
+                stream_kind: transport::STREAM_KIND_AUDIO,
+                is_keyframe: false,
+                timestamp_us: packet.timestamp.elapsed().as_micros() as u64,
+            };
+            send_stream.write_all(&header.as_bytes()).await?;
+            send_stream.write_all(&packet.data).await?;
+            send_stream.finish()?;
+            Ok(())
+        }
+        Err(e) => {
+            *connection_closed = true;
+            Err(anyhow::anyhow!("Failed to open audio stream: {e}"))
         }
     }
 }
