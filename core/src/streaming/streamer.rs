@@ -147,7 +147,7 @@ impl StreamingServer {
         let capture_config = self.config.clone();
         let _capture_bitrate_rx = self.bitrate_watcher();
         let capture_cancel = cancel.clone();
-        let capture_session = capture::start_capture(capture_config, frame_tx, capture_cancel)
+        let capture_session = capture::start_capture_auto(capture_config, frame_tx, capture_cancel)
             .await
             .context("Failed to start screen capture")?;
 

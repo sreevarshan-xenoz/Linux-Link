@@ -24,6 +24,8 @@ pub mod streamer;
 pub use audio::{AudioConfig, AudioEncoder, AudioPacket};
 pub use bitrate::AdaptiveBitrate;
 #[cfg(feature = "capture")]
+pub use capture::start_capture_auto;
+#[cfg(feature = "capture")]
 pub use capture_x11::{check_x11_availability, start_x11_capture};
 pub use client::DEFAULT_STREAMING_PORT;
 pub use client::StreamingClient;
