@@ -11,39 +11,54 @@ part 'api.freezed.dart';
 // These functions are ignored because they are not marked as `pub`: `android_to_evdev_keycode`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `DiscoveryEvent`
 
+/// Set the persistent data directory for certs and state.
+/// Must be called before `connect_streaming` for cert persistence.
+Future<void> setDataDir({required String path}) =>
+    RustApi.instance.api.crateApiSetDataDir(path: path);
+
 /// Get version string
-Future<String> version() => RustLib.instance.api.crateApiVersion();
+Future<String> version() => RustApi.instance.api.crateApiVersion();
 
 /// Check Tailscale status
 Future<bool> checkTailscaleStatus() =>
-    RustLib.instance.api.crateApiCheckTailscaleStatus();
+    RustApi.instance.api.crateApiCheckTailscaleStatus();
 
-/// Get list of peers on the tailnet
-Future<List<PeerInfoDto>> getPeers() => RustLib.instance.api.crateApiGetPeers();
+/// Get list of peers on the tailnet and LAN
+Future<List<PeerInfoDto>> getPeers() => RustApi.instance.api.crateApiGetPeers();
 
 /// Connect to a peer
 Future<ConnectionState> connectToPeer(
         {required String address, required int port}) =>
-    RustLib.instance.api.crateApiConnectToPeer(address: address, port: port);
+    RustApi.instance.api.crateApiConnectToPeer(address: address, port: port);
+
+/// Poll for incoming KDE Connect packets from the control connection.
+/// Returns up to 16 queued packet JSON strings. Flutter should call this
+/// periodically while connected to process server push messages (notifications,
+/// clipboard sync, etc.).
+Future<List<String>> pollIncomingPackets() =>
+    RustApi.instance.api.crateApiPollIncomingPackets();
 
 /// Send clipboard content to peer using KDE Connect protocol.
 Future<void> sendClipboard(
         {required String address,
         required int port,
         required String content}) =>
-    RustLib.instance.api
+    RustApi.instance.api
         .crateApiSendClipboard(address: address, port: port, content: content);
 
 /// Get clipboard content from peer.
+///
+/// Tries the existing control connection first for lower latency.
+/// Falls back to a new TCP connection if not currently connected.
 Future<String> getClipboard({required String address, required int port}) =>
-    RustLib.instance.api.crateApiGetClipboard(address: address, port: port);
+    RustApi.instance.api.crateApiGetClipboard(address: address, port: port);
 
 /// Send file to peer using KDE Share protocol.
 Future<void> sendFile(
         {required String address,
         required int port,
         required String filePath}) =>
-    RustLib.instance.api
+    RustApi.instance.api
         .crateApiSendFile(address: address, port: port, filePath: filePath);
 
 /// List files in a remote directory using the file browse protocol.
@@ -51,7 +66,7 @@ Future<List<RemoteFileDto>> listRemoteFiles(
         {required String address,
         required int port,
         required String remotePath}) =>
-    RustLib.instance.api.crateApiListRemoteFiles(
+    RustApi.instance.api.crateApiListRemoteFiles(
         address: address, port: port, remotePath: remotePath);
 
 /// Request remote screen streaming.
@@ -60,38 +75,68 @@ Future<List<RemoteFileDto>> listRemoteFiles(
 /// Pass `None` to use the default monitor.
 Future<void> connectStreaming(
         {required String address, required int port, int? monitorIndex}) =>
-    RustLib.instance.api.crateApiConnectStreaming(
+    RustApi.instance.api.crateApiConnectStreaming(
         address: address, port: port, monitorIndex: monitorIndex);
 
 /// Stop remote screen streaming.
-Future<void> stopStreaming() => RustLib.instance.api.crateApiStopStreaming();
+Future<void> stopStreaming() => RustApi.instance.api.crateApiStopStreaming();
 
-/// Check if streaming is active by inspecting the streaming handle.
-bool isStreamingActive() => RustLib.instance.api.crateApiIsStreamingActive();
+/// Check if streaming is active using an atomic flag (no lock contention).
+bool isStreamingActive() => RustApi.instance.api.crateApiIsStreamingActive();
 
 /// Get the current RTT to the streaming server in microseconds.
-BigInt getStreamingRtt() => RustLib.instance.api.crateApiGetStreamingRtt();
+BigInt getStreamingRtt() => RustApi.instance.api.crateApiGetStreamingRtt();
 
 /// Get detailed streaming session statistics.
 StreamingStatsDto getStreamingStats() =>
-    RustLib.instance.api.crateApiGetStreamingStats();
+    RustApi.instance.api.crateApiGetStreamingStats();
+
+/// List all trusted peers (certificate labels) from the active streaming session's
+/// CertManager. Returns an empty list if no streaming session is active.
+List<String> listTrustedPeers() =>
+    RustApi.instance.api.crateApiListTrustedPeers();
+
+/// Remove a trusted peer certificate by label. Returns true if the peer was
+/// found and removed, false otherwise. Persists the change to disk.
+bool forgetTrustedPeer({required String label}) =>
+    RustApi.instance.api.crateApiForgetTrustedPeer(label: label);
 
 /// Get the number of monitors available on the remote server.
 ///
 /// F2: Multi-monitor support — returns 0 if detection fails or no display.
 Future<int> getMonitorCount({required String address, required int port}) =>
-    RustLib.instance.api.crateApiGetMonitorCount(address: address, port: port);
+    RustApi.instance.api.crateApiGetMonitorCount(address: address, port: port);
+
+/// Execute a power management command on the remote server.
+/// Supported actions: "sleep", "shutdown", "restart", "hibernate".
+Future<void> sendPowerCommand(
+        {required String address, required int port, required String action}) =>
+    RustApi.instance.api
+        .crateApiSendPowerCommand(address: address, port: port, action: action);
+
+/// Execute a shell command on the remote server and return stdout + stderr + exit code.
+Future<String> executeRemoteCommand(
+        {required String address,
+        required int port,
+        required String command}) =>
+    RustApi.instance.api.crateApiExecuteRemoteCommand(
+        address: address, port: port, command: command);
 
 /// Receive queued audio packets from the streaming client (F1: Audio Streaming).
 ///
 /// Each audio packet contains raw Opus-encoded data (typically 20ms @ 48kHz stereo).
 /// Returns up to `MAX_AUDIO_PACKETS_PER_RECEIVE` packets.
 Future<List<Uint8List>> receiveAudio({required BigInt timeoutMs}) =>
-    RustLib.instance.api.crateApiReceiveAudio(timeoutMs: timeoutMs);
+    RustApi.instance.api.crateApiReceiveAudio(timeoutMs: timeoutMs);
 
 /// Receive queued H.264 frames from the streaming client.
+///
+/// The `timeout_ms` parameter only applies to waiting for the FIRST frame.
+/// After the first frame arrives, any additional queued frames are drained
+/// immediately with `try_recv()` (no further timeout). Returns up to
+/// `MAX_FRAMES_PER_RECEIVE` frames per call.
 Future<List<FrameDto>> receiveFrames({required BigInt timeoutMs}) =>
-    RustLib.instance.api.crateApiReceiveFrames(timeoutMs: timeoutMs);
+    RustApi.instance.api.crateApiReceiveFrames(timeoutMs: timeoutMs);
 
 /// Send mouse event to remote, preferring the low-latency QUIC streaming channel.
 ///
@@ -103,7 +148,7 @@ Future<void> sendMouseEvent(
         required double y,
         required int button,
         required bool isPressed}) =>
-    RustLib.instance.api.crateApiSendMouseEvent(
+    RustApi.instance.api.crateApiSendMouseEvent(
         address: address,
         port: port,
         x: x,
@@ -119,7 +164,7 @@ Future<void> sendKeyboardEvent(
         required int port,
         required int keyCode,
         required String text}) =>
-    RustLib.instance.api.crateApiSendKeyboardEvent(
+    RustApi.instance.api.crateApiSendKeyboardEvent(
         address: address, port: port, keyCode: keyCode, text: text);
 
 @freezed
