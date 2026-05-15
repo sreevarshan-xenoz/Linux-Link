@@ -809,6 +809,11 @@ pub async fn receive_audio(timeout_ms: u64) -> Vec<Vec<u8>> {
 }
 
 /// Receive queued H.264 frames from the streaming client.
+///
+/// The `timeout_ms` parameter only applies to waiting for the FIRST frame.
+/// After the first frame arrives, any additional queued frames are drained
+/// immediately with `try_recv()` (no further timeout). Returns up to
+/// `MAX_FRAMES_PER_RECEIVE` frames per call.
 #[frb]
 pub async fn receive_frames(timeout_ms: u64) -> Vec<FrameDto> {
     let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
