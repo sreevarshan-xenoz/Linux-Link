@@ -300,6 +300,14 @@ class _RustApiBridge {
     return frb.forgetTrustedPeer(label: label);
   }
 
+  /// Send gamepad state over the QUIC streaming channel.
+  Future<void> sendGamepadEvent({
+    required List<int> axes,
+    required int buttons,
+  }) async {
+    await frb.sendGamepadEvent(axes: axes, buttons: buttons);
+  }
+
   ConnectionState _mapConnectionState(frb.ConnectionState state) {
     return state.when(
       connected: () => ConnectionState.connected,

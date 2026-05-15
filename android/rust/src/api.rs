@@ -1087,6 +1087,53 @@ pub async fn send_keyboard_event(
     Ok(())
 }
 
+/// Send gamepad state over the QUIC streaming channel.
+///
+/// `axes` contains 6 i16 values: [LX, LY, RX, RY, L2, R2] in range -32768..32767.
+/// `buttons` is a 16-bit bitmask (A=0, B=1, X=2, Y=3, LB=4, RB=5,
+/// Select=6, Start=7, Home=8, LSB=9, RSB=10, DPadUp=11..DPadRight=14).
+/// Requires an active streaming session — no TCP fallback for gamepad.
+#[frb]
+pub async fn send_gamepad_event(
+    axes: Vec<i16>,
+    buttons: u32,
+) -> Result<(), String> {
+    let streaming_conn = {
+        let guard = (*STREAMING_HANDLE).lock().await;
+        guard.as_ref().map(|h| h.connection.clone())
+    };
+
+    let Some(conn) = streaming_conn else {
+        return Err("No active streaming session for gamepad input".to_string());
+    };
+
+    // Pad or truncate axes to 6
+    let mut axis_array = [0i16; 6];
+    for (i, &val) in axes.iter().enumerate().take(6) {
+        axis_array[i] = val;
+    }
+
+    let packet = InputPacket::Gamepad {
+        axes: axis_array,
+        buttons: buttons as u16,
+    };
+
+    let data = packet.encode();
+    let mut send_stream = conn
+        .open_uni()
+        .await
+        .map_err(|e| format!("QUIC open stream: {e}"))?;
+    send_stream
+        .write_all(&data)
+        .await
+        .map_err(|e| format!("QUIC write: {e}"))?;
+    send_stream
+        .finish()
+        .map_err(|e| format!("QUIC finish: {e}"))?;
+
+    Ok(())
+}
+
 /// Roughly map Android keycodes to Linux evdev keycodes for QUIC input.
 fn android_to_evdev_keycode(android_keycode: i32) -> u16 {
     match android_keycode {
