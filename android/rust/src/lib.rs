@@ -3,20 +3,25 @@
 pub mod api;
 mod frb_generated; /* AUTO INJECTED BY flutter_rust_bridge. This line may not be accurate, and you can change it according to your needs. */
 
-use std::sync::{Arc, LazyLock};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::{Arc, LazyLock, Mutex};
 use tokio::net::tcp::OwnedWriteHalf;
-use tokio::sync::Mutex;
+use tokio::sync::broadcast;
 
 // Initialize logging for Android
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 /// Initialize the Linux Link backend (internal, called from api::init_app)
 pub(crate) fn init_app_impl() {
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer())
-        .with(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
-    flutter_rust_bridge::setup_default_user_utils();
+    static DONE: std::sync::Once = std::sync::Once::new();
+    DONE.call_once(|| {
+        let _ = tracing_subscriber::registry()
+            .with(tracing_subscriber::fmt::layer())
+            .with(tracing_subscriber::EnvFilter::from_default_env())
+            .try_init();
+        flutter_rust_bridge::setup_default_user_utils();
+    });
 }
 
 /// Maximum number of H.264 frames to drain per `receive_frames` call.
@@ -37,8 +42,30 @@ pub(crate) static CONNECTION_STATE: LazyLock<Mutex<api::ConnectionState>> =
 pub(crate) static STREAMING_RTT_US: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
+/// Atomic flag indicating whether streaming is active (avoids try_lock race).
+pub(crate) static STREAMING_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// Streaming metrics for stats display.
+pub(crate) static STREAMING_FRAME_COUNT: AtomicU64 = AtomicU64::new(0);
+pub(crate) static STREAMING_BYTE_COUNT: AtomicU64 = AtomicU64::new(0);
+pub(crate) static STREAMING_START_TIME: Mutex<Option<std::time::Instant>> =
+    Mutex::new(None);
+
 /// Global handle for the active streaming client session.
 pub(crate) static STREAMING_HANDLE: LazyLock<Mutex<Option<StreamingHandle>>> =
+    LazyLock::new(|| Mutex::new(None));
+
+/// Persistent cert directory set from Flutter (std Mutex for sync access).
+pub(crate) static CERT_DIR: LazyLock<std::sync::Mutex<Option<PathBuf>>> =
+    LazyLock::new(|| std::sync::Mutex::new(None));
+
+/// Currently active CertManager for trust management UI.
+pub(crate) static CERT_MANAGER: LazyLock<std::sync::Mutex<Option<Arc<linux_link_core::streaming::transport::CertManager>>>> =
+    LazyLock::new(|| std::sync::Mutex::new(None));
+
+/// Broadcast channel for incoming KDE Connect packets from the control connection.
+/// Flutter polls these via `poll_incoming_packets`.
+pub(crate) static INCOMING_PACKETS: LazyLock<Mutex<Option<broadcast::Sender<String>>>> =
     LazyLock::new(|| Mutex::new(None));
 
 /// Holds the live streaming client and its packet receiver.

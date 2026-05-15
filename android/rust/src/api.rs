@@ -6,6 +6,7 @@ use linux_link_core::protocol::connection::ConnectionManager;
 use linux_link_core::protocol::kdeconnect::{DeviceSender, NetworkPacket, TcpDeviceSender};
 use linux_link_core::streaming::StreamingClient;
 use linux_link_core::tailscale::TailscaleClient;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -15,14 +16,26 @@ use tokio::sync::Mutex;
 use linux_link_core::streaming::InputPacket;
 
 use crate::{
-    CONNECTION_STATE, CONTROL_WRITER, MAX_AUDIO_PACKETS_PER_RECEIVE, MAX_FRAMES_PER_RECEIVE,
-    STREAMING_HANDLE, STREAMING_RTT_US, StreamingHandle, update_streaming_rtt,
+    CERT_DIR, CERT_MANAGER, CONNECTION_STATE, CONTROL_WRITER, INCOMING_PACKETS,
+    MAX_AUDIO_PACKETS_PER_RECEIVE, MAX_FRAMES_PER_RECEIVE, STREAMING_ACTIVE, STREAMING_BYTE_COUNT,
+    STREAMING_FRAME_COUNT, STREAMING_HANDLE, STREAMING_RTT_US, STREAMING_START_TIME,
+    StreamingHandle, update_streaming_rtt,
 };
 
 /// Initialize the Linux Link backend
 #[frb(init)]
 pub fn init_app() {
     crate::init_app_impl();
+}
+
+/// Set the persistent data directory for certs and state.
+/// Must be called before `connect_streaming` for cert persistence.
+#[frb]
+pub fn set_data_dir(path: String) {
+    let cert_path = PathBuf::from(&path).join("linux-link").join("certs");
+    let mut guard = crate::CERT_DIR.lock().unwrap();
+    *guard = Some(cert_path);
+    tracing::info!("Data directory set to: {path}");
 }
 
 /// Get version string
@@ -98,15 +111,28 @@ pub async fn check_tailscale_status() -> Result<bool, String> {
     }
 }
 
-/// Get list of peers on the tailnet
+/// Get list of peers on the tailnet and LAN
 #[frb]
 pub async fn get_peers() -> Result<Vec<PeerInfoDto>, String> {
-    let client = TailscaleClient::new().map_err(|e: anyhow::Error| e.to_string())?;
-    let peers = client
-        .get_peers()
-        .await
-        .map_err(|e: anyhow::Error| e.to_string())?;
-    Ok(peers
+    let mut all_peers = Vec::new();
+
+    // 1. Get Tailscale peers
+    if let Ok(client) = TailscaleClient::new() {
+        if let Ok(peers) = client.get_peers().await {
+            all_peers.extend(peers);
+        }
+    }
+
+    // 2. Get LAN peers via mDNS
+    let lan_peers = linux_link_core::tailscale::lan::scan_lan_once().await;
+    for lp in lan_peers {
+        // Avoid duplicates if a peer is found on both Tailscale and LAN
+        if !all_peers.iter().any(|p| p.name == lp.name) {
+            all_peers.push(lp);
+        }
+    }
+
+    Ok(all_peers
         .into_iter()
         .map(|p| PeerInfoDto {
             name: p.name,
@@ -131,12 +157,23 @@ pub async fn connect_to_peer(address: String, port: u16) -> Result<ConnectionSta
             let mut writer_guard = (*CONTROL_WRITER).lock().await;
             *writer_guard = Some(Arc::new(Mutex::new(writer)));
 
+            // Create a broadcast channel for forwarding incoming packets to Flutter
+            let (packet_tx, _) = broadcast::channel(256);
+            {
+                let mut incoming = crate::INCOMING_PACKETS.lock().await;
+                *incoming = Some(packet_tx.clone());
+            }
+
             tokio::spawn(async move {
                 let mut reader = tokio::io::BufReader::new(reader);
                 let mut line = String::new();
                 while let Ok(n) = reader.read_line(&mut line).await {
                     if n == 0 {
                         break;
+                    }
+                    let trimmed = line.trim().to_string();
+                    if !trimmed.is_empty() {
+                        let _ = packet_tx.send(trimmed);
                     }
                     line.clear();
                 }
@@ -145,6 +182,8 @@ pub async fn connect_to_peer(address: String, port: u16) -> Result<ConnectionSta
                 *state_guard = ConnectionState::Disconnected;
                 let mut writer_guard = (*CONTROL_WRITER).lock().await;
                 *writer_guard = None;
+                let mut incoming = crate::INCOMING_PACKETS.lock().await;
+                *incoming = None;
             });
 
             *state_guard = ConnectionState::Connected;
@@ -155,6 +194,33 @@ pub async fn connect_to_peer(address: String, port: u16) -> Result<ConnectionSta
             Ok(ConnectionState::Error(e.to_string()))
         }
     }
+}
+
+/// Poll for incoming KDE Connect packets from the control connection.
+/// Returns up to 16 queued packet JSON strings. Flutter should call this
+/// periodically while connected to process server push messages (notifications,
+/// clipboard sync, etc.).
+#[frb]
+pub async fn poll_incoming_packets() -> Vec<String> {
+    let mut rx = {
+        let guard = crate::INCOMING_PACKETS.lock().await;
+        guard.as_ref().map(|tx| tx.subscribe())
+    };
+    let Some(mut rx) = rx else { return vec![] };
+    let mut packets = vec![];
+    // Try to get at least one packet with a short timeout
+    match tokio::time::timeout(Duration::from_millis(100), rx.recv()).await {
+        Ok(Ok(pkt)) => packets.push(pkt),
+        _ => return packets,
+    }
+    // Drain any additional queued packets
+    while packets.len() < 16 {
+        match rx.try_recv() {
+            Ok(pkt) => packets.push(pkt),
+            Err(_) => break,
+        }
+    }
+    packets
 }
 
 /// Send clipboard content to peer using KDE Connect protocol.
@@ -351,15 +417,44 @@ pub async fn connect_streaming(
     port: u16,
     monitor_index: Option<u32>,
 ) -> Result<(), String> {
-    let addr = format!("{address}:{port}");
+    // If the control port (1716) is passed, automatically switch to the default streaming port (4716).
+    // In a real KDE Connect implementation, this would be negotiated or discovery-based.
+    let streaming_port = if port == linux_link_core::DEFAULT_CONTROL_PORT {
+        linux_link_core::DEFAULT_STREAMING_PORT
+    } else {
+        port
+    };
+
+    let addr = format!("{address}:{streaming_port}");
     tracing::info!("Connecting to streaming server at {addr}");
 
-    // Create a CertManager for TOFU peer certificate verification.
-    // For now, an in-memory manager (peers lost on app restart).
-    // In the future, load from persistent storage using load_or_create().
-    let cert_manager = std::sync::Arc::new(
-        linux_link_core::streaming::transport::CertManager::new().map_err(|e| e.to_string())?,
-    );
+    // Create a CertManager with persistent TOFU peer certificate verification.
+    // Uses the data directory set via `set_data_dir()`. Falls back to in-memory
+    // if no data directory is configured (cert trust lost on restart).
+    let cert_manager = {
+        let guard = crate::CERT_DIR.lock().unwrap();
+        match guard.as_ref() {
+            Some(dir) => {
+                std::sync::Arc::new(
+                    linux_link_core::streaming::transport::CertManager::load_or_create(dir)
+                        .map_err(|e| e.to_string())?,
+                )
+            }
+            None => {
+                tracing::warn!("No data dir configured — cert trust is ephemeral");
+                std::sync::Arc::new(
+                    linux_link_core::streaming::transport::CertManager::new()
+                        .map_err(|e| e.to_string())?,
+                )
+            }
+        }
+    };
+
+    // Store for trust management UI
+    {
+        let mut cm_guard = crate::CERT_MANAGER.lock().unwrap();
+        *cm_guard = Some(cert_manager.clone());
+    }
 
     let (mut client, packet_rx, audio_rx) =
         StreamingClient::connect(&addr, cert_manager, monitor_index)
@@ -397,6 +492,8 @@ pub async fn connect_streaming(
         }
     });
 
+    STREAMING_ACTIVE.store(true, std::sync::atomic::Ordering::Release);
+
     let mut handle = (*STREAMING_HANDLE).lock().await;
     *handle = Some(StreamingHandle {
         cancel: client_cancel,
@@ -414,6 +511,12 @@ pub async fn connect_streaming(
 /// Stop remote screen streaming.
 #[frb]
 pub async fn stop_streaming() -> Result<(), String> {
+    // Reset streaming metrics
+    STREAMING_FRAME_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
+    STREAMING_BYTE_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
+    *STREAMING_START_TIME.lock().unwrap() = None;
+    STREAMING_RTT_US.store(0, std::sync::atomic::Ordering::Relaxed);
+
     let handle = {
         let mut guard = (*STREAMING_HANDLE).lock().await;
         guard.take()
@@ -428,16 +531,14 @@ pub async fn stop_streaming() -> Result<(), String> {
         }
         tracing::info!("Streaming session stopped");
     }
+    STREAMING_ACTIVE.store(false, std::sync::atomic::Ordering::Release);
     Ok(())
 }
 
-/// Check if streaming is active by inspecting the streaming handle.
+/// Check if streaming is active using an atomic flag (no lock contention).
 #[frb(sync)]
 pub fn is_streaming_active() -> bool {
-    STREAMING_HANDLE
-        .try_lock()
-        .map(|guard| guard.is_some())
-        .unwrap_or(false)
+    STREAMING_ACTIVE.load(std::sync::atomic::Ordering::Acquire)
 }
 
 /// Get the current RTT to the streaming server in microseconds.
@@ -450,11 +551,64 @@ pub fn get_streaming_rtt() -> u64 {
 #[frb(sync)]
 pub fn get_streaming_stats() -> StreamingStatsDto {
     let rtt_ms = STREAMING_RTT_US.load(Ordering::Relaxed) / 1000;
+    let frame_count = STREAMING_FRAME_COUNT.load(Ordering::Relaxed);
+    let byte_count = STREAMING_BYTE_COUNT.load(Ordering::Relaxed);
+    let elapsed = STREAMING_START_TIME
+        .lock()
+        .unwrap()
+        .map(|t| t.elapsed())
+        .unwrap_or_default();
+
+    let fps = if elapsed.as_secs() > 0 {
+        frame_count as f64 / elapsed.as_secs_f64()
+    } else {
+        0.0
+    };
+
+    let bitrate_kbps = if elapsed.as_secs() > 0 {
+        (byte_count * 8) / elapsed.as_secs().max(1) / 1000
+    } else {
+        0
+    };
+
     StreamingStatsDto {
-        fps: 0.0,
-        bitrate_kbps: 0,
+        fps: (fps * 10.0).round() / 10.0,
+        bitrate_kbps,
         e2e_latency_ms: rtt_ms,
         frame_drops: 0,
+    }
+}
+
+/// List all trusted peers (certificate labels) from the active streaming session's
+/// CertManager. Returns an empty list if no streaming session is active.
+#[frb(sync)]
+pub fn list_trusted_peers() -> Vec<String> {
+    let guard = crate::CERT_MANAGER.lock().unwrap();
+    match guard.as_ref() {
+        Some(cm) => {
+            // Can't access known_peers directly — it's behind Arc<Mutex<HashMap>>.
+            // We provide the list from a best-effort basis.
+            let peers = cm.known_peers();
+            peers.into_iter().map(|(label, _hash)| label).collect()
+        }
+        None => vec![],
+    }
+}
+
+/// Remove a trusted peer certificate by label. Returns true if the peer was
+/// found and removed, false otherwise. Persists the change to disk.
+#[frb(sync)]
+pub fn forget_trusted_peer(label: String) -> bool {
+    let guard = crate::CERT_MANAGER.lock().unwrap();
+    match guard.as_ref() {
+        Some(cm) => {
+            let removed = cm.remove_peer(&label);
+            if removed {
+                let _ = cm.save_known_peers();
+            }
+            removed
+        }
+        None => false,
     }
 }
 
@@ -502,6 +656,75 @@ pub async fn get_monitor_count(address: String, port: u16) -> Result<u32, String
     }
 }
 
+/// Execute a power management command on the remote server.
+/// Supported actions: "sleep", "shutdown", "restart", "hibernate".
+#[frb]
+pub async fn send_power_command(
+    address: String,
+    port: u16,
+    action: String,
+) -> Result<(), String> {
+    let conn_mgr = ConnectionManager::new(Duration::from_secs(10));
+    let stream = conn_mgr
+        .connect(&address, port)
+        .await
+        .map_err(|e: anyhow::Error| e.to_string())?;
+    let (_reader, writer) = tokio::io::split(stream);
+    let sender = TcpDeviceSender::new(writer);
+    let packet = NetworkPacket::new("kdeconnect.linuxlink.power")
+        .with_body(serde_json::json!({ "action": action }));
+    sender
+        .send_packet(&packet)
+        .await
+        .map_err(|e: anyhow::Error| e.to_string())?;
+    tracing::info!("Power command sent: {action}");
+    Ok(())
+}
+
+/// Execute a shell command on the remote server and return stdout + stderr + exit code.
+#[frb]
+pub async fn execute_remote_command(
+    address: String,
+    port: u16,
+    command: String,
+) -> Result<String, String> {
+    let conn_mgr = ConnectionManager::new(Duration::from_secs(10));
+    let stream = conn_mgr
+        .connect(&address, port)
+        .await
+        .map_err(|e: anyhow::Error| e.to_string())?;
+    let (reader, writer) = tokio::io::split(stream);
+    let sender = TcpDeviceSender::new(writer);
+    let request = NetworkPacket::new("kdeconnect.linuxlink.exec")
+        .with_body(serde_json::json!({ "command": command }));
+    sender
+        .send_packet(&request)
+        .await
+        .map_err(|e: anyhow::Error| e.to_string())?;
+    let mut lines = tokio::io::BufReader::new(reader).lines();
+    match tokio::time::timeout(Duration::from_secs(10), lines.next_line()).await {
+        Ok(Ok(Some(line))) => {
+            match NetworkPacket::from_wire(&line) {
+                Ok(packet) => {
+                    if packet.packet_type == "kdeconnect.linuxlink.exec" {
+                        let body = &packet.body;
+                        let stdout = body.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
+                        let stderr = body.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
+                        let exit_code = body.get("exit_code").and_then(|v| v.as_i64()).unwrap_or(-1);
+                        Ok(format!("{stdout}\n---END-OUTPUT---\n{stderr}\n---END-ERROR---\n{exit_code}"))
+                    } else {
+                        Err(format!("Unexpected packet type: {}", packet.packet_type))
+                    }
+                }
+                Err(e) => Err(format!("Failed to parse response: {e}")),
+            }
+        }
+        Ok(Ok(None)) => Err("Connection closed before response".to_string()),
+        Ok(Err(e)) => Err(format!("Read error: {e}")),
+        Err(_) => Err("Timeout waiting for exec response".to_string()),
+    }
+}
+
 /// Receive queued audio packets from the streaming client (F1: Audio Streaming).
 ///
 /// Each audio packet contains raw Opus-encoded data (typically 20ms @ 48kHz stereo).
@@ -546,6 +769,12 @@ pub async fn receive_frames(timeout_ms: u64) -> Vec<FrameDto> {
         };
         match tokio::time::timeout_at(deadline, handle.packet_rx.recv()).await {
             Ok(Some(packet)) => {
+                STREAMING_FRAME_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                STREAMING_BYTE_COUNT
+                    .fetch_add(packet.data.len() as u64, std::sync::atomic::Ordering::Relaxed);
+                if STREAMING_START_TIME.lock().unwrap().is_none() {
+                    *STREAMING_START_TIME.lock().unwrap() = Some(std::time::Instant::now());
+                }
                 frames.push(FrameDto {
                     data: packet.data,
                     is_keyframe: packet.is_keyframe,
@@ -554,6 +783,11 @@ pub async fn receive_frames(timeout_ms: u64) -> Vec<FrameDto> {
                 while frames.len() < MAX_FRAMES_PER_RECEIVE {
                     match handle.packet_rx.try_recv() {
                         Ok(packet) => {
+                            STREAMING_FRAME_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            STREAMING_BYTE_COUNT.fetch_add(
+                                packet.data.len() as u64,
+                                std::sync::atomic::Ordering::Relaxed,
+                            );
                             frames.push(FrameDto {
                                 data: packet.data,
                                 is_keyframe: packet.is_keyframe,
