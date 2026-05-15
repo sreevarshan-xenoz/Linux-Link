@@ -2,6 +2,14 @@ use anyhow::{Context, Result};
 use linux_link_core::protocol::kdeconnect::{DeviceIdentity, KdeConnectService, TrustStore};
 use std::path::PathBuf;
 
+/// Directory for server state files (device ID, trust store, etc.)
+fn state_dir() -> Result<PathBuf> {
+    let base = dirs::state_dir()
+        .or_else(dirs::data_local_dir)
+        .context("unable to determine local state directory")?;
+    Ok(base.join("linux-link"))
+}
+
 use crate::plugins::{
     battery::BatteryPlugin, clipboard::ClipboardPlugin, exec::ExecPlugin,
     file_browse::FileBrowsePlugin, input::InputPlugin, monitors::MonitorsPlugin,
@@ -46,7 +54,22 @@ fn host_device_id() -> String {
         return id;
     }
 
-    format!("linux-link-{}", std::process::id())
+    let path = state_dir()
+        .map(|d| d.join("device_id"))
+        .unwrap_or_else(|_| PathBuf::from("device_id"));
+    if let Ok(id) = std::fs::read_to_string(&path) {
+        let trimmed = id.trim().to_string();
+        if !trimmed.is_empty() {
+            return trimmed;
+        }
+    }
+    // Generate and persist a stable UUID
+    let id = uuid::Uuid::new_v4().to_string();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&path, &id);
+    id
 }
 
 fn host_device_name() -> String {
