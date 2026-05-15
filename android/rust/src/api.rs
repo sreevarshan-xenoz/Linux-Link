@@ -251,8 +251,59 @@ pub async fn send_clipboard(address: String, port: u16, content: String) -> Resu
 }
 
 /// Get clipboard content from peer.
+///
+/// Tries the existing control connection first for lower latency.
+/// Falls back to a new TCP connection if not currently connected.
 #[frb]
 pub async fn get_clipboard(address: String, port: u16) -> Result<String, String> {
+    // Try existing control connection first
+    let writer_opt = {
+        let guard = (*CONTROL_WRITER).lock().await;
+        guard.as_ref().cloned()
+    };
+
+    if let Some(writer) = writer_opt {
+        let sender = TcpDeviceSender::from_arc(writer);
+        let request = NetworkPacket::new("kdeconnect.clipboard.connect");
+        sender
+            .send_packet(&request)
+            .await
+            .map_err(|e: anyhow::Error| e.to_string())?;
+
+        // Subscribe to incoming packets and wait for the clipboard response
+        let mut rx = {
+            let guard = crate::INCOMING_PACKETS.lock().await;
+            guard.as_ref().map(|tx| tx.subscribe())
+        };
+        if let Some(mut rx) = rx {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                if remaining.is_zero() {
+                    return Err("Timeout waiting for clipboard response".to_string());
+                }
+                match tokio::time::timeout(remaining, rx.recv()).await {
+                    Ok(Ok(line)) => {
+                        if let Ok(packet) = NetworkPacket::from_wire(&line) {
+                            if packet.packet_type == "kdeconnect.clipboard" {
+                                let content = packet
+                                    .body
+                                    .get("content")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string();
+                                return Ok(content);
+                            }
+                        }
+                    }
+                    Ok(Err(_)) => return Err("Connection closed".to_string()),
+                    Err(_) => return Err("Timeout waiting for clipboard response".to_string()),
+                }
+            }
+        }
+    }
+
+    // Fall back to a new TCP connection
     let conn_mgr = ConnectionManager::new(Duration::from_secs(10));
     let stream = conn_mgr
         .connect(&address, port)
