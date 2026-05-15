@@ -166,6 +166,18 @@ impl CertManager {
         Ok(())
     }
 
+    /// Return a copy of all known peer labels and their certificate hashes.
+    pub fn known_peers(&self) -> Vec<(String, [u8; 32])> {
+        let peers = self.known_peers.lock().unwrap();
+        peers.iter().map(|(k, v)| (k.clone(), *v)).collect()
+    }
+
+    /// Remove a known peer by label. Returns true if the peer was found and removed.
+    pub fn remove_peer(&self, label: &str) -> bool {
+        let mut peers = self.known_peers.lock().unwrap();
+        peers.remove(label).is_some()
+    }
+
     /// Return the SHA-256 hash of the given DER certificate.
     fn cert_hash(cert: &CertificateDer<'_>) -> [u8; 32] {
         let mut hasher = Sha256::new();
