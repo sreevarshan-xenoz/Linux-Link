@@ -70,6 +70,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   bool _isTestingConnection = false;
   CustomQuality _customQuality = const CustomQuality();
   bool _clipboardAutoSync = false;
+  bool _notificationMirror = true;
 
   static const _keyTailscaleEnabled = 'tailscale_enabled';
   static const _keyVideoQuality = 'video_quality';
@@ -77,6 +78,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   static const _keyConnectionTimeout = 'connection_timeout';
   static const _keyCustomQuality = 'custom_quality';
   static const _keyClipboardAutoSync = 'clipboard_auto_sync';
+  static const _keyNotificationMirror = 'notification_mirror';
 
   @override
   void initState() {
@@ -97,6 +99,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           orElse: () => InputMode.trackpad);
       _connectionTimeout = prefs.getInt(_keyConnectionTimeout) ?? 30;
       _clipboardAutoSync = prefs.getBool(_keyClipboardAutoSync) ?? false;
+      _notificationMirror = prefs.getBool(_keyNotificationMirror) ?? true;
       final customJson = prefs.getString(_keyCustomQuality);
       if (customJson != null) {
         try {
@@ -524,6 +527,22 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   _clipboardAutoSync = value;
                 });
                 _saveSetting(_keyClipboardAutoSync, value);
+              },
+            ),
+          ),
+          const Divider(),
+          // Notification mirroring toggle
+          ListTile(
+            leading: const Icon(Icons.notifications_active),
+            title: const Text('Notification Mirroring'),
+            subtitle: const Text('Show PC notifications on this device'),
+            trailing: Switch(
+              value: _notificationMirror,
+              onChanged: (value) {
+                setState(() {
+                  _notificationMirror = value;
+                });
+                _saveSetting(_keyNotificationMirror, value);
               },
             ),
           ),

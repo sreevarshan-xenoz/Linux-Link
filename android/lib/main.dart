@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -10,6 +13,7 @@ import 'screens/settings_screen.dart';
 import 'screens/terminal_screen.dart';
 import 'screens/trust_screen.dart';
 import 'services/background_service.dart';
+import 'services/notification_service.dart';
 
 final _router = GoRouter(
   initialLocation: '/',
@@ -72,6 +76,28 @@ final _router = GoRouter(
   ],
 );
 
+/// Periodically poll for incoming KDE Connect packets and dispatch them.
+/// Runs while the control connection is active.
+void _startPacketPoller() {
+  Timer.periodic(const Duration(milliseconds: 500), (timer) async {
+    try {
+      final packets = await bridge.rustApi.pollIncomingPackets();
+      for (final raw in packets) {
+        try {
+          final json = jsonDecode(raw) as Map<String, dynamic>;
+          final type = json['type'] as String?;
+          if (type == 'kdeconnect.notification') {
+            NotificationMirrorService.handleNotificationPacket(raw);
+          }
+          // Future: handle other packet types (clipboard push, battery, etc.)
+        } catch (_) {}
+      }
+    } catch (_) {
+      // Polling failed — likely disconnected
+    }
+  });
+}
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -80,6 +106,12 @@ void main() async {
 
   // Initialize the Android foreground service
   await initBackgroundService();
+
+  // Initialize notification mirroring for incoming PC notifications
+  await NotificationMirrorService.initialize();
+
+  // Start polling for incoming KDE Connect packets (notifications, etc.)
+  _startPacketPoller();
 
   runApp(
     const ProviderScope(
