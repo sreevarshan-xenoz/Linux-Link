@@ -55,35 +55,27 @@ impl Plugin for InputPlugin {
                 let body = &packet.body;
 
                 // Handle keyboard input first (text)
-                if let Some(text) = body.get("text").and_then(|v| v.as_str())
-                    && let Err(e) = self.type_text(text).await
-                {
-                    warn!("Failed to type text: {}", e);
+                if let Some(text) = body.get("text").and_then(|v| v.as_str()) {
+                    self.type_text(text).await.warn_on_err("type text");
                 }
 
                 // Handle special key
-                if let Some(key) = body.get("key").and_then(|v| v.as_str())
-                    && let Err(e) = self.press_key(key).await
-                {
-                    warn!("Failed to press key '{}': {}", key, e);
+                if let Some(key) = body.get("key").and_then(|v| v.as_str()) {
+                    self.press_key(key).await.warn_on_err("press key");
                 }
 
                 // Handle mouse movement
                 if let (Some(x), Some(y)) = (
                     body.get("dx").and_then(|v| v.as_f64()),
                     body.get("dy").and_then(|v| v.as_f64()),
-                ) && (x != 0.0 || y != 0.0)
-                    && let Err(e) = self.move_mouse(x as i32, y as i32).await
-                {
-                    warn!("Failed to move mouse: {}", e);
+                ) && (x != 0.0 || y != 0.0) {
+                    self.move_mouse(x as i32, y as i32).await.warn_on_err("move mouse");
                 }
 
                 // Handle mouse button events
                 if let Some(is_pressed) = body.get("isPressed").and_then(|v| v.as_bool())
-                    && let Some(button) = body.get("button").and_then(|v| v.as_i64())
-                    && let Err(e) = self.mouse_button(button as i32, is_pressed).await
-                {
-                    warn!("Failed to handle mouse button: {}", e);
+                    && let Some(button) = body.get("button").and_then(|v| v.as_i64()) {
+                    self.mouse_button(button as i32, is_pressed).await.warn_on_err("mouse button");
                 }
 
                 // Handle scroll events (small deltas are movement, larger ones are scroll)
@@ -102,10 +94,8 @@ impl Plugin for InputPlugin {
             }
             "kdeconnect.presenter" => {
                 // Presenter remote - handle play/pause/next/previous
-                if let Some(action) = packet.body.get("action").and_then(|v| v.as_str())
-                    && let Err(e) = self.handle_presenter_action(action).await
-                {
-                    warn!("Failed to handle presenter action '{}': {}", action, e);
+                if let Some(action) = packet.body.get("action").and_then(|v| v.as_str()) {
+                    self.handle_presenter_action(action).await.warn_on_err("handle presenter action");
                 }
             }
             _ => {}
@@ -191,3 +181,16 @@ impl InputPlugin {
 }
 
 use enigo::Key;
+
+/// Extension trait for logging warnings on Result errors.
+trait WarnOnErr<T> {
+    fn warn_on_err(self, context: &str);
+}
+
+impl<T> WarnOnErr<T> for Result<T, anyhow::Error> {
+    fn warn_on_err(self, context: &str) {
+        if let Err(e) = self {
+            warn!("Failed to {}: {}", context, e);
+        }
+    }
+}
