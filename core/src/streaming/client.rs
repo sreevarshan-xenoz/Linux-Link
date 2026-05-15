@@ -52,11 +52,14 @@ impl StreamingClient {
     ///
     /// `channel_capacity` controls the buffer size between the receive task
     /// and the consumer. A capacity of 8 is a reasonable default for real-time
-    /// video.
-    pub fn new(channel_capacity: usize, cert_manager: std::sync::Arc<CertManager>) -> Self {
-        let (frame_tx, _frame_rx) = mpsc::channel(channel_capacity);
-        let (audio_tx, _audio_rx) = mpsc::channel(channel_capacity);
-        Self {
+    /// video. Returns the client and receiver channels for consuming frames and audio.
+    pub fn new(
+        channel_capacity: usize,
+        cert_manager: std::sync::Arc<CertManager>,
+    ) -> (Self, mpsc::Receiver<EncodedPacket>, mpsc::Receiver<AudioPacket>) {
+        let (frame_tx, frame_rx) = mpsc::channel(channel_capacity);
+        let (audio_tx, audio_rx) = mpsc::channel(channel_capacity);
+        let client = Self {
             connection: None,
             transport_config: StreamTransportConfig::default(),
             cert_manager,
@@ -64,7 +67,8 @@ impl StreamingClient {
             audio_tx,
             cancel: CancellationToken::new(),
             channel_capacity,
-        }
+        };
+        (client, frame_rx, audio_rx)
     }
 
     /// Connect to a streaming server at the given address.
