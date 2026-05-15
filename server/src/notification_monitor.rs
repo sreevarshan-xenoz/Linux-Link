@@ -111,13 +111,13 @@ async fn try_dbus_monitor_subprocess(tx: &broadcast::Sender<ForwardedNotificatio
 
         if in_notify {
             if let Some(s) = trimmed.strip_prefix("string \"") {
-                let value = s.trim_end_matches('"');
+                let value = unescape_dbus_string(s.trim_end_matches('"'));
                 if current_app.is_empty() {
-                    current_app = value.to_string();
+                    current_app = value;
                 } else if current_summary.is_empty() {
-                    current_summary = value.to_string();
+                    current_summary = value;
                 } else if current_body.is_empty() {
-                    current_body = value.to_string();
+                    current_body = value;
                 }
             } else if trimmed.starts_with("byte") {
                 // Urgency level (0=low, 1=normal, 2=critical)
@@ -204,10 +204,11 @@ async fn try_gdbus_monitor_subprocess(tx: &broadcast::Sender<ForwardedNotificati
         if in_notify {
             // gdbus output format: variant type followed by value
             if let Some(val) = extract_gdbus_string(trimmed) {
+                let unescaped = unescape_dbus_string(&val);
                 match arg_index {
-                    0 => current_app = val,
-                    3 => current_summary = val,
-                    4 => current_body = val,
+                    0 => current_app = unescaped,
+                    3 => current_summary = unescaped,
+                    4 => current_body = unescaped,
                     _ => {}
                 }
                 arg_index += 1;
@@ -229,6 +230,44 @@ async fn try_gdbus_monitor_subprocess(tx: &broadcast::Sender<ForwardedNotificati
 
     let _ = child.wait().await;
     Ok(())
+}
+
+/// Unescape D-Bus monitor string output.
+///
+/// dbus-monitor uses C-style escape sequences: \n, \r, \t, \\, \", etc.
+/// This function converts them back to actual characters.
+fn unescape_dbus_string(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('n') => result.push('\n'),
+                Some('r') => result.push('\r'),
+                Some('t') => result.push('\t'),
+                Some('\\') => result.push('\\'),
+                Some('"') => result.push('"'),
+                Some('\'') => result.push('\''),
+                Some('0') => result.push('\0'),
+                Some('x') => {
+                    // Hex escape \xNN
+                    let hex: String = chars.by_ref().take(2).collect();
+                    if let Ok(code) = u8::from_str_radix(&hex, 16) {
+                        result.push(code as char);
+                    }
+                }
+                Some(c) => {
+                    // Unknown escape, keep as-is
+                    result.push('\\');
+                    result.push(c);
+                }
+                None => result.push('\\'),
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
 }
 
 /// Extract a string value from gdbus monitor output.
