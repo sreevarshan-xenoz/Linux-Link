@@ -3,9 +3,7 @@
 /// Delegates to flutter_rust_bridge generated code.
 library rust_api_bridge;
 
-import 'dart:convert';
 import 'dart:io';
-import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
@@ -58,7 +56,7 @@ class _RustApiBridge {
 
   /// Initialize the Rust backend (call once at app startup).
   Future<void> init() async {
-    await RustLib.init();
+    await RustApi.init();
   }
 
   /// Get the version string from the Rust crate.
@@ -129,8 +127,10 @@ class _RustApiBridge {
   /// Start receiving remote screen streaming.
   ///
   /// [monitorIndex] selects which display to stream (0 = primary, null = default).
-  Future<void> startStreaming(String address, int port, {int? monitorIndex}) async {
-    await frb.connectStreaming(address: address, port: port, monitorIndex: monitorIndex);
+  Future<void> startStreaming(String address, int port,
+      {int? monitorIndex}) async {
+    await frb.connectStreaming(
+        address: address, port: port, monitorIndex: monitorIndex);
   }
 
   /// Stop remote screen streaming.
@@ -227,103 +227,24 @@ class _RustApiBridge {
   }
 
   /// Send power management command (sleep/shutdown/restart/hibernate) to the remote PC.
-  /// Performs the LINUX_LINK_HELLO handshake, consumes the server's response,
-  /// then sends the power command — all over a raw TCP connection (no Rust FFI needed).
+  /// Uses Rust FFI with proper ConnectionManager handshake.
   Future<void> sendPowerCommand(
     String address,
     int port,
     String action,
   ) async {
-    final socket = await Socket.connect(address, port,
-        timeout: const Duration(seconds: 5));
-    try {
-      // Step 1: Send LINUX_LINK_HELLO handshake
-      socket.write('LINUX_LINK_HELLO 1\n');
-      await socket.flush();
-
-      // Step 2: Drain the server response(s) with a short timeout.
-      // The server sends an identity JSON packet (possibly preceded by
-      // HANDSHAKE_OK). Read available data for up to 500ms then move on.
-      try {
-        await socket
-            .cast<List<int>>()
-            .transform(utf8.decoder)
-            .transform(const LineSplitter())
-            .first
-            .timeout(const Duration(milliseconds: 500));
-      } catch (_) {
-        // Ignore — proceed with sending the power command
-      }
-
-      // Step 3: Send the power command as a proper NetworkPacket wire format
-      final packet = jsonEncode({
-        'type': 'kdeconnect.linuxlink.power',
-        'body': {'action': action},
-      });
-      socket.write('$packet\n');
-      await socket.flush();
-    } finally {
-      await socket.close();
-    }
+    await frb.sendPowerCommand(address: address, port: port, action: action);
   }
 
-  /// Execute a command on the remote server via KDE Connect exec protocol.
+  /// Execute a command on the remote server via KDE Connect exec protocol (Rust FFI).
   /// Returns stdout, stderr, and exit code as a formatted string.
   Future<String> executeCommand(
     String address,
     int port,
     String command,
   ) async {
-    final socket = await Socket.connect(address, port,
-        timeout: const Duration(seconds: 5));
-    try {
-      // Step 1: Send LINUX_LINK_HELLO handshake
-      socket.write('LINUX_LINK_HELLO 1\n');
-      await socket.flush();
-
-      // Step 2: Read/discard identity response with timeout
-      try {
-        await socket
-            .cast<List<int>>()
-            .transform(utf8.decoder)
-            .transform(const LineSplitter())
-            .first
-            .timeout(const Duration(milliseconds: 500));
-      } catch (_) {
-        // Proceed regardless
-      }
-
-      // Step 3: Send exec command packet
-      final packet = jsonEncode({
-        'type': 'kdeconnect.linuxlink.exec',
-        'body': {'command': command},
-      });
-      socket.write('$packet\n');
-      await socket.flush();
-
-      // Step 4: Read response packet
-      final line = await socket
-          .cast<List<int>>()
-          .transform(utf8.decoder)
-          .transform(const LineSplitter())
-          .first
-          .timeout(const Duration(seconds: 10));
-
-      // Step 5: Parse response
-      try {
-        final json = jsonDecode(line) as Map<String, dynamic>;
-        final body = json['body'] as Map<String, dynamic>?;
-        final stdout = body?['stdout'] as String? ?? '';
-        final stderr = body?['stderr'] as String? ?? '';
-        final exitCode = (body?['exit_code'] as num?)?.toInt() ?? -1;
-
-        return '$stdout\n---END-OUTPUT---\n$stderr\n---END-ERROR---\n$exitCode';
-      } catch (e) {
-        return '\n---END-OUTPUT---\nFailed to parse server response: $e\n---END-ERROR---\n-1';
-      }
-    } finally {
-      await socket.close();
-    }
+    return await frb.executeRemoteCommand(
+        address: address, port: port, command: command);
   }
 
   /// Receive queued Opus-encoded audio packets from the streaming client (F1).
@@ -333,51 +254,11 @@ class _RustApiBridge {
   }
 
   /// Get the number of monitors available on the remote server (F2: multi-monitor).
-  /// Uses raw TCP to send a monitors query and parse the response.
+  /// Uses Rust FFI with proper ConnectionManager handshake.
   Future<int> getMonitorCount(String address, int port) async {
     try {
-      final socket = await Socket.connect(address, port,
-          timeout: const Duration(seconds: 5));
-      try {
-        // Step 1: Send LINUX_LINK_HELLO handshake
-        socket.write('LINUX_LINK_HELLO 1\n');
-        await socket.flush();
-
-        // Step 2: Drain identity response
-        try {
-          await socket
-              .cast<List<int>>()
-              .transform(utf8.decoder)
-              .transform(const LineSplitter())
-              .first
-              .timeout(const Duration(milliseconds: 500));
-        } catch (_) {
-          // Proceed
-        }
-
-        // Step 3: Send monitors query
-        final packet = jsonEncode({
-          'type': 'kdeconnect.linuxlink.monitors',
-          'body': {},
-        });
-        socket.write('$packet\n');
-        await socket.flush();
-
-        // Step 4: Read response
-        final line = await socket
-            .cast<List<int>>()
-            .transform(utf8.decoder)
-            .transform(const LineSplitter())
-            .first
-            .timeout(const Duration(seconds: 5));
-
-        final json = jsonDecode(line) as Map<String, dynamic>;
-        final body = json['body'] as Map<String, dynamic>?;
-        final count = (body?['count'] as num?)?.toInt() ?? 1;
-        return max(count, 1);
-      } finally {
-        await socket.close();
-      }
+      final result = await frb.getMonitorCount(address: address, port: port);
+      return result.toInt();
     } catch (e) {
       debugPrint('Failed to get monitor count: $e');
       return 1;
@@ -397,6 +278,26 @@ class _RustApiBridge {
       keyCode: keyCode,
       text: text,
     );
+  }
+
+  /// Set the persistent data directory for certs and state.
+  Future<void> setDataDir(String path) async {
+    await frb.setDataDir(path: path);
+  }
+
+  /// Poll for incoming KDE Connect packets (notifications, clipboard, etc.).
+  Future<List<String>> pollIncomingPackets() async {
+    return await frb.pollIncomingPackets();
+  }
+
+  /// List all trusted peer certificate labels.
+  List<String> listTrustedPeers() {
+    return frb.listTrustedPeers();
+  }
+
+  /// Remove a trusted peer by label. Returns true if removed.
+  bool forgetTrustedPeer(String label) {
+    return frb.forgetTrustedPeer(label: label);
   }
 
   ConnectionState _mapConnectionState(frb.ConnectionState state) {
