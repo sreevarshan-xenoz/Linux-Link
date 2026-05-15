@@ -4,7 +4,7 @@ use crate::kde;
 use crate::notification_monitor::{start_notification_monitor, ForwardedNotification};
 use anyhow::{Context, Result, bail};
 use linux_link_core::protocol::connection::ConnectionManager;
-use linux_link_core::protocol::kdeconnect::{NetworkPacket, PluginRegistry, TcpDeviceSender};
+use linux_link_core::protocol::kdeconnect::{DeviceSender, NetworkPacket, PluginRegistry, TcpDeviceSender};
 use linux_link_core::protocol::{HANDSHAKE_HELLO, HANDSHAKE_OK};
 use linux_link_core::streaming::StreamingServer;
 use linux_link_core::streaming::input_packet::InputPacket;
