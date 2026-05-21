@@ -705,6 +705,7 @@ mod tests {
             profile: H264Profile::Baseline,
             preset: EncoderPreset::UltraFast,
             hardware_encoder: HardwareEncoder::Software,
+            monitor_index: 0,
         };
         let args = build_ffmpeg_args(&config, 60);
 
@@ -733,6 +734,7 @@ mod tests {
             profile: H264Profile::High,
             preset: EncoderPreset::Medium,
             hardware_encoder: HardwareEncoder::Software,
+            monitor_index: 0,
         };
         let args = build_ffmpeg_args(&config, 120);
 
@@ -757,6 +759,7 @@ mod tests {
             profile: H264Profile::Baseline,
             preset: EncoderPreset::UltraFast,
             hardware_encoder: HardwareEncoder::Auto,
+            monitor_index: 0,
         };
 
         let mut encoder = VideoEncoder::new(config).expect("FFmpeg should be installed");
@@ -819,6 +822,7 @@ mod tests {
             profile: H264Profile::Baseline,
             preset: EncoderPreset::UltraFast,
             hardware_encoder: HardwareEncoder::Auto,
+            monitor_index: 0,
         };
 
         let mut encoder = VideoEncoder::new(config).expect("FFmpeg should be installed");
@@ -856,6 +860,7 @@ mod tests {
             profile: H264Profile::Baseline,
             preset: EncoderPreset::UltraFast,
             hardware_encoder: HardwareEncoder::Auto,
+            monitor_index: 0,
         };
         config.fps = 30;
 
@@ -900,6 +905,7 @@ mod tests {
             profile: H264Profile::Baseline,
             preset: EncoderPreset::UltraFast,
             hardware_encoder: HardwareEncoder::Auto,
+            monitor_index: 0,
         };
 
         let mut encoder = VideoEncoder::new(config).expect("FFmpeg should be installed");
@@ -942,6 +948,7 @@ mod tests {
             profile: H264Profile::Baseline,
             preset: EncoderPreset::UltraFast,
             hardware_encoder: HardwareEncoder::Auto,
+            monitor_index: 0,
         };
 
         let mut encoder = VideoEncoder::new(config).expect("FFmpeg should be installed");
