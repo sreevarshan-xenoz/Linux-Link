@@ -13,11 +13,14 @@ final peersProvider =
 
 final selectedPeerProvider = StateProvider<PeerInfo?>((ref) => null);
 
-/// The IP address of the currently connected peer.
 final selectedPeerAddressProvider = StateProvider<String?>((ref) => null);
 
-/// The port of the currently connected peer.
 final selectedPeerPortProvider = StateProvider<int?>((ref) => null);
+
+final manualPeersProvider =
+    StateNotifierProvider<ManualPeersNotifier, List<PeerInfo>>((ref) {
+  return ManualPeersNotifier();
+});
 
 class PeersNotifier extends StateNotifier<List<PeerInfo>> {
   PeersNotifier() : super([]);
@@ -39,6 +42,28 @@ class PeersNotifier extends StateNotifier<List<PeerInfo>> {
       for (final p in state)
         if (p.name == name) updated else p,
     ];
+  }
+
+  void clear() {
+    state = [];
+  }
+}
+
+class ManualPeersNotifier extends StateNotifier<List<PeerInfo>> {
+  ManualPeersNotifier() : super([]);
+
+  void addPeer(String name, String ip, {int port = 1716}) {
+    final peer = PeerInfo(
+      name: name,
+      dnsName: '$name.tailc34144.ts.net',
+      ips: [ip],
+      online: true,
+    );
+    state = [...state, peer];
+  }
+
+  void removePeer(String name) {
+    state = state.where((p) => p.name != name).toList();
   }
 
   void clear() {
