@@ -88,6 +88,11 @@ class _RustApiBridge {
     return _mapConnectionState(state);
   }
 
+  /// Connect to a peer and return the full FRB ConnectionState (with error message).
+  Future<frb.ConnectionState> frbConnectToPeer(String address, int port) async {
+    return await frb.connectToPeer(address: address, port: port);
+  }
+
   /// Send clipboard content to peer.
   Future<void> sendClipboard(String address, int port, String content) async {
     await frb.sendClipboard(address: address, port: port, content: content);
