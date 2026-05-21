@@ -4,15 +4,8 @@
 
 use anyhow::Result;
 use clap::Parser;
+use linux_link_server::*;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-
-mod cli;
-mod config;
-mod input_injector;
-mod kde;
-mod notification_monitor;
-mod plugins;
-mod service;
 
 #[tokio::main]
 async fn main() -> Result<()> {
