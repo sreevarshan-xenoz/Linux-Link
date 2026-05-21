@@ -6,6 +6,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[derive(Debug)]
 pub struct ClipboardPlugin;
 
+impl Default for ClipboardPlugin {
+    fn default() -> Self {
+        Self
+    }
+}
+
 impl ClipboardPlugin {
     pub fn new() -> Self {
         Self
