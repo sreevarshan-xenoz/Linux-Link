@@ -4,6 +4,12 @@ use linux_link_core::protocol::kdeconnect::{DeviceSender, NetworkPacket, Plugin}
 #[derive(Debug)]
 pub struct NotificationPlugin;
 
+impl Default for NotificationPlugin {
+    fn default() -> Self {
+        Self
+    }
+}
+
 impl NotificationPlugin {
     pub fn new() -> Self {
         Self
