@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../providers/connection_provider.dart' as conn;
 import '../providers/streaming_provider.dart';
 import '../providers/health_provider.dart';
@@ -161,8 +162,10 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
     try {
       final codecType = ref.read(videoCodecTypeProvider);
       final monitorIdx = ref.read(monitorIndexProvider);
-      debugPrint('Initializing video decoder: codec=$codecType, monitor=$monitorIdx');
-      await VideoPlayerService.initialize(width: 1920, height: 1080, codecType: codecType);
+      debugPrint(
+          'Initializing video decoder: codec=$codecType, monitor=$monitorIdx');
+      await VideoPlayerService.initialize(
+          width: 1920, height: 1080, codecType: codecType);
     } catch (e) {
       debugPrint('Video decoder init error: $e');
     }
@@ -171,7 +174,8 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
   Future<void> _startStreaming() async {
     try {
       final monitorIndex = ref.read(monitorIndexProvider);
-      await bridge.rustApi.startStreaming(widget.address, widget.port, monitorIndex: monitorIndex);
+      await bridge.rustApi.startStreaming(widget.address, widget.port,
+          monitorIndex: monitorIndex);
       if (mounted) {
         ref.read(isStreamingProvider.notifier).state = true;
         ref.read(reconnectStateProvider.notifier).state =
@@ -210,7 +214,8 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
 
     try {
       final monitorIndex = ref.read(monitorIndexProvider);
-      await bridge.rustApi.startStreaming(widget.address, widget.port, monitorIndex: monitorIndex);
+      await bridge.rustApi.startStreaming(widget.address, widget.port,
+          monitorIndex: monitorIndex);
       if (mounted) {
         ref.read(isStreamingProvider.notifier).state = true;
         ref.read(reconnectStateProvider.notifier).state =
@@ -806,7 +811,7 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
           conn.ConnectionState.disconnected;
       ref.read(isStreamingProvider.notifier).state = false;
       ref.read(healthProvider.notifier).reset();
-      Navigator.of(context).pop();
+      context.go('/');
     }
   }
 
@@ -1079,9 +1084,9 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
                     ),
                     IconButton.filledTonal(
                       onPressed: () {
-                        Navigator.of(context).pushNamed(
+                        context.push(
                           '/terminal',
-                          arguments: {
+                          extra: {
                             'address': widget.address,
                             'port': widget.port,
                           },
@@ -1089,6 +1094,19 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
                       },
                       icon: const Icon(Icons.terminal),
                       tooltip: 'Remote terminal',
+                    ),
+                    IconButton.filledTonal(
+                      onPressed: () {
+                        context.push(
+                          '/files',
+                          extra: {
+                            'address': widget.address,
+                            'port': widget.port,
+                          },
+                        );
+                      },
+                      icon: const Icon(Icons.folder),
+                      tooltip: 'File browser',
                     ),
                     PopupMenuButton<String>(
                       onSelected: (action) => _sendPowerCommand(action),
