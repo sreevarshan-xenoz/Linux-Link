@@ -12,7 +12,6 @@ import 'screens/file_browser_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/terminal_screen.dart';
 import 'screens/trust_screen.dart';
-import 'services/background_service.dart';
 import 'services/notification_service.dart';
 
 final _router = GoRouter(
@@ -101,17 +100,25 @@ void _startPacketPoller() {
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize the Rust backend
-  await bridge.rustApi.init();
+  debugPrint('Starting Linux Link initialization...');
 
-  // Initialize the Android foreground service
-  await initBackgroundService();
+  try {
+    // Initialize the Rust backend
+    debugPrint('Initializing Rust backend...');
+    await bridge.rustApi.init();
+    debugPrint('Rust backend initialized successfully');
+  } catch (e) {
+    debugPrint('Failed to initialize Rust backend: $e');
+    // Continue anyway - the app might still work without Rust
+  }
 
   // Initialize notification mirroring for incoming PC notifications
   await NotificationMirrorService.initialize();
 
   // Start polling for incoming KDE Connect packets (notifications, etc.)
   _startPacketPoller();
+
+  debugPrint('Linux Link initialization complete');
 
   runApp(
     const ProviderScope(
