@@ -167,6 +167,16 @@ Future<void> sendKeyboardEvent(
     RustApi.instance.api.crateApiSendKeyboardEvent(
         address: address, port: port, keyCode: keyCode, text: text);
 
+/// Send gamepad state over the QUIC streaming channel.
+///
+/// `axes` contains 6 i16 values: [LX, LY, RX, RY, L2, R2] in range -32768..32767.
+/// `buttons` is a 16-bit bitmask (A=0, B=1, X=2, Y=3, LB=4, RB=5,
+/// Select=6, Start=7, Home=8, LSB=9, RSB=10, DPadUp=11..DPadRight=14).
+/// Requires an active streaming session — no TCP fallback for gamepad.
+Future<void> sendGamepadEvent(
+        {required List<int> axes, required int buttons}) =>
+    RustApi.instance.api.crateApiSendGamepadEvent(axes: axes, buttons: buttons);
+
 @freezed
 sealed class ConnectionState with _$ConnectionState {
   const ConnectionState._();
