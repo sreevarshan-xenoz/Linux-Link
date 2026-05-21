@@ -5,6 +5,12 @@ use std::time::UNIX_EPOCH;
 
 pub struct FileBrowsePlugin;
 
+impl Default for FileBrowsePlugin {
+    fn default() -> Self {
+        Self
+    }
+}
+
 impl FileBrowsePlugin {
     pub fn new() -> Self {
         Self
