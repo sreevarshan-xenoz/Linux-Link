@@ -110,18 +110,23 @@ pub trait Plugin: Send + Sync {
 /// Implemented per-connection so plugins can reply without owning the socket.
 #[async_trait::async_trait]
 pub trait DeviceSender: Send + Sync {
+    /// Get the unique ID of the connected device (e.g. IP address or UUID).
+    fn device_id(&self) -> &str;
+
     async fn send_packet(&self, packet: &NetworkPacket) -> Result<()>;
 }
 
 /// Concrete sender that wraps the per-connection TCP write half.
 pub struct TcpDeviceSender<W> {
     writer: Arc<Mutex<W>>,
+    device_id: String,
 }
 
 impl<W> Clone for TcpDeviceSender<W> {
     fn clone(&self) -> Self {
         Self {
             writer: self.writer.clone(),
+            device_id: self.device_id.clone(),
         }
     }
 }
@@ -130,14 +135,15 @@ impl<W> TcpDeviceSender<W>
 where
     W: tokio::io::AsyncWrite + Unpin + Send,
 {
-    pub fn new(writer: W) -> Self {
+    pub fn new(writer: W, device_id: String) -> Self {
         Self {
             writer: Arc::new(Mutex::new(writer)),
+            device_id,
         }
     }
 
-    pub fn from_arc(writer: Arc<Mutex<W>>) -> Self {
-        Self { writer }
+    pub fn from_arc(writer: Arc<Mutex<W>>, device_id: String) -> Self {
+        Self { writer, device_id }
     }
 }
 
@@ -146,6 +152,10 @@ impl<W> DeviceSender for TcpDeviceSender<W>
 where
     W: tokio::io::AsyncWrite + Unpin + Send,
 {
+    fn device_id(&self) -> &str {
+        &self.device_id
+    }
+
     async fn send_packet(&self, packet: &NetworkPacket) -> Result<()> {
         use tokio::io::AsyncWriteExt;
         let bytes = packet.to_wire()?;
