@@ -31,6 +31,7 @@ impl ConnectionManager {
             .await
             .context("failed to write handshake")?;
 
+        // Step 2: Read handshake response with timeout
         let mut reader = BufReader::new(stream);
         let mut response = String::new();
         tokio::time::timeout(Duration::from_secs(5), reader.read_line(&mut response))
@@ -42,7 +43,18 @@ impl ConnectionManager {
             bail!("handshake failed: {}", response.trim());
         }
 
-        // Step 2: Send Identity Packet (Required by server)
+        // Step 3: Read server's identity packet (optional, server may not send it immediately)
+        let mut identity_response = String::new();
+        match tokio::time::timeout(Duration::from_secs(3), reader.read_line(&mut identity_response)).await {
+            Ok(Ok(_)) if !identity_response.trim().is_empty() => {
+                tracing::debug!("Received server identity: {}", identity_response.trim());
+            }
+            _ => {
+                tracing::debug!("No server identity packet received or timeout");
+            }
+        }
+
+        // Step 4: Send client identity packet
         let identity = DeviceIdentity::new("linux-link-client", "Linux Link Android Client");
         let identity_packet = identity.as_identity_packet();
         let identity_bytes = identity_packet.to_wire()?;
