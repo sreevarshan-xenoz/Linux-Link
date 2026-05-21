@@ -11,12 +11,13 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+use tokio::sync::broadcast;
 use tokio::sync::Mutex;
 
 use linux_link_core::streaming::InputPacket;
 
 use crate::{
-    CERT_DIR, CERT_MANAGER, CONNECTION_STATE, CONTROL_WRITER, INCOMING_PACKETS,
+    CONNECTION_STATE, CONTROL_WRITER,
     MAX_AUDIO_PACKETS_PER_RECEIVE, MAX_FRAMES_PER_RECEIVE, STREAMING_ACTIVE, STREAMING_BYTE_COUNT,
     STREAMING_FRAME_COUNT, STREAMING_HANDLE, STREAMING_RTT_US, STREAMING_START_TIME,
     StreamingHandle, update_streaming_rtt,
@@ -202,7 +203,7 @@ pub async fn connect_to_peer(address: String, port: u16) -> Result<ConnectionSta
 /// clipboard sync, etc.).
 #[frb]
 pub async fn poll_incoming_packets() -> Vec<String> {
-    let mut rx = {
+    let rx = {
         let guard = crate::INCOMING_PACKETS.lock().await;
         guard.as_ref().map(|tx| tx.subscribe())
     };
@@ -233,7 +234,7 @@ pub async fn send_clipboard(address: String, port: u16, content: String) -> Resu
             .cloned()
             .ok_or_else(|| "Not connected".to_string())?
     };
-    let sender = TcpDeviceSender::from_arc(writer_arc);
+    let sender = TcpDeviceSender::from_arc(writer_arc, address.clone());
     let packet = NetworkPacket::new("kdeconnect.clipboard").with_body(serde_json::json!({
         "content": content,
     }));
@@ -263,7 +264,7 @@ pub async fn get_clipboard(address: String, port: u16) -> Result<String, String>
     };
 
     if let Some(writer) = writer_opt {
-        let sender = TcpDeviceSender::from_arc(writer);
+        let sender = TcpDeviceSender::from_arc(writer, address.clone());
         let request = NetworkPacket::new("kdeconnect.clipboard.connect");
         sender
             .send_packet(&request)
@@ -271,7 +272,7 @@ pub async fn get_clipboard(address: String, port: u16) -> Result<String, String>
             .map_err(|e: anyhow::Error| e.to_string())?;
 
         // Subscribe to incoming packets and wait for the clipboard response
-        let mut rx = {
+        let rx = {
             let guard = crate::INCOMING_PACKETS.lock().await;
             guard.as_ref().map(|tx| tx.subscribe())
         };
@@ -310,7 +311,7 @@ pub async fn get_clipboard(address: String, port: u16) -> Result<String, String>
         .await
         .map_err(|e: anyhow::Error| e.to_string())?;
     let (reader, writer) = tokio::io::split(stream);
-    let sender = TcpDeviceSender::new(writer);
+    let sender = TcpDeviceSender::new(writer, address);
     let request = NetworkPacket::new("kdeconnect.clipboard.connect");
     sender
         .send_packet(&request)
@@ -361,7 +362,7 @@ pub async fn send_file(address: String, port: u16, file_path: String) -> Result<
         .await
         .map_err(|e: anyhow::Error| e.to_string())?;
     let (_reader, writer) = tokio::io::split(stream);
-    let sender = TcpDeviceSender::new(writer);
+    let sender = TcpDeviceSender::new(writer, address);
     let request = NetworkPacket::new("kdeconnect.share.request")
         .with_body(serde_json::json!({
             "filename": filename,
@@ -416,7 +417,7 @@ pub async fn list_remote_files(
         .await
         .map_err(|e: anyhow::Error| e.to_string())?;
     let (reader, writer) = tokio::io::split(stream);
-    let sender = TcpDeviceSender::new(writer);
+    let sender = TcpDeviceSender::new(writer, address);
     let request = NetworkPacket::new("kdeconnect.filebrowse.request")
         .with_body(serde_json::json!({ "path": remote_path }));
     sender
@@ -565,7 +566,7 @@ pub async fn stop_streaming() -> Result<(), String> {
     // Reset streaming metrics
     STREAMING_FRAME_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
     STREAMING_BYTE_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
-    *STREAMING_START_TIME.lock().unwrap() = None;
+    *STREAMING_START_TIME.lock().await = None;
     STREAMING_RTT_US.store(0, std::sync::atomic::Ordering::Relaxed);
 
     let handle = {
@@ -605,9 +606,9 @@ pub fn get_streaming_stats() -> StreamingStatsDto {
     let frame_count = STREAMING_FRAME_COUNT.load(Ordering::Relaxed);
     let byte_count = STREAMING_BYTE_COUNT.load(Ordering::Relaxed);
     let elapsed = STREAMING_START_TIME
-        .lock()
-        .unwrap()
-        .map(|t| t.elapsed())
+        .try_lock()
+        .ok()
+        .and_then(|g| g.map(|t| t.elapsed()))
         .unwrap_or_default();
 
     let fps = if elapsed.as_secs() > 0 {
@@ -674,7 +675,7 @@ pub async fn get_monitor_count(address: String, port: u16) -> Result<u32, String
     match conn_mgr.connect(&address, port).await {
         Ok(stream) => {
             let (reader, writer) = tokio::io::split(stream);
-            let sender = TcpDeviceSender::new(writer);
+            let sender = TcpDeviceSender::new(writer, address);
             let request = NetworkPacket::new("kdeconnect.linuxlink.monitors")
                 .with_body(serde_json::json!({}));
             if let Err(e) = sender.send_packet(&request).await {
@@ -721,7 +722,7 @@ pub async fn send_power_command(
         .await
         .map_err(|e: anyhow::Error| e.to_string())?;
     let (_reader, writer) = tokio::io::split(stream);
-    let sender = TcpDeviceSender::new(writer);
+    let sender = TcpDeviceSender::new(writer, address);
     let packet = NetworkPacket::new("kdeconnect.linuxlink.power")
         .with_body(serde_json::json!({ "action": action }));
     sender
@@ -745,7 +746,7 @@ pub async fn execute_remote_command(
         .await
         .map_err(|e: anyhow::Error| e.to_string())?;
     let (reader, writer) = tokio::io::split(stream);
-    let sender = TcpDeviceSender::new(writer);
+    let sender = TcpDeviceSender::new(writer, address);
     let request = NetworkPacket::new("kdeconnect.linuxlink.exec")
         .with_body(serde_json::json!({ "command": command }));
     sender
@@ -828,8 +829,8 @@ pub async fn receive_frames(timeout_ms: u64) -> Vec<FrameDto> {
                 STREAMING_FRAME_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 STREAMING_BYTE_COUNT
                     .fetch_add(packet.data.len() as u64, std::sync::atomic::Ordering::Relaxed);
-                if STREAMING_START_TIME.lock().unwrap().is_none() {
-                    *STREAMING_START_TIME.lock().unwrap() = Some(std::time::Instant::now());
+                if STREAMING_START_TIME.lock().await.is_none() {
+                    *STREAMING_START_TIME.lock().await = Some(std::time::Instant::now());
                 }
                 frames.push(FrameDto {
                     data: packet.data,
@@ -921,7 +922,7 @@ pub async fn send_mouse_event(
             .cloned()
             .ok_or_else(|| "Not connected".to_string())?
     };
-    let sender = TcpDeviceSender::from_arc(writer_arc);
+    let sender = TcpDeviceSender::from_arc(writer_arc, _address.clone());
     let mut body = serde_json::json!({});
     if x != 0.0 || y != 0.0 {
         body["dx"] = serde_json::json!(x);
@@ -1061,7 +1062,7 @@ pub async fn send_keyboard_event(
             .cloned()
             .ok_or_else(|| "Not connected".to_string())?
     };
-    let sender = TcpDeviceSender::from_arc(writer_arc);
+    let sender = TcpDeviceSender::from_arc(writer_arc, _address.clone());
     let mut body = serde_json::json!({});
     if !text.is_empty() {
         body["text"] = serde_json::json!(text);
