@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../rust_api_bridge.dart' as bridge;
 import '../providers/streaming_provider.dart';
@@ -506,7 +507,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             subtitle: const Text('Manage trusted certificate fingerprints'),
             trailing: const Icon(Icons.chevron_right),
             onTap: () {
-              Navigator.of(context).pushNamed('/trust', arguments: {
+              context.push('/trust', extra: {
                 'address': '',
                 'fingerprint': '',
                 'showTrustedDevices': true,
