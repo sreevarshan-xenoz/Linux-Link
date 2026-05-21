@@ -8,6 +8,12 @@ use tokio::process::Command;
 /// corresponding systemctl command on the host.
 pub struct PowerPlugin;
 
+impl Default for PowerPlugin {
+    fn default() -> Self {
+        Self
+    }
+}
+
 impl PowerPlugin {
     pub fn new() -> Self {
         Self
