@@ -1,6 +1,8 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
+use dashmap::DashMap;
 use linux_link_core::protocol::kdeconnect::{DeviceSender, NetworkPacket, Plugin};
 use serde_json::json;
+use std::path::PathBuf;
 use tokio::process::Command;
 
 /// Remote command execution plugin.
@@ -8,21 +10,27 @@ use tokio::process::Command;
 /// Handles `kdeconnect.linuxlink.exec` packets. Executes a shell command
 /// on the server and returns stdout, stderr, and the exit code.
 ///
-/// By default, commands run through `/bin/sh -c` for maximum compatibility.    /// A command whitelist can be configured in the server config.
+/// By default, commands run through `/bin/sh -c` for maximum compatibility.
 pub struct ExecPlugin {
     #[allow(dead_code)]
     whitelist: Option<Vec<String>>,
+    /// Map of device_id -> current working directory for stateful sessions.
+    cwd_map: DashMap<String, PathBuf>,
 }
 
 impl ExecPlugin {
     pub fn new() -> Self {
-        Self { whitelist: None }
+        Self {
+            whitelist: None,
+            cwd_map: DashMap::new(),
+        }
     }
 
     #[allow(dead_code)]
     pub fn with_whitelist(commands: Vec<String>) -> Self {
         Self {
             whitelist: Some(commands),
+            cwd_map: DashMap::new(),
         }
     }
 
@@ -58,6 +66,7 @@ impl Plugin for ExecPlugin {
         if packet.packet_type.as_str() == "kdeconnect.linuxlink.exec" {
             let body = &packet.body;
             let command = body.get("command").and_then(|v| v.as_str()).unwrap_or("");
+            let device_id = sender.device_id().to_string();
 
             if command.is_empty() {
                 let response = NetworkPacket::new("kdeconnect.linuxlink.exec").with_body(json!({
@@ -79,10 +88,52 @@ impl Plugin for ExecPlugin {
                 return Ok(());
             }
 
-            tracing::info!("Executing command: {command}");
+            tracing::info!("Executing command [{}]: {}", device_id, command);
 
-            match execute_command(command).await {
-                Ok((stdout, stderr, exit_code)) => {
+            let initial_cwd = self
+                .cwd_map
+                .get(&device_id)
+                .map(|p| p.clone())
+                .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from("/")));
+
+            // To support persistent 'cd', we run the command and then print the new PWD with a marker.
+            // We use ';' instead of '&&' so that pwd runs even if the command fails (important for 'cd' to bad paths).
+            let marker = "---LINUX_LINK_CWD---";
+            let wrapped_command = format!("{} ; echo -n \"\n{}\"; pwd", command, marker);
+
+            let output = Command::new("/bin/sh")
+                .args(["-c", &wrapped_command])
+                .current_dir(&initial_cwd)
+                .output()
+                .await;
+
+            match output {
+                Ok(output) => {
+                    let mut stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                    let exit_code = output.status.code().unwrap_or(-1);
+
+                    // Parse the new CWD from stdout
+                    if let Some(idx) = stdout.rfind(marker) {
+                        let new_cwd = stdout[idx + marker.len()..].trim().to_string();
+                        if !new_cwd.is_empty() {
+                            self.cwd_map.insert(device_id, PathBuf::from(new_cwd));
+                        }
+                        // Remove the marker and the path from stdout
+                        stdout.truncate(idx);
+                        // Also remove a trailing newline if it exists
+                        if stdout.ends_with('\n') {
+                            stdout.pop();
+                        }
+                    }
+
+                    tracing::debug!(
+                        "Command exit_code={} stdout={} stderr={}",
+                        exit_code,
+                        stdout.len(),
+                        stderr.len()
+                    );
+
                     let response =
                         NetworkPacket::new("kdeconnect.linuxlink.exec").with_body(json!({
                             "stdout": stdout,
@@ -104,26 +155,4 @@ impl Plugin for ExecPlugin {
         }
         Ok(())
     }
-}
-
-/// Execute a shell command and return (stdout, stderr, exit_code).
-async fn execute_command(command: &str) -> Result<(String, String, i32)> {
-    let output = Command::new("/bin/sh")
-        .args(["-c", command])
-        .output()
-        .await
-        .with_context(|| format!("Failed to execute: {command}"))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let exit_code = output.status.code().unwrap_or(-1);
-
-    tracing::debug!(
-        "Command exit_code={} stdout={} stderr={}",
-        exit_code,
-        stdout.len(),
-        stderr.len()
-    );
-
-    Ok((stdout, stderr, exit_code))
 }
