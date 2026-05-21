@@ -1,7 +1,7 @@
 use crate::config::Config;
 use crate::input_injector::InputInjector;
 use crate::kde;
-use crate::notification_monitor::{start_notification_monitor, ForwardedNotification};
+use crate::notification_monitor::start_notification_monitor;
 use anyhow::{Context, Result, bail};
 use linux_link_core::protocol::connection::ConnectionManager;
 use linux_link_core::protocol::kdeconnect::{DeviceSender, NetworkPacket, PluginRegistry, TcpDeviceSender};
@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::tcp::OwnedWriteHalf;
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
@@ -39,12 +39,10 @@ pub async fn run(config: Config) -> Result<()> {
     };
 
     let mut local_ips = linux_link_core::tailscale::lan::get_local_ips().await;
-    if tailscale_ready {
-        if let Ok(ip) = tailscale.get_self_ip().await {
-            tracing::info!("Tailscale online at {}", ip);
-            if !local_ips.contains(&ip) {
-                local_ips.push(ip);
-            }
+    if tailscale_ready && let Ok(ip) = tailscale.get_self_ip().await {
+        tracing::info!("Tailscale online at {}", ip);
+        if !local_ips.contains(&ip) {
+            local_ips.push(ip);
         }
     }
 
@@ -114,7 +112,7 @@ pub async fn run(config: Config) -> Result<()> {
                                     }
                                 }
                                 *clients = alive;
-                                if clients.len() > 0 {
+                                if !clients.is_empty() {
                                     tracing::debug!("Forwarded notification to {} client(s)", clients.len());
                                 }
                             }
@@ -419,7 +417,10 @@ async fn handle_connection_with_kde(
     }
 
     // Step 3: Enter KDE Connect packet loop
-    let sender = TcpDeviceSender::from_arc(writer);
+    let device_id = peer_addr
+        .map(|a| a.ip().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    let sender = TcpDeviceSender::from_arc(writer, device_id);
     let sender_ref = &sender;
 
     // Register this client for notification broadcasting.
