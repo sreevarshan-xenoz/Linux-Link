@@ -7,7 +7,7 @@ edition.workspace = true
 default = ["server"]
 
 # Linux server features
-server = ["capture", "encode", "injection"]
+server = ["capture", "encode", "injection", "opus"]
 capture = ["dep:ashpd", "dep:pipewire", "dep:libspa", "dep:x11rb", "dep:xcap", "wayland-portal"]
 encode = ["dep:ffmpeg-sidecar"]
 injection = ["dep:evdev"]
@@ -34,8 +34,8 @@ libspa = { workspace = true, optional = true }
 x11rb = { version = "0.13", features = ["shm"], optional = true }
 tokio-util.workspace = true
 
-# Audio encoding
-opus.workspace = true
+# Audio encoding (server-only — Android client only decodes raw Opus packets)
+opus = { workspace = true, optional = true }
 
 # Video encoding (Linux-only, optional)
 ffmpeg-sidecar = { workspace = true, optional = true }
