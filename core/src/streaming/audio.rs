@@ -3,7 +3,7 @@
 //! Provides:
 //! - [`AudioConfig`] — sample rate, channels, bitrate configuration
 //! - [`AudioPacket`] — encoded audio data with metadata
-//! - [`AudioEncoder`] — Opus encoder wrapping the `opus` crate
+//! - [`AudioEncoder`] — Opus encoder wrapping the `opus` crate (server-only)
 //! - Simple PCM buffer types for feeding captured audio
 
 use anyhow::{Context, Result};
@@ -59,12 +59,15 @@ pub struct AudioPacket {
 }
 
 /// Opus audio encoder wrapping the `opus` crate.
+/// Only available when the `opus` feature is enabled (server builds).
+#[cfg(feature = "opus")]
 pub struct AudioEncoder {
     encoder: Option<opus::Encoder>,
     sequence: u64,
     config: AudioConfig,
 }
 
+#[cfg(feature = "opus")]
 impl AudioEncoder {
     /// Create a new Opus encoder with the given configuration.
     pub fn new(config: AudioConfig) -> Result<Self> {
@@ -154,6 +157,7 @@ impl AudioEncoder {
     }
 }
 
+#[cfg(feature = "opus")]
 impl Drop for AudioEncoder {
     fn drop(&mut self) {
         // opus::Encoder is automatically cleaned up on drop
@@ -183,6 +187,7 @@ mod tests {
         assert_eq!(config.frame_buffer_size(), 3840);
     }
 
+    #[cfg(feature = "opus")]
     #[test]
     fn test_audio_encoder_create() {
         let config = AudioConfig::default();
@@ -190,6 +195,7 @@ mod tests {
         assert!(encoder.is_ok());
     }
 
+    #[cfg(feature = "opus")]
     #[test]
     fn test_audio_encoder_encode_silence() {
         let config = AudioConfig::default();
@@ -207,6 +213,7 @@ mod tests {
         assert_eq!(packet.sequence, 0);
     }
 
+    #[cfg(feature = "opus")]
     #[test]
     fn test_audio_encoder_sequence_increment() {
         let config = AudioConfig::default();
@@ -225,6 +232,7 @@ mod tests {
         assert_eq!(third.sequence, 2);
     }
 
+    #[cfg(feature = "opus")]
     #[test]
     fn test_encode_silence_method() {
         let config = AudioConfig::default();
@@ -233,6 +241,7 @@ mod tests {
         assert!(result.is_some());
     }
 
+    #[cfg(feature = "opus")]
     #[test]
     fn test_reset_sequence() {
         let config = AudioConfig::default();
@@ -249,6 +258,7 @@ mod tests {
         assert_eq!(after.sequence, 0);
     }
 
+    #[cfg(feature = "opus")]
     #[test]
     fn test_mono_config() {
         let config = AudioConfig {
