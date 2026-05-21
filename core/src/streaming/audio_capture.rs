@@ -13,7 +13,7 @@ use anyhow::{Context, Result};
 use pipewire::stream::StreamFlags;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 /// A buffer of PCM audio data (16-bit signed, interleaved stereo).
 #[derive(Debug, Clone)]
@@ -107,9 +107,8 @@ fn run_pipewire_audio_capture(
         .context("Failed to create PipeWire audio stream")?;
 
     // Calculate frames per buffer
-    let samples_per_frame =
-        (sample_rate as usize * frame_duration_ms as usize) / 1000;
-    let frame_bytes = samples_per_frame * channels as usize * 2; // s16 = 2 bytes
+    let _frame_bytes =
+        (sample_rate as usize * frame_duration_ms as usize) / 1000 * channels as usize * 2; // s16 = 2 bytes
     let frame_count = AtomicU64::new(0);
     let has_audio = AtomicBool::new(false);
 
@@ -118,7 +117,6 @@ fn run_pipewire_audio_capture(
         cancel: cancel.clone(),
         sample_rate,
         channels,
-        samples_per_frame,
         frame_count: &frame_count,
         has_audio: &has_audio,
     };
@@ -170,7 +168,6 @@ struct AudioStreamData<'a> {
     cancel: CancellationToken,
     sample_rate: u32,
     channels: u16,
-    samples_per_frame: usize,
     frame_count: &'a AtomicU64,
     has_audio: &'a AtomicBool,
 }
