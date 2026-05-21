@@ -66,15 +66,17 @@ async fn run_dbus_monitor(tx: broadcast::Sender<ForwardedNotification>) -> Resul
 async fn try_dbus_monitor_subprocess(tx: &broadcast::Sender<ForwardedNotification>) -> Result<()> {
     use tokio::io::AsyncBufReadExt;
 
-    let mut child = tokio::process::Command::new("dbus-monitor")
+    let mut child = tokio::process::Command::new("stdbuf")
         .args([
+            "-oL",
+            "dbus-monitor",
             "--session",
             "interface=org.freedesktop.Notifications,member=Notify",
         ])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn()
-        .context("failed to start dbus-monitor")?;
+        .context("failed to start dbus-monitor with stdbuf")?;
 
     let stdout = child.stdout.take().context("no stdout from dbus-monitor")?;
     let reader = tokio::io::BufReader::new(stdout);
@@ -87,6 +89,7 @@ async fn try_dbus_monitor_subprocess(tx: &broadcast::Sender<ForwardedNotificatio
     let mut current_body = String::new();
     let mut current_urgency = String::new();
     let mut in_notify = false;
+    let mut string_count = 0;
 
     while let Some(line) = lines.next_line().await.transpose() {
         let line = match line {
@@ -102,6 +105,7 @@ async fn try_dbus_monitor_subprocess(tx: &broadcast::Sender<ForwardedNotificatio
 
         if trimmed.contains("method call") && trimmed.contains("Notify") {
             in_notify = true;
+            string_count = 0;
             current_app.clear();
             current_summary.clear();
             current_body.clear();
@@ -112,13 +116,14 @@ async fn try_dbus_monitor_subprocess(tx: &broadcast::Sender<ForwardedNotificatio
         if in_notify {
             if let Some(s) = trimmed.strip_prefix("string \"") {
                 let value = unescape_dbus_string(s.trim_end_matches('"'));
-                if current_app.is_empty() {
-                    current_app = value;
-                } else if current_summary.is_empty() {
-                    current_summary = value;
-                } else if current_body.is_empty() {
-                    current_body = value;
+                match string_count {
+                    0 => current_app = value,
+                    // index 1 is app_icon string
+                    2 => current_summary = value,
+                    3 => current_body = value,
+                    _ => {}
                 }
+                string_count += 1;
             } else if trimmed.starts_with("byte") {
                 // Urgency level (0=low, 1=normal, 2=critical)
                 let val = trimmed
