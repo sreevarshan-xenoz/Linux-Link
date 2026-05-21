@@ -3,6 +3,12 @@ use linux_link_core::protocol::kdeconnect::{DeviceSender, NetworkPacket, Plugin}
 #[derive(Debug)]
 pub struct BatteryPlugin;
 
+impl Default for BatteryPlugin {
+    fn default() -> Self {
+        Self
+    }
+}
+
 impl BatteryPlugin {
     pub fn new() -> Self {
         Self
