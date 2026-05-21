@@ -3,6 +3,10 @@ name = "linux-link-server"
 version.workspace = true
 edition.workspace = true
 
+[lib]
+name = "linux_link_server"
+path = "src/lib.rs"
+
 [[bin]]
 name = "linux-link"
 path = "src/main.rs"
@@ -34,3 +38,4 @@ tokio-util.workspace = true
 
 # UUID for persistent device ID
 uuid.workspace = true
+dashmap = "6.1.0"
