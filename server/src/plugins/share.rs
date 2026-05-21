@@ -8,6 +8,12 @@ pub struct SharePlugin {
     download_dir: PathBuf,
 }
 
+impl Default for SharePlugin {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SharePlugin {
     pub fn new() -> Self {
         Self {
