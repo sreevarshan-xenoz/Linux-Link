@@ -40,6 +40,9 @@ abstract class RustApiApiImplPlatform extends BaseApiImpl<RustApiWire> {
   FrameDto dco_decode_frame_dto(dynamic raw);
 
   @protected
+  int dco_decode_i_16(dynamic raw);
+
+  @protected
   int dco_decode_i_32(dynamic raw);
 
   @protected
@@ -53,6 +56,12 @@ abstract class RustApiApiImplPlatform extends BaseApiImpl<RustApiWire> {
 
   @protected
   List<PeerInfoDto> dco_decode_list_peer_info_dto(dynamic raw);
+
+  @protected
+  List<int> dco_decode_list_prim_i_16_loose(dynamic raw);
+
+  @protected
+  Int16List dco_decode_list_prim_i_16_strict(dynamic raw);
 
   @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
@@ -109,6 +118,9 @@ abstract class RustApiApiImplPlatform extends BaseApiImpl<RustApiWire> {
   FrameDto sse_decode_frame_dto(SseDeserializer deserializer);
 
   @protected
+  int sse_decode_i_16(SseDeserializer deserializer);
+
+  @protected
   int sse_decode_i_32(SseDeserializer deserializer);
 
   @protected
@@ -123,6 +135,12 @@ abstract class RustApiApiImplPlatform extends BaseApiImpl<RustApiWire> {
 
   @protected
   List<PeerInfoDto> sse_decode_list_peer_info_dto(SseDeserializer deserializer);
+
+  @protected
+  List<int> sse_decode_list_prim_i_16_loose(SseDeserializer deserializer);
+
+  @protected
+  Int16List sse_decode_list_prim_i_16_strict(SseDeserializer deserializer);
 
   @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
@@ -182,6 +200,9 @@ abstract class RustApiApiImplPlatform extends BaseApiImpl<RustApiWire> {
   void sse_encode_frame_dto(FrameDto self, SseSerializer serializer);
 
   @protected
+  void sse_encode_i_16(int self, SseSerializer serializer);
+
+  @protected
   void sse_encode_i_32(int self, SseSerializer serializer);
 
   @protected
@@ -197,6 +218,14 @@ abstract class RustApiApiImplPlatform extends BaseApiImpl<RustApiWire> {
   @protected
   void sse_encode_list_peer_info_dto(
       List<PeerInfoDto> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_prim_i_16_loose(
+      List<int> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_prim_i_16_strict(
+      Int16List self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_prim_u_8_strict(
