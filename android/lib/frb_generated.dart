@@ -70,7 +70,7 @@ class RustApi extends BaseEntrypoint<RustApiApi, RustApiApiImpl, RustApiWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => -2115490623;
+  int get rustContentHash => -1156727626;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -127,6 +127,9 @@ abstract class RustApiApi extends BaseApi {
 
   Future<void> crateApiSendFile(
       {required String address, required int port, required String filePath});
+
+  Future<void> crateApiSendGamepadEvent(
+      {required List<int> axes, required int buttons});
 
   Future<void> crateApiSendKeyboardEvent(
       {required String address,
@@ -630,6 +633,32 @@ class RustApiApiImpl extends RustApiApiImplPlatform implements RustApiApi {
       );
 
   @override
+  Future<void> crateApiSendGamepadEvent(
+      {required List<int> axes, required int buttons}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_list_prim_i_16_loose(axes, serializer);
+        sse_encode_u_32(buttons, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 20, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_unit,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiSendGamepadEventConstMeta,
+      argValues: [axes, buttons],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiSendGamepadEventConstMeta => const TaskConstMeta(
+        debugName: "send_gamepad_event",
+        argNames: ["axes", "buttons"],
+      );
+
+  @override
   Future<void> crateApiSendKeyboardEvent(
       {required String address,
       required int port,
@@ -643,7 +672,7 @@ class RustApiApiImpl extends RustApiApiImplPlatform implements RustApiApi {
         sse_encode_i_32(keyCode, serializer);
         sse_encode_String(text, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 20, port: port_);
+            funcId: 21, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -678,7 +707,7 @@ class RustApiApiImpl extends RustApiApiImplPlatform implements RustApiApi {
         sse_encode_i_32(button, serializer);
         sse_encode_bool(isPressed, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 21, port: port_);
+            funcId: 22, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -705,7 +734,7 @@ class RustApiApiImpl extends RustApiApiImplPlatform implements RustApiApi {
         sse_encode_u_16(port, serializer);
         sse_encode_String(action, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 22, port: port_);
+            funcId: 23, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -729,7 +758,7 @@ class RustApiApiImpl extends RustApiApiImplPlatform implements RustApiApi {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_String(path, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 23, port: port_);
+            funcId: 24, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -752,7 +781,7 @@ class RustApiApiImpl extends RustApiApiImplPlatform implements RustApiApi {
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 24, port: port_);
+            funcId: 25, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -775,7 +804,7 @@ class RustApiApiImpl extends RustApiApiImplPlatform implements RustApiApi {
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 25, port: port_);
+            funcId: 26, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_String,
@@ -855,6 +884,12 @@ class RustApiApiImpl extends RustApiApiImplPlatform implements RustApiApi {
   }
 
   @protected
+  int dco_decode_i_16(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as int;
+  }
+
+  @protected
   int dco_decode_i_32(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as int;
@@ -882,6 +917,18 @@ class RustApiApiImpl extends RustApiApiImplPlatform implements RustApiApi {
   List<PeerInfoDto> dco_decode_list_peer_info_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return (raw as List<dynamic>).map(dco_decode_peer_info_dto).toList();
+  }
+
+  @protected
+  List<int> dco_decode_list_prim_i_16_loose(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as List<int>;
+  }
+
+  @protected
+  Int16List dco_decode_list_prim_i_16_strict(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as Int16List;
   }
 
   @protected
@@ -1036,6 +1083,12 @@ class RustApiApiImpl extends RustApiApiImplPlatform implements RustApiApi {
   }
 
   @protected
+  int sse_decode_i_16(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getInt16();
+  }
+
+  @protected
   int sse_decode_i_32(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getInt32();
@@ -1089,6 +1142,20 @@ class RustApiApiImpl extends RustApiApiImplPlatform implements RustApiApi {
       ans_.add(sse_decode_peer_info_dto(deserializer));
     }
     return ans_;
+  }
+
+  @protected
+  List<int> sse_decode_list_prim_i_16_loose(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var len_ = sse_decode_i_32(deserializer);
+    return deserializer.buffer.getInt16List(len_);
+  }
+
+  @protected
+  Int16List sse_decode_list_prim_i_16_strict(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var len_ = sse_decode_i_32(deserializer);
+    return deserializer.buffer.getInt16List(len_);
   }
 
   @protected
@@ -1247,6 +1314,12 @@ class RustApiApiImpl extends RustApiApiImplPlatform implements RustApiApi {
   }
 
   @protected
+  void sse_encode_i_16(int self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putInt16(self);
+  }
+
+  @protected
   void sse_encode_i_32(int self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putInt32(self);
@@ -1289,6 +1362,23 @@ class RustApiApiImpl extends RustApiApiImplPlatform implements RustApiApi {
     for (final item in self) {
       sse_encode_peer_info_dto(item, serializer);
     }
+  }
+
+  @protected
+  void sse_encode_list_prim_i_16_loose(
+      List<int> self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    serializer.buffer
+        .putInt16List(self is Int16List ? self : Int16List.fromList(self));
+  }
+
+  @protected
+  void sse_encode_list_prim_i_16_strict(
+      Int16List self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    serializer.buffer.putInt16List(self);
   }
 
   @protected
