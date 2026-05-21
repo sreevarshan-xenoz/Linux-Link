@@ -99,10 +99,13 @@ impl StreamingClient {
             .context("Failed to create QUIC transport")?;
 
         let server_name = addr.ip().to_string();
-        let connection = transport
-            .connect(addr, &server_name)
-            .await
-            .context("Failed to connect to streaming server")?;
+        let connection = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            transport.connect(addr, &server_name),
+        )
+        .await
+        .context("Connection to streaming server timed out")?
+        .context("Failed to connect to streaming server")?;
 
         info!("Streaming connection established to {addr}");
 
@@ -401,7 +404,7 @@ mod tests {
         use super::transport::CertManager;
         let cert_manager =
             std::sync::Arc::new(CertManager::new().expect("Failed to create CertManager"));
-        let client = StreamingClient::new(8, cert_manager);
+        let (client, _frame_rx, _audio_rx) = StreamingClient::new(8, cert_manager);
         assert!(!client.is_running());
         assert_eq!(client.current_rtt(), Duration::ZERO);
     }
