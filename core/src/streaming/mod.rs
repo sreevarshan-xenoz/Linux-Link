@@ -23,7 +23,9 @@ pub mod encoder;
 #[cfg(feature = "server")]
 pub mod streamer;
 
-pub use audio::{AudioConfig, AudioEncoder, AudioPacket};
+pub use audio::{AudioConfig, AudioPacket};
+#[cfg(feature = "opus")]
+pub use audio::AudioEncoder;
 pub use bitrate::AdaptiveBitrate;
 #[cfg(feature = "capture")]
 pub use capture::start_capture_auto;
