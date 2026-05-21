@@ -36,6 +36,10 @@ mod tests {
 
     #[async_trait::async_trait]
     impl DeviceSender for MockDeviceSender {
+        fn device_id(&self) -> &str {
+            "mock-device"
+        }
+
         async fn send_packet(&self, packet: &NetworkPacket) -> Result<()> {
             self.packets.lock().await.push(packet.clone());
             Ok(())
