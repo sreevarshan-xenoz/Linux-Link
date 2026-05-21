@@ -11,6 +11,7 @@ use anyhow::{Context, Result};
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 use std::collections::HashMap;
 use std::time::Duration;
+use tokio::process::Command;
 use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 
@@ -33,37 +34,46 @@ pub enum LanEvent {
     ServiceReady,
 }
 
-/// LAN peer discovery service using mDNS polling.
-///
-/// Periodically scans the LAN for `_linux-link._tcp.local.` services using
-/// mDNS. Emits [`LanEvent`]s through a broadcast channel whenever a peer
-/// appears or disappears.
-///
-/// # Example
-///
-/// ```ignore
-/// let service = LanDiscoveryService::new()?;
-/// let mut rx = service.subscribe();
-/// tokio::spawn(service.run(Duration::from_secs(30)));
-///
-/// while let Ok(event) = rx.recv().await {
-///     match event {
-///         LanEvent::PeerDiscovered(peer) => println!("Found peer: {}", peer.name),
-///         _ => {}
-///     }
-/// }
-/// ```
+/// LAN peer discovery service using mDNS.
 pub struct LanDiscoveryService {
     tx: broadcast::Sender<LanEvent>,
+    daemon: ServiceDaemon,
 }
 
 impl LanDiscoveryService {
     /// Create a new LAN discovery service.
-    ///
-    /// Does not start scanning until [`run()`](Self::run) is called.
     pub fn new() -> Result<Self> {
         let (tx, _) = broadcast::channel(100);
-        Ok(Self { tx })
+        let daemon = ServiceDaemon::new().context("Failed to create mDNS daemon")?;
+        Ok(Self { tx, daemon })
+    }
+
+    /// Register this server on the LAN via mDNS.
+    pub fn register_service(&self, name: &str, port: u16, ips: Vec<String>) -> Result<()> {
+        let hostname = format!("{}.local.", name);
+        let service_type = SERVICE_TYPE.to_string();
+        let instance_name = name.to_string();
+
+        let mut properties = HashMap::new();
+        properties.insert("name".to_string(), name.to_string());
+        properties.insert("version".to_string(), crate::PROTOCOL_VERSION.to_string());
+
+        let service_info = ServiceInfo::new(
+            &service_type,
+            &instance_name,
+            &hostname,
+            &ips.iter().map(|s| s.as_str()).collect::<Vec<_>>()[..],
+            port,
+            Some(properties),
+        )
+        .context("Failed to create service info")?;
+
+        self.daemon
+            .register(service_info)
+            .context("Failed to register mDNS service")?;
+
+        info!("Registered mDNS service: {} on port {}", instance_name, port);
+        Ok(())
     }
 
     /// Subscribe to LAN discovery events.
@@ -72,13 +82,6 @@ impl LanDiscoveryService {
     }
 
     /// Run the discovery loop, polling mDNS at the given interval.
-    ///
-    /// On each tick, scans the LAN for `_linux-link._tcp.local.` services and
-    /// emits [`LanEvent::PeerDiscovered`] for new peers and
-    /// [`LanEvent::PeerOffline`] for peers that disappeared.
-    ///
-    /// Runs until cancelled (e.g. by dropping the receiving side of the
-    /// broadcast channel).
     pub async fn run(&self, scan_interval: Duration) {
         let mut ticker = tokio::time::interval(scan_interval);
         let mut known_peers: HashMap<String, bool> = HashMap::new();
@@ -125,12 +128,9 @@ impl LanDiscoveryService {
     }
 
     /// Perform a single scan of the LAN for Linux Link servers.
-    ///
-    /// Creates a temporary mDNS daemon, browses for the service type, and
-    /// collects responses for up to [`SCAN_TIMEOUT`].
-    async fn scan_lan_peers(&self) -> Result<Vec<PeerInfo>> {
-        let daemon = ServiceDaemon::new().context("Failed to create mDNS daemon for scan")?;
-        let receiver = daemon
+    pub async fn scan_lan_peers(&self) -> Result<Vec<PeerInfo>> {
+        let receiver = self
+            .daemon
             .browse(SERVICE_TYPE)
             .context("Failed to browse mDNS")?;
 
@@ -144,21 +144,14 @@ impl LanDiscoveryService {
                 break;
             }
 
-            match receiver.recv_timeout(remaining.min(Duration::from_millis(500))) {
-                Ok(ServiceEvent::ServiceResolved(info)) => {
-                    if let Some(peer) = service_info_to_peer(&info) {
-                        peers.push(peer);
-                    }
-                }
-                Ok(ServiceEvent::ServiceFound(_, _)) | Ok(ServiceEvent::ServiceRemoved(_, _)) => {
-                    // The service will be resolved (or removed) in a separate event
-                }
-                Ok(ServiceEvent::SearchStarted(_)) | Ok(ServiceEvent::SearchStopped(_)) => {}
-                Err(_) => break, // timeout or channel closed
+            if let Ok(ServiceEvent::ServiceResolved(info)) =
+                receiver.recv_timeout(remaining.min(Duration::from_millis(500)))
+                && let Some(peer) = service_info_to_peer(&info)
+            {
+                peers.push(peer);
             }
         }
 
-        drop(daemon);
         Ok(peers)
     }
 
@@ -237,6 +230,21 @@ pub async fn scan_lan_once() -> Vec<PeerInfo> {
             debug!("LAN scan failed: {e}");
             Vec::new()
         }
+    }
+}
+
+/// Get all local IP addresses of the current machine.
+///
+/// Uses `hostname -I` on Linux to get all IPv4 and IPv6 addresses.
+pub async fn get_local_ips() -> Vec<String> {
+    let output = Command::new("hostname").arg("-I").output().await;
+    if let Ok(output) = output {
+        String::from_utf8_lossy(&output.stdout)
+            .split_whitespace()
+            .map(|s| s.to_string())
+            .collect()
+    } else {
+        Vec::new()
     }
 }
 
