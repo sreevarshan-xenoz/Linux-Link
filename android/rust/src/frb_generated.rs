@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -2115490623;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1156727626;
 
 // Section: executor
 
@@ -716,6 +716,44 @@ fn wire__crate__api__send_file_impl(
         },
     )
 }
+fn wire__crate__api__send_gamepad_event_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "send_gamepad_event",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_axes = <Vec<i16>>::sse_decode(&mut deserializer);
+            let api_buttons = <u32>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, String>(
+                    (move || async move {
+                        let output_ok =
+                            crate::api::send_gamepad_event(api_axes, api_buttons).await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
+        },
+    )
+}
 fn wire__crate__api__send_keyboard_event_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -1023,6 +1061,13 @@ impl SseDecode for crate::api::FrameDto {
     }
 }
 
+impl SseDecode for i16 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        deserializer.cursor.read_i16::<NativeEndian>().unwrap()
+    }
+}
+
 impl SseDecode for i32 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -1073,6 +1118,18 @@ impl SseDecode for Vec<crate::api::PeerInfoDto> {
         let mut ans_ = Vec::with_capacity(len_ as usize);
         for idx_ in 0..len_ {
             ans_.push(<crate::api::PeerInfoDto>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
+impl SseDecode for Vec<i16> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<i16>::sse_decode(deserializer));
         }
         return ans_;
     }
@@ -1217,12 +1274,13 @@ fn pde_ffi_dispatcher_primary_impl(
         17 => wire__crate__api__receive_frames_impl(port, ptr, rust_vec_len, data_len),
         18 => wire__crate__api__send_clipboard_impl(port, ptr, rust_vec_len, data_len),
         19 => wire__crate__api__send_file_impl(port, ptr, rust_vec_len, data_len),
-        20 => wire__crate__api__send_keyboard_event_impl(port, ptr, rust_vec_len, data_len),
-        21 => wire__crate__api__send_mouse_event_impl(port, ptr, rust_vec_len, data_len),
-        22 => wire__crate__api__send_power_command_impl(port, ptr, rust_vec_len, data_len),
-        23 => wire__crate__api__set_data_dir_impl(port, ptr, rust_vec_len, data_len),
-        24 => wire__crate__api__stop_streaming_impl(port, ptr, rust_vec_len, data_len),
-        25 => wire__crate__api__version_impl(port, ptr, rust_vec_len, data_len),
+        20 => wire__crate__api__send_gamepad_event_impl(port, ptr, rust_vec_len, data_len),
+        21 => wire__crate__api__send_keyboard_event_impl(port, ptr, rust_vec_len, data_len),
+        22 => wire__crate__api__send_mouse_event_impl(port, ptr, rust_vec_len, data_len),
+        23 => wire__crate__api__send_power_command_impl(port, ptr, rust_vec_len, data_len),
+        24 => wire__crate__api__set_data_dir_impl(port, ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__stop_streaming_impl(port, ptr, rust_vec_len, data_len),
+        26 => wire__crate__api__version_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -1405,6 +1463,13 @@ impl SseEncode for crate::api::FrameDto {
     }
 }
 
+impl SseEncode for i16 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        serializer.cursor.write_i16::<NativeEndian>(self).unwrap();
+    }
+}
+
 impl SseEncode for i32 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -1448,6 +1513,16 @@ impl SseEncode for Vec<crate::api::PeerInfoDto> {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
             <crate::api::PeerInfoDto>::sse_encode(item, serializer);
+        }
+    }
+}
+
+impl SseEncode for Vec<i16> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <i16>::sse_encode(item, serializer);
         }
     }
 }
