@@ -71,6 +71,10 @@ pub(crate) static STREAMING_START_TIME: LazyLock<std::sync::Mutex<Option<std::ti
 pub(crate) static STREAMING_HANDLE: LazyLock<TokioMutex<Option<StreamingHandle>>> =
     LazyLock::new(|| TokioMutex::new(None));
 
+/// Global handle for the active v2 unified connection.
+pub(crate) static V2_HANDLE: LazyLock<TokioMutex<Option<V2Handle>>> =
+    LazyLock::new(|| TokioMutex::new(None));
+
 /// Persistent cert directory set from Flutter (std Mutex for sync access).
 pub(crate) static CERT_DIR: LazyLock<std::sync::Mutex<Option<PathBuf>>> =
     LazyLock::new(|| std::sync::Mutex::new(None));
@@ -103,6 +107,14 @@ pub(crate) struct StreamingHandle {
     /// The QUIC connection, kept alive for sending input events.
     pub(crate) connection: quinn::Connection,
 }
+
+/// Holds the unified v2 connection and its persistent control streams.
+pub(crate) struct V2Handle {
+    pub(crate) connection: quinn::Connection,
+    pub(crate) control_send: quinn::SendStream,
+    pub(crate) control_recv: quinn::RecvStream,
+}
+
 /// Update the global streaming RTT value (called from the stats task).
 pub(crate) fn update_streaming_rtt(rtt_us: u64) {
     STREAMING_RTT_US.store(rtt_us, std::sync::atomic::Ordering::Relaxed);

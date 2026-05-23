@@ -142,13 +142,17 @@ impl CertManager {
     ///
     /// The client verifies the server's certificate against the stored known_peers
     /// map and auto-accepts unknown peers on first use.
-    pub fn client_config(&self) -> Result<quinn::ClientConfig> {
-        let crypto = rustls::ClientConfig::builder()
+    pub fn client_config(&self, alpns: Vec<Vec<u8>>) -> Result<quinn::ClientConfig> {
+        let mut crypto = rustls::ClientConfig::builder()
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(TofuVerifier {
                 known_peers: self.known_peers.clone(),
             }))
             .with_no_client_auth();
+
+        if !alpns.is_empty() {
+            crypto.alpn_protocols = alpns;
+        }
 
         let quic_crypto = quinn::crypto::rustls::QuicClientConfig::try_from(crypto)
             .context("Failed to create QUIC client crypto config")?;
@@ -386,7 +390,7 @@ impl StreamClient {
     pub fn new(config: StreamTransportConfig, cert_manager: &CertManager) -> Result<Self> {
         info!("Creating streaming client");
 
-        let mut client_config = cert_manager.client_config()?;
+        let mut client_config = cert_manager.client_config(vec![config.alpn.clone()])?;
 
         // Override transport config with caller's settings
         let mut transport_config = quinn::TransportConfig::default();

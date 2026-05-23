@@ -4,6 +4,7 @@
 use flutter_rust_bridge::frb;
 use linux_link_core::protocol::connection::ConnectionManager;
 use linux_link_core::protocol::kdeconnect::{DeviceSender, NetworkPacket, TcpDeviceSender};
+use linux_link_core::protocol::v2::{ALPN_V2, IdentityPacketV2, perform_v2_handshake};
 use linux_link_core::streaming::StreamingClient;
 use linux_link_core::tailscale::TailscaleClient;
 use std::path::PathBuf;
@@ -744,6 +745,100 @@ pub async fn connect_streaming(
 
     tracing::info!("Streaming session connected to {addr}");
     Ok(())
+}
+
+/// Connect to a peer using the v2 multiplexed protocol (QUIC).
+#[frb]
+pub async fn connect_v2(address: String, port: u16) -> Result<(), String> {
+    let addr_str = format!("{address}:{port}");
+    let addr: std::net::SocketAddr = addr_str
+        .parse()
+        .map_err(|e| format!("Invalid address {addr_str}: {e}"))?;
+
+    // Create a CertManager with persistent TOFU peer certificate verification.
+    let cert_manager = {
+        let guard = crate::CERT_DIR.lock().unwrap();
+        match guard.as_ref() {
+            Some(dir) => {
+                std::sync::Arc::new(
+                    linux_link_core::streaming::transport::CertManager::load_or_create(dir)
+                        .map_err(|e| e.to_string())?,
+                )
+            }
+            None => {
+                tracing::warn!("No data dir configured — cert trust is ephemeral");
+                std::sync::Arc::new(
+                    linux_link_core::streaming::transport::CertManager::new()
+                        .map_err(|e| e.to_string())?,
+                )
+            }
+        }
+    };
+
+    // Store for trust management UI
+    {
+        let mut cm_guard = crate::CERT_MANAGER.lock().unwrap();
+        *cm_guard = Some(cert_manager.clone());
+    }
+
+    *crate::SESSION_STATUS.lock().unwrap() = SessionStatus::Connecting;
+
+    let span = tracing::info_span!("connect_v2", peer = %addr_str);
+    
+    let result = async {
+        let client_config = cert_manager.client_config(vec![ALPN_V2.to_vec()])
+            .map_err(|e| format!("Failed to create QUIC config: {e}"))?;
+
+        let mut endpoint = quinn::Endpoint::client("0.0.0.0:0".parse().unwrap())
+            .map_err(|e| format!("Failed to create endpoint: {e}"))?;
+        endpoint.set_default_client_config(client_config);
+
+        let server_name = addr.ip().to_string();
+        let connection = endpoint.connect(addr, &server_name)
+            .map_err(|e| format!("Failed to initiate connection: {e}"))?
+            .await
+            .map_err(|e| format!("Connection failed: {e}"))?;
+
+        tracing::info!("QUIC connection established, performing v2 handshake");
+
+        let (mut send0, mut recv0) = connection.open_bi().await
+            .map_err(|e| format!("Failed to open stream 0: {e}"))?;
+
+        let identity = client_identity();
+        let local_identity = IdentityPacketV2 {
+            device_id: identity.device_id,
+            device_name: identity.device_name,
+            min_version: 2,
+            max_version: 2,
+            capabilities: vec!["streaming".to_string(), "input".to_string()],
+        };
+
+        let peer_identity = perform_v2_handshake(&mut send0, &mut recv0, &local_identity).await
+            .map_err(|e| format!("v2 Handshake failed: {e}"))?;
+
+        tracing::info!("v2 Handshake successful with {}", peer_identity.device_name);
+
+        let mut handle_guard = crate::V2_HANDLE.lock().await;
+        *handle_guard = Some(crate::V2Handle {
+            connection,
+            control_send: send0,
+            control_recv: recv0,
+        });
+
+        *crate::SESSION_STATUS.lock().unwrap() = SessionStatus::Active;
+        Ok(())
+    };
+
+    use tracing::Instrument;
+    match result.instrument(span).await {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            let err_msg: String = e;
+            let err_dto = LinuxLinkErrorDto::from(linux_link_core::error::LinuxLinkError::ProtocolError { detail: err_msg.clone() });
+            *crate::SESSION_STATUS.lock().unwrap() = SessionStatus::Error(err_dto);
+            Err(err_msg)
+        }
+    }
 }
 
 /// Reset the reconnection backoff timer (e.g. after a successful manual connect).
