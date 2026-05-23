@@ -1,6 +1,7 @@
 pub mod backoff;
 pub mod connection;
 pub mod kdeconnect;
+pub mod v2;
 
 #[cfg(test)]
 mod connection_test;
