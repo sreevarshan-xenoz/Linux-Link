@@ -9,10 +9,12 @@ use linux_link_core::protocol::kdeconnect::{
     DeviceIdentity, DeviceSender, NetworkPacket, PluginRegistry, TcpDeviceSender,
 };
 use linux_link_core::protocol::{HANDSHAKE_HELLO, HANDSHAKE_OK};
+use linux_link_core::protocol::v2::{ALPN_V2, IdentityPacketV2};
 use linux_link_core::streaming::StreamingServer;
 use linux_link_core::streaming::input_packet::InputPacket;
 use linux_link_core::streaming::transport::{CertManager, StreamTransportConfig};
 use linux_link_core::tailscale::{DiscoveryEvent, DiscoveryService, TailscaleClient};
+use crate::v2_multiplexer::handle_v2_session;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -84,12 +86,34 @@ pub async fn run(config: Config) -> Result<()> {
         lan_discovery.run(Duration::from_secs(30)).await;
     });
 
+    // Prepare shared state for v2 multiplexer and v1 streaming
+    let cert_manager = Arc::new(CertManager::new().expect("Failed to create CertManager"));
+    let registry = Arc::new(kde_service.registry.clone_for_dispatch());
+    let local_v2_identity = IdentityPacketV2 {
+        device_id: kde_service.identity.as_ref().map(|i| i.device_id.clone()).unwrap_or_default(),
+        device_name: host_name.clone(),
+        min_version: 2,
+        max_version: 2,
+        capabilities: registry.plugin_names(),
+    };
+
     let bind_addr = format!("0.0.0.0:{}", config.control_port);
     let listener = tokio::net::TcpListener::bind(&bind_addr)
         .await
         .with_context(|| format!("failed to bind {bind_addr}"))?;
 
     tracing::info!("Control listener ready on {}", bind_addr);
+
+    // QUIC Multiplexer (v2) and Streaming (v1) listener
+    let streaming_port = config.streaming_port;
+    let quic_addr = format!("0.0.0.0:{}", streaming_port).parse::<std::net::SocketAddr>().unwrap();
+    let alpns = vec![
+        ALPN_V2.to_vec(),
+        b"linux-link-stream".to_vec(),
+    ];
+    let server_config = cert_manager.server_config(alpns).expect("Failed to create server config");
+    let quic_endpoint = quinn::Endpoint::server(server_config, quic_addr).expect("Failed to bind QUIC endpoint");
+    tracing::info!("Unified QUIC listener ready on {}", quic_addr);
 
     // F19: Start notification monitor for forwarding PC notifications to Android clients
     let notification_tx = start_notification_monitor();
@@ -134,57 +158,30 @@ pub async fn run(config: Config) -> Result<()> {
         });
     }
 
-    // Start the QUIC streaming server in the background for real-time screen control.
-    //
-    // This runs as a tokio task and accepts one QUIC connection. Input events
-    // received from the client over QUIC are forwarded to the InputInjector.
-    {
-        let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<InputPacket>(128);
+    // Input injection channel shared between v1 and v2
+    let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<InputPacket>(128);
+    let streaming_config = config.video_quality.to_streaming_config();
 
-        let streaming_config = config.video_quality.to_streaming_config();
-        let transport_config = StreamTransportConfig {
-            address: format!("0.0.0.0:{}", config.streaming_port)
-                .parse()
-                .unwrap(),
-            ..StreamTransportConfig::default()
+    // Spawn input injection task — receives InputPacket from the QUIC
+    // streaming channel and injects them into the host system.
+    tokio::spawn(async move {
+        tracing::info!("Input injection task started");
+        let mut injector = match InputInjector::new() {
+            Ok(inj) => inj,
+            Err(e) => {
+                tracing::error!("Failed to create InputInjector: {e}");
+                return;
+            }
         };
-        let cert_manager = Arc::new(CertManager::new().expect("Failed to create CertManager"));
 
-        let mut streaming_server =
-            StreamingServer::new(streaming_config, transport_config, cert_manager);
-        streaming_server.set_input_channel(input_tx);
-
-        tokio::spawn(async move {
-            tracing::info!(
-                "Streaming server starting on port {}",
-                config.streaming_port
-            );
-            if let Err(e) = streaming_server.run().await {
-                tracing::error!("Streaming server error: {e}");
+        while let Some(packet) = input_rx.recv().await {
+            if let Err(e) = handle_input_packet(&mut injector, packet) {
+                tracing::warn!("Input injection error: {e}");
             }
-        });
+        }
 
-        // Spawn input injection task — receives InputPacket from the QUIC
-        // streaming channel and injects them into the host system.
-        tokio::spawn(async move {
-            tracing::info!("Input injection task started");
-            let mut injector = match InputInjector::new() {
-                Ok(inj) => inj,
-                Err(e) => {
-                    tracing::error!("Failed to create InputInjector: {e}");
-                    return;
-                }
-            };
-
-            while let Some(packet) = input_rx.recv().await {
-                if let Err(e) = handle_input_packet(&mut injector, packet) {
-                    tracing::warn!("Input injection error: {e}");
-                }
-            }
-
-            tracing::info!("Input injection task ended");
-        });
-    }
+        tracing::info!("Input injection task ended");
+    });
 
     tracing::info!("Press Ctrl+C to stop");
 
@@ -193,19 +190,66 @@ pub async fn run(config: Config) -> Result<()> {
             accepted = listener.accept() => {
                 match accepted {
                     Ok((stream, peer_addr)) => {
-                        tracing::info!("Incoming connection from {}", peer_addr);
+                        tracing::info!("Incoming v1 TCP connection from {}", peer_addr);
                         let identity_packet = kde_service.identity_packet().clone();
-                        let registry: Arc<PluginRegistry> =
-                            Arc::new(kde_service.registry.clone_for_dispatch());
+                        let registry_clone = Arc::clone(&registry);
                         tokio::spawn(async move {
                             if let Err(error) =
-                                handle_connection_with_kde(stream, identity_packet, &registry).await
+                                handle_connection_with_kde(stream, identity_packet, &registry_clone).await
                             {
                                 tracing::warn!("connection handler failed: {}", error);
                             }
                         });
                     }
                     Err(error) => tracing::warn!("Accept error: {}", error),
+                }
+            }
+            quic_incoming = quic_endpoint.accept() => {
+                if let Some(incoming) = quic_incoming {
+                    let registry_clone = Arc::clone(&registry);
+                    let cert_manager_clone = Arc::clone(&cert_manager);
+                    let local_v2_identity = local_v2_identity.clone();
+                    let streaming_config = streaming_config.clone();
+                    let input_tx = input_tx.clone();
+
+                    tokio::spawn(async move {
+                        let conn = match incoming.await {
+                            Ok(c) => c,
+                            Err(e) => {
+                                tracing::warn!("QUIC connection failed: {}", e);
+                                return;
+                            }
+                        };
+
+                        let alpn = {
+                            let handshake_data = conn.handshake_data();
+                            handshake_data.as_ref()
+                                .and_then(|any| any.downcast_ref::<quinn::crypto::rustls::HandshakeData>())
+                                .and_then(|h| h.protocol.clone())
+                        };
+
+                        match alpn.as_deref() {
+                            Some(b"linux-link-v2") => {
+                                if let Err(e) = handle_v2_session(conn, local_v2_identity, registry_clone).await {
+                                    tracing::error!("v2 session error: {}", e);
+                                }
+                            }
+                            Some(b"linux-link-stream") => {
+                                let mut streaming_server = StreamingServer::new(
+                                    streaming_config,
+                                    StreamTransportConfig::default(),
+                                    cert_manager_clone
+                                );
+                                streaming_server.set_input_channel(input_tx);
+                                if let Err(e) = streaming_server.run_on_connection(conn).await {
+                                    tracing::error!("v1 streaming session error: {}", e);
+                                }
+                            }
+                            _ => {
+                                tracing::warn!("Unknown ALPN on QUIC port: {:?}", alpn.map(|a| String::from_utf8_lossy(&a).into_owned()));
+                            }
+                        }
+                    });
                 }
             }
             _ = tokio::signal::ctrl_c() => {

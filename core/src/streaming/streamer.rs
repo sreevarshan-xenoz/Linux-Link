@@ -90,6 +90,31 @@ impl StreamingServer {
         self.bitrate_tx.subscribe()
     }
 
+    /// Run the streaming pipeline on an existing QUIC connection.
+    /// This is useful when the connection was already accepted by a unified multiplexer.
+    pub async fn run_on_connection(&mut self, connection: quinn::Connection) -> Result<()> {
+        let conn_id = Uuid::new_v4().to_string();
+        let span = tracing::info_span!(
+            "stream_session",
+            session = %self.session_id,
+            conn = %conn_id,
+            proto = %crate::protocol::PROTOCOL_VERSION,
+            peer = tracing::field::Empty,
+            transport = "quic"
+        );
+
+        async {
+            let peer = connection.remote_address();
+            tracing::Span::current().record("peer", &peer.to_string());
+            info!("Streaming client connected (v1 over v2-capable endpoint): {}", peer);
+
+            // 3. Run the capture → encode → send pipeline
+            self.run_pipeline(connection).await
+        }
+        .instrument(span)
+        .await
+    }
+
     /// Start the streaming server — accepts one client connection and runs the pipeline
     pub async fn run(&mut self) -> Result<()> {
         let conn_id = Uuid::new_v4().to_string();
@@ -134,7 +159,7 @@ impl StreamingServer {
             info!("Streaming client connected: {}", peer);
 
             // 3. Run the capture → encode → send pipeline
-            self.run_pipeline(connection, server).await
+            self.run_pipeline(connection).await
         }
         .instrument(span)
         .await
@@ -144,7 +169,6 @@ impl StreamingServer {
     async fn run_pipeline(
         &mut self,
         connection: quinn::Connection,
-        _server: StreamServer,
     ) -> Result<()> {
         // Read optional client config stream before starting the pipeline.
         read_client_config(&connection, &mut self.config).await;

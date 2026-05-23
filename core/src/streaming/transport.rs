@@ -114,7 +114,7 @@ impl CertManager {
 
     /// Build a QUIC server TLS configuration that presents this device's identity
     /// certificate to connecting clients.
-    pub fn server_config(&self) -> Result<quinn::ServerConfig> {
+    pub fn server_config(&self, alpns: Vec<Vec<u8>>) -> Result<quinn::ServerConfig> {
         let cert = CertificateDer::from(self.cert_der.clone());
         let key = PrivateKeyDer::try_from(self.key_der.clone())
             .map_err(|_| anyhow::anyhow!("Failed to parse private key"))?;
@@ -123,8 +123,16 @@ impl CertManager {
         transport.datagram_send_buffer_size(16 * 1024 * 1024);
         transport.datagram_receive_buffer_size(Some(16 * 1024 * 1024));
 
-        let mut server_config = quinn::ServerConfig::with_single_cert(vec![cert], key)
+        let mut crypto = rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(vec![cert], key)
             .context("Failed to configure TLS server")?;
+        
+        if !alpns.is_empty() {
+            crypto.alpn_protocols = alpns;
+        }
+
+        let mut server_config = quinn::ServerConfig::with_crypto(Arc::new(quinn::crypto::rustls::QuicServerConfig::try_from(crypto)?));
         server_config.transport_config(Arc::new(transport));
 
         Ok(server_config)
@@ -302,11 +310,11 @@ impl StreamServer {
     /// Create a new streaming server endpoint
     pub async fn new(config: StreamTransportConfig, cert_manager: &CertManager) -> Result<Self> {
         info!(
-            "Creating streaming server on {} (datagrams={})",
-            config.address, config.use_datagrams
+            "Creating streaming server on {} (datagrams={}, alpn={:?})",
+            config.address, config.use_datagrams, String::from_utf8_lossy(&config.alpn)
         );
 
-        let mut server_config = cert_manager.server_config()?;
+        let mut server_config = cert_manager.server_config(vec![config.alpn.clone()])?;
 
         // Override transport config with caller's settings
         let mut transport_config = quinn::TransportConfig::default();

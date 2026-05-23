@@ -33,6 +33,9 @@ zbus.workspace = true
 # Input injection via uinput (universal fallback)
 evdev.workspace = true
 
+# QUIC streaming
+quinn.workspace = true
+
 # Cancellation tokens and utilities
 tokio-util.workspace = true
 

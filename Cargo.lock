@@ -1965,6 +1965,7 @@ dependencies = [
  "enigo",
  "evdev",
  "linux-link-core",
+ "quinn",
  "serde",
  "serde_json",
  "tokio",
