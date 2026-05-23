@@ -1,4 +1,4 @@
-use anyhow::Result;
+use linux_link_core::error::Result;
 use linux_link_core::protocol::kdeconnect::{DeviceSender, NetworkPacket, Plugin};
 use linux_link_core::streaming::MonitorInfo;
 

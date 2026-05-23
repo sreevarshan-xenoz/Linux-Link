@@ -1,4 +1,4 @@
-use anyhow::Result;
+use linux_link_core::error::Result;
 use linux_link_core::protocol::kdeconnect::{DeviceSender, NetworkPacket, Plugin};
 
 #[derive(Debug)]
@@ -57,17 +57,21 @@ impl Plugin for NotificationPlugin {
 }
 
 /// Send a desktop notification via D-Bus (native, no external binary).
-async fn send_notification_dbus(summary: &str, body: &str) -> anyhow::Result<()> {
+async fn send_notification_dbus(summary: &str, body: &str) -> Result<()> {
     use zbus::Connection;
 
-    let conn = Connection::session().await?;
+    let conn = Connection::session().await.map_err(|e| linux_link_core::error::LinuxLinkError::Other {
+        detail: format!("D-Bus session failed: {e}"),
+    })?;
     let proxy = zbus::Proxy::new(
         &conn,
         "org.freedesktop.Notifications",
         "/org/freedesktop/Notifications",
         "org.freedesktop.Notifications",
     )
-    .await?;
+    .await.map_err(|e| linux_link_core::error::LinuxLinkError::Other {
+        detail: format!("D-Bus proxy failed: {e}"),
+    })?;
 
     proxy
         .call::<_, _, u32>(
@@ -83,7 +87,9 @@ async fn send_notification_dbus(summary: &str, body: &str) -> anyhow::Result<()>
                 5000i32, // timeout (5 seconds)
             ),
         )
-        .await?;
+        .await.map_err(|e| linux_link_core::error::LinuxLinkError::Other {
+            detail: format!("D-Bus call failed: {e}"),
+        })?;
 
     Ok(())
 }
@@ -117,7 +123,7 @@ async fn show_desktop_notification(app: &str, title: &str, text: &str) -> Result
 
     // Fall back to native D-Bus
     if let Err(e) = send_notification_dbus(&summary, text).await {
-        anyhow::bail!("Failed to send notification via D-Bus: {e}");
+        tracing::warn!("Failed to send notification via D-Bus: {e}");
     } else {
         tracing::info!("Notification sent via D-Bus: {}", title);
     }

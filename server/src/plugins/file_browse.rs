@@ -1,8 +1,10 @@
+use linux_link_core::error::Result;
 use linux_link_core::protocol::kdeconnect::{DeviceSender, NetworkPacket, Plugin};
 use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
+#[derive(Debug)]
 pub struct FileBrowsePlugin;
 
 impl Default for FileBrowsePlugin {
@@ -16,18 +18,16 @@ impl FileBrowsePlugin {
         Self
     }
 
-    /// Validate that the requested path is safe to serve.
-    /// Only allows paths within the user's home directory.
+    /// Sanitize and validate path to prevent directory traversal.
     fn sanitize_path(requested: &str) -> Option<PathBuf> {
         let home = dirs::home_dir()?;
-        let path = Path::new(requested);
+        let path = if requested.is_empty() || requested == "/" {
+            home.clone()
+        } else {
+            Path::new(requested).to_path_buf()
+        };
 
-        // Reject relative paths
-        if !path.is_absolute() {
-            return None;
-        }
-
-        // Reject paths outside home
+        // Ensure the path is within home directory
         if !path.starts_with(&home) {
             return None;
         }
@@ -43,8 +43,12 @@ impl FileBrowsePlugin {
     }
 
     /// List directory contents as a JSON array of file entries.
-    fn list_directory(path: &Path) -> anyhow::Result<serde_json::Value> {
-        let entries: Vec<serde_json::Value> = std::fs::read_dir(path)?
+    fn list_directory(path: &Path) -> Result<serde_json::Value> {
+        let entries: Vec<serde_json::Value> = std::fs::read_dir(path)
+            .map_err(|e| linux_link_core::error::LinuxLinkError::Io {
+                operation: "read_dir",
+                detail: e.to_string(),
+            })?
             .filter_map(|entry| {
                 let entry = entry.ok()?;
                 let metadata = entry.metadata().ok()?;
@@ -89,7 +93,7 @@ impl Plugin for FileBrowsePlugin {
         &self,
         packet: &NetworkPacket,
         sender: &dyn DeviceSender,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         if packet.packet_type.as_str() == "kdeconnect.filebrowse.request" {
             let requested_path = packet
                 .body

@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use linux_link_core::error::Result;
 
 use linux_link_core::protocol::kdeconnect::{
     DeviceSender, NetworkPacket,
@@ -27,10 +28,14 @@ impl MockSender {
 #[async_trait::async_trait]
 impl DeviceSender for MockSender {
     fn device_id(&self) -> &str {
-        "mock-sender"
+        "mock-device"
     }
 
-    async fn send_packet(&self, packet: &NetworkPacket) -> anyhow::Result<()> {
+    fn connection_id(&self) -> &str {
+        "mock-connection"
+    }
+
+    async fn send_packet(&self, packet: &NetworkPacket) -> Result<()> {
         let mut guard = self.sent.lock().await;
         guard.push(packet.clone());
         Ok(())

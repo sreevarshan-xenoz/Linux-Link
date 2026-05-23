@@ -2,6 +2,7 @@ use crate::config::Config;
 use crate::input_injector::InputInjector;
 use crate::kde;
 use crate::notification_monitor::start_notification_monitor;
+use uuid;
 use anyhow::{Context, Result, bail};
 use linux_link_core::protocol::connection::ConnectionManager;
 use linux_link_core::protocol::kdeconnect::{
@@ -225,6 +226,12 @@ pub async fn run(config: Config) -> Result<()> {
                     Ok(linux_link_core::tailscale::lan::LanEvent::PeerOffline(name)) => {
                         handle_discovery_event(DiscoveryEvent::PeerOffline(name));
                     }
+                    Ok(linux_link_core::tailscale::lan::LanEvent::DiscoveryError { method, reason }) => {
+                        handle_discovery_event(DiscoveryEvent::DiscoveryError { method, reason });
+                    }
+                    Ok(linux_link_core::tailscale::lan::LanEvent::ServiceReady) => {
+                        handle_discovery_event(DiscoveryEvent::ServiceReady);
+                    }
                     _ => {}
                 }
             }
@@ -324,6 +331,9 @@ pub async fn watch_peers(interval_secs: u64) -> Result<()> {
                     Ok(DiscoveryEvent::PeerOffline(name)) => {
                         println!("OFFLINE {}", name);
                     }
+                    Ok(DiscoveryEvent::DiscoveryError { method, reason }) => {
+                        println!("ERROR   {} - {}", method, reason);
+                    }
                     Ok(DiscoveryEvent::ServiceReady) => {
                         println!("READY");
                     }
@@ -366,112 +376,144 @@ async fn handle_connection_with_kde(
     registry: &Arc<PluginRegistry>,
 ) -> Result<()> {
     use tokio::io::AsyncWriteExt;
+    use tracing::Instrument;
 
     let peer_addr = stream.peer_addr().ok();
-    tracing::info!("Handling new connection from {:?}", peer_addr);
+    let conn_id = uuid::Uuid::new_v4().to_string();
+    let session_id = uuid::Uuid::new_v4().to_string(); // In v1, session == connection for now
+    
+    let conn_span = tracing::info_span!(
+        "conn",
+        id = %conn_id,
+        session = %session_id,
+        peer = ?peer_addr,
+        transport = "tcp",
+        proto = %linux_link_core::protocol::PROTOCOL_VERSION
+    );
 
-    let (reader_half, writer_half) = stream.into_split();
-    let mut reader = BufReader::new(reader_half);
+    async move {
+        tracing::info!("Handling new connection");
 
-    // Wrap writer in Arc<Mutex> so both handshake and TcpDeviceSender can use it
-    let writer = Arc::new(Mutex::new(writer_half));
+        let (reader_half, writer_half) = stream.into_split();
+        let mut reader = BufReader::new(reader_half);
 
-    // Step 1: LINUX_LINK_HELLO handshake
-    let mut line = String::new();
-    let bytes = timeout(Duration::from_secs(8), reader.read_line(&mut line))
-        .await
-        .context("connection handshake timeout")?
-        .context("failed to read incoming handshake")?;
+        // Wrap writer in Arc<Mutex> so both handshake and TcpDeviceSender can use it
+        let writer = Arc::new(Mutex::new(writer_half));
 
-    if bytes == 0 {
-        bail!("connection closed before handshake")
-    }
-
-    tracing::debug!("Received handshake line from {:?}: {:?}", peer_addr, line.trim());
-
-    if line.trim() != HANDSHAKE_HELLO {
-        tracing::warn!("Invalid handshake preface from {:?}: {:?}", peer_addr, line.trim());
-        let mut w = writer.lock().await;
-        w.write_all(b"LINUX_LINK_ERR 1\n")
-            .await
-            .context("failed writing error handshake")?;
-        bail!("invalid handshake preface")
-    }
-
-    // Step 1.5: Send HANDSHAKE_OK back to client
-    {
-        tracing::info!("Handshake successful for {:?}, sending HANDSHAKE_OK", peer_addr);
-        let mut w = writer.lock().await;
-        w.write_all(format!("{}\n", HANDSHAKE_OK).as_bytes())
-            .await
-            .context("failed writing handshake OK")?;
-        w.flush().await?;
-    }
-
-    // Step 2: Send identity packet
-    if let Some(ref identity) = identity_packet {
-        let mut w = writer.lock().await;
-        let wire_bytes = identity.to_wire()?;
-        w.write_all(&wire_bytes).await?;
-        w.flush().await?;
-        drop(w);
-        tracing::debug!("Sent identity packet to peer");
-    }
-
-    // Step 3: Enter KDE Connect packet loop
-    let device_id = peer_addr
-        .map(|a| a.ip().to_string())
-        .unwrap_or_else(|| "unknown".to_string());
-    let sender = TcpDeviceSender::from_arc(writer, device_id);
-    let sender_ref = &sender;
-
-    // Register this client for notification broadcasting.
-    // Dead writers are automatically pruned on send failure.
-    {
-        let mut clients = ACTIVE_CLIENTS.lock().await;
-        clients.push(sender.clone());
-    }
-
-    loop {
+        // Step 1: LINUX_LINK_HELLO handshake
         let mut line = String::new();
-        let read_result = timeout(Duration::from_secs(30), reader.read_line(&mut line)).await;
+        let bytes = timeout(Duration::from_secs(8), reader.read_line(&mut line))
+            .await
+            .context("connection handshake timeout")?
+            .context("failed to read incoming handshake")?;
 
-        match read_result {
-            Ok(Ok(0)) => {
-                // Connection closed
-                tracing::debug!("Peer disconnected");
-                break;
-            }
-            Ok(Ok(_)) => {
-                let trimmed = line.trim();
-                if trimmed.is_empty() {
-                    continue;
+        if bytes == 0 {
+            tracing::info!("Connection closed by peer before handshake");
+            return Ok(());
+        }
+
+        tracing::debug!("Received handshake line: {:?}", line.trim());
+
+        if line.trim() != HANDSHAKE_HELLO {
+            tracing::warn!("Invalid handshake preface: {:?}", line.trim());
+            let mut w = writer.lock().await;
+            w.write_all(b"LINUX_LINK_ERR 1\n")
+                .await
+                .context("failed writing error handshake")?;
+            bail!("invalid handshake preface")
+        }
+
+        // Step 1.5: Send HANDSHAKE_OK back to client
+        {
+            tracing::info!("Handshake successful, sending HANDSHAKE_OK");
+            let mut w = writer.lock().await;
+            w.write_all(format!("{}\n", HANDSHAKE_OK).as_bytes())
+                .await
+                .context("failed writing handshake OK")?;
+            w.flush().await?;
+        }
+
+        // Step 2: Send identity packet
+        if let Some(ref identity) = identity_packet {
+            let mut w = writer.lock().await;
+            let wire_bytes = identity.to_wire()?;
+            w.write_all(&wire_bytes).await?;
+            w.flush().await?;
+            tracing::debug!("Sent local identity packet");
+        }
+
+        // Step 3: Enter KDE Connect packet loop
+        let device_id = peer_addr
+            .map(|a| a.ip().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        
+        let sender = TcpDeviceSender::from_arc(writer, device_id.clone());
+        let sender_ref = &sender;
+
+        // Update span with device_id
+        tracing::Span::current().record("peer", &device_id);
+
+        // Register this client for notification broadcasting
+        {
+            let mut clients = ACTIVE_CLIENTS.lock().await;
+            clients.push(sender.clone());
+            tracing::debug!(active_clients = clients.len(), "Client registered for broadcasts");
+        }
+
+        tracing::info!("Entering main packet loop");
+        loop {
+            let mut line = String::new();
+            let read_result = timeout(Duration::from_secs(60), reader.read_line(&mut line)).await;
+
+            match read_result {
+                Ok(Ok(0)) => {
+                    tracing::info!("Peer disconnected");
+                    break;
                 }
+                Ok(Ok(_)) => {
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
 
-                match NetworkPacket::from_wire(trimmed) {
-                    Ok(packet) => {
-                        tracing::debug!("Received packet: type={}", packet.packet_type);
-                        if let Err(e) = registry.dispatch_packet(&packet, sender_ref).await {
-                            tracing::warn!("Packet dispatch failed: {}", e);
+                    match NetworkPacket::from_wire(trimmed) {
+                        Ok(packet) => {
+                            let packet_type = packet.packet_type.clone();
+                            let packet_span = tracing::debug_span!("packet", type = %packet_type);
+                            async {
+                                tracing::debug!("Processing packet");
+                                if let Err(e) = registry.dispatch_packet(&packet, sender_ref).await {
+                                    tracing::warn!("Packet dispatch failed: {}", e);
+                                }
+                            }.instrument(packet_span).await;
+                        }
+                        Err(e) => {
+                            tracing::warn!("Malformed packet received: {}", e);
                         }
                     }
-                    Err(e) => {
-                        tracing::warn!("Invalid packet: {}", e);
-                    }
+                }
+                Ok(Err(e)) => {
+                    tracing::error!("Read error in control channel: {}", e);
+                    break;
+                }
+                Err(_) => {
+                    tracing::debug!("Peer idle - connection still alive");
                 }
             }
-            Ok(Err(e)) => {
-                tracing::warn!("Read error: {}", e);
-                break;
-            }
-            Err(_) => {
-                // Timeout - peer is idle
-                tracing::debug!("Peer idle - connection still alive");
-            }
         }
-    }
 
-    Ok(())
+        // Cleanup
+        {
+            let conn_id_to_remove = sender.connection_id().to_string();
+            let mut clients = ACTIVE_CLIENTS.lock().await;
+            clients.retain(|c| c.connection_id() != conn_id_to_remove);
+            tracing::info!(active_clients = clients.len(), "Client disconnected, removed from registry");
+        }
+
+        Ok(())
+    }
+    .instrument(conn_span)
+    .await
 }
 
 pub async fn print_capabilities() -> Result<()> {
@@ -534,13 +576,16 @@ pub async fn pair(pin: Option<String>) -> Result<()> {
 fn handle_discovery_event(event: DiscoveryEvent) {
     match event {
         DiscoveryEvent::PeerDiscovered(peer) => {
-            tracing::info!("Peer online: {} ({})", peer.name, peer.ips.join(", "));
+            tracing::info!(peer = %peer.name, ips = ?peer.ips, "Peer came online");
         }
         DiscoveryEvent::PeerOffline(name) => {
-            tracing::info!("Peer offline: {}", name);
+            tracing::info!(peer = %name, "Peer went offline");
         }
         DiscoveryEvent::ServiceReady => {
             tracing::info!("Discovery service ready");
+        }
+        DiscoveryEvent::DiscoveryError { method, reason } => {
+            tracing::error!(method, error = %reason, "Discovery service failure");
         }
     }
 }

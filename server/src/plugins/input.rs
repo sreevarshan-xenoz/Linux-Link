@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use linux_link_core::error::Result;
 use linux_link_core::protocol::kdeconnect::{DeviceSender, NetworkPacket, Plugin};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -22,7 +22,9 @@ impl InputPlugin {
     async fn get_injector(&self) -> Result<Arc<Mutex<Option<InputInjector>>>> {
         let mut opt = self.injector.lock().await;
         if opt.is_none() {
-            *opt = Some(InputInjector::new().context("Failed to create input injector")?);
+            *opt = Some(InputInjector::new().map_err(|e| linux_link_core::error::LinuxLinkError::Other {
+                detail: format!("Failed to create input injector: {e}"),
+            })?);
             debug!("Input injector initialized on first use");
         }
         Ok(self.injector.clone())
@@ -56,12 +58,12 @@ impl Plugin for InputPlugin {
 
                 // Handle keyboard input first (text)
                 if let Some(text) = body.get("text").and_then(|v| v.as_str()) {
-                    self.type_text(text).await.warn_on_err("type text");
+                    let _ = self.type_text(text).await;
                 }
 
                 // Handle special key
                 if let Some(key) = body.get("key").and_then(|v| v.as_str()) {
-                    self.press_key(key).await.warn_on_err("press key");
+                    let _ = self.press_key(key).await;
                 }
 
                 // Handle mouse movement
@@ -69,23 +71,13 @@ impl Plugin for InputPlugin {
                     body.get("dx").and_then(|v| v.as_f64()),
                     body.get("dy").and_then(|v| v.as_f64()),
                 ) && (x != 0.0 || y != 0.0) {
-                    self.move_mouse(x as i32, y as i32).await.warn_on_err("move mouse");
+                    let _ = self.move_mouse(x as i32, y as i32).await;
                 }
 
                 // Handle mouse button events
                 if let Some(is_pressed) = body.get("isPressed").and_then(|v| v.as_bool())
                     && let Some(button) = body.get("button").and_then(|v| v.as_i64()) {
-                    self.mouse_button(button as i32, is_pressed).await.warn_on_err("mouse button");
-                }
-
-                // Handle scroll events (small deltas are movement, larger ones are scroll)
-                if let (Some(x), Some(y)) = (
-                    body.get("dx").and_then(|v| v.as_f64()),
-                    body.get("dy").and_then(|v| v.as_f64()),
-                ) && (x != 0.0 || y != 0.0)
-                    && (x.abs() > 10.0 || y.abs() > 10.0)
-                {
-                    // Already handled as mouse movement above
+                    let _ = self.mouse_button(button as i32, is_pressed).await;
                 }
 
                 // Echo back for mousepad protocol
@@ -95,7 +87,7 @@ impl Plugin for InputPlugin {
             "kdeconnect.presenter" => {
                 // Presenter remote - handle play/pause/next/previous
                 if let Some(action) = packet.body.get("action").and_then(|v| v.as_str()) {
-                    self.handle_presenter_action(action).await.warn_on_err("handle presenter action");
+                    let _ = self.handle_presenter_action(action).await;
                 }
             }
             _ => {}
@@ -110,7 +102,7 @@ impl InputPlugin {
         let injector = self.get_injector().await?;
         let mut inj = injector.lock().await;
         if let Some(ref mut injector) = *inj {
-            injector.move_mouse_relative(dx, dy)
+            injector.move_mouse_relative(dx, dy).map_err(Into::into)
         } else {
             unreachable!()
         }
@@ -122,7 +114,7 @@ impl InputPlugin {
         let mut inj = injector.lock().await;
         if let Some(ref mut injector) = *inj {
             let mouse_key = button_id_to_mouse(button);
-            injector.mouse_button(mouse_key, pressed)
+            injector.mouse_button(mouse_key, pressed).map_err(Into::into)
         } else {
             unreachable!()
         }
@@ -133,7 +125,7 @@ impl InputPlugin {
         let injector = self.get_injector().await?;
         let mut inj = injector.lock().await;
         if let Some(ref mut injector) = *inj {
-            injector.text(text)
+            injector.text(text).map_err(Into::into)
         } else {
             unreachable!()
         }
@@ -145,8 +137,8 @@ impl InputPlugin {
         let mut inj = injector.lock().await;
         if let Some(ref mut injector) = *inj {
             let enigo_key = key_name_to_enigo_key(key);
-            injector.key(enigo_key, true)?;
-            injector.key(enigo_key, false)
+            injector.key(enigo_key, true).map_err(|e| linux_link_core::error::LinuxLinkError::Other { detail: e.to_string() })?;
+            injector.key(enigo_key, false).map_err(|e| linux_link_core::error::LinuxLinkError::Other { detail: e.to_string() })
         } else {
             unreachable!()
         }
@@ -164,12 +156,12 @@ impl InputPlugin {
                     } else {
                         Key::LeftArrow
                     };
-                    injector.key(key, true)?;
-                    injector.key(key, false)?;
+                    injector.key(key, true).ok();
+                    injector.key(key, false).ok();
                 }
                 "play" | "pause" => {
-                    injector.key(Key::Space, true)?;
-                    injector.key(Key::Space, false)?;
+                    injector.key(Key::Space, true).ok();
+                    injector.key(Key::Space, false).ok();
                 }
                 other => {
                     warn!("Unknown presenter action: {}", other);
@@ -181,16 +173,3 @@ impl InputPlugin {
 }
 
 use enigo::Key;
-
-/// Extension trait for logging warnings on Result errors.
-trait WarnOnErr<T> {
-    fn warn_on_err(self, context: &str);
-}
-
-impl<T> WarnOnErr<T> for Result<T, anyhow::Error> {
-    fn warn_on_err(self, context: &str) {
-        if let Err(e) = self {
-            warn!("Failed to {}: {}", context, e);
-        }
-    }
-}

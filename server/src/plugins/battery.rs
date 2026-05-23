@@ -1,3 +1,4 @@
+use linux_link_core::error::Result;
 use linux_link_core::protocol::kdeconnect::{DeviceSender, NetworkPacket, Plugin};
 
 #[derive(Debug)]
@@ -33,7 +34,7 @@ impl Plugin for BatteryPlugin {
         &self,
         packet: &NetworkPacket,
         sender: &dyn DeviceSender,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         if packet.packet_type.as_str() == "kdeconnect.battery.request" {
             let (charge, is_charging) =
                 match (read_battery_charge().await, read_is_charging().await) {
@@ -111,10 +112,10 @@ fn read_sysfs_capacity() -> Option<u8> {
     // Try BAT0, BAT1, BAT2
     for bat in &["BAT0", "BAT1", "BAT2"] {
         let path = format!("/sys/class/power_supply/{}/capacity", bat);
-        if let Ok(content) = std::fs::read_to_string(&path)
-            && let Ok(capacity) = content.trim().parse::<u8>()
-        {
-            return Some(capacity);
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            if let Ok(capacity) = content.trim().parse::<u8>() {
+                return Some(capacity);
+            }
         }
     }
     None

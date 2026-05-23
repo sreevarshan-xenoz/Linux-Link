@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use linux_link_core::error::Result;
 use linux_link_core::protocol::kdeconnect::{DeviceSender, NetworkPacket, Plugin};
 use tokio::process::Command;
 
@@ -95,13 +95,18 @@ async fn execute_systemctl(action: &str) -> Result<()> {
         .arg(action)
         .output()
         .await
-        .with_context(|| format!("Failed to run systemctl {action}"))?;
+        .map_err(|e| linux_link_core::error::LinuxLinkError::Io {
+            operation: "systemctl",
+            detail: e.to_string(),
+        })?;
 
     if output.status.success() {
         tracing::info!("Power action '{action}' succeeded via direct systemctl");
         Ok(())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("Power action '{action}' failed: {stderr}",);
+        Err(linux_link_core::error::LinuxLinkError::Other {
+            detail: format!("Power action '{action}' failed: {stderr}"),
+        })
     }
 }

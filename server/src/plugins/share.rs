@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use linux_link_core::error::Result;
 use linux_link_core::protocol::kdeconnect::{DeviceSender, NetworkPacket, Plugin};
 use std::path::PathBuf;
 use tokio::io::AsyncWriteExt;
@@ -102,17 +102,26 @@ async fn receive_file(filepath: PathBuf, port: u16, expected_size: u64) -> Resul
     if let Some(parent) = filepath.parent() {
         tokio::fs::create_dir_all(parent)
             .await
-            .with_context(|| format!("failed to create directory {}", parent.display()))?;
+            .map_err(|e| linux_link_core::error::LinuxLinkError::Io {
+                operation: "create_dir_all",
+                detail: e.to_string(),
+            })?;
     }
 
     let listener = TcpListener::bind(format!("0.0.0.0:{}", port))
         .await
-        .with_context(|| format!("failed to bind on port {}", port))?;
+        .map_err(|e| linux_link_core::error::LinuxLinkError::Io {
+            operation: "bind",
+            detail: e.to_string(),
+        })?;
 
     let (mut stream, addr) = listener
         .accept()
         .await
-        .context("failed to accept file transfer connection")?;
+        .map_err(|e| linux_link_core::error::LinuxLinkError::Io {
+            operation: "accept",
+            detail: e.to_string(),
+        })?;
 
     tracing::info!(
         "Receiving file from {} ({} bytes expected)",
@@ -122,7 +131,10 @@ async fn receive_file(filepath: PathBuf, port: u16, expected_size: u64) -> Resul
 
     let mut file = tokio::fs::File::create(&filepath)
         .await
-        .with_context(|| format!("failed to create {}", filepath.display()))?;
+        .map_err(|e| linux_link_core::error::LinuxLinkError::Io {
+            operation: "create_file",
+            detail: e.to_string(),
+        })?;
 
     let mut buffer = vec![0u8; 64 * 1024]; // 64KB chunks
     let mut received: u64 = 0;
@@ -131,7 +143,10 @@ async fn receive_file(filepath: PathBuf, port: u16, expected_size: u64) -> Resul
         let n = stream
             .read(&mut buffer)
             .await
-            .context("failed to read from stream")?;
+            .map_err(|e| linux_link_core::error::LinuxLinkError::Io {
+                operation: "read",
+                detail: e.to_string(),
+            })?;
 
         if n == 0 {
             break;
@@ -139,12 +154,15 @@ async fn receive_file(filepath: PathBuf, port: u16, expected_size: u64) -> Resul
 
         file.write_all(&buffer[..n])
             .await
-            .context("failed to write to file")?;
+            .map_err(|e| linux_link_core::error::LinuxLinkError::Io {
+                operation: "write",
+                detail: e.to_string(),
+            })?;
 
         received += n as u64;
 
         // Progress logging every MB
-        if received.is_multiple_of(1024 * 1024) {
+        if received % (1024 * 1024) == 0 {
             tracing::debug!("Received {} MB", received / (1024 * 1024));
         }
 
