@@ -10,6 +10,8 @@ pub enum DiscoveryEvent {
     PeerDiscovered(PeerInfo),
     PeerOffline(String),
     ServiceReady,
+    /// Discovery encountered a fatal error.
+    DiscoveryError { method: &'static str, reason: String },
 }
 
 #[derive(Debug, Clone)]
@@ -29,53 +31,70 @@ impl DiscoveryService {
     }
 
     pub async fn run(&self, check_interval: Duration) {
-        let mut ticker = interval(check_interval);
-        let mut known_peers: HashMap<String, bool> = HashMap::new();
+        let span = tracing::info_span!("tailscale_discovery_loop");
+        use tracing::Instrument;
 
-        if let Ok(peers) = self.scan_peers().await {
-            for peer in peers {
-                known_peers.insert(peer.name.clone(), peer.online);
-                if peer.online {
-                    let _ = self.tx.send(DiscoveryEvent::PeerDiscovered(peer));
-                }
-            }
-        }
-
-        let _ = self.tx.send(DiscoveryEvent::ServiceReady);
-
-        loop {
-            ticker.tick().await;
+        async move {
+            let mut ticker = interval(check_interval);
+            let mut known_peers: HashMap<String, bool> = HashMap::new();
 
             match self.scan_peers().await {
                 Ok(peers) => {
-                    let mut current_online: HashMap<String, bool> = HashMap::new();
-
                     for peer in peers {
-                        current_online.insert(peer.name.clone(), peer.online);
-                        let was_online = known_peers.get(&peer.name).copied().unwrap_or(false);
-
-                        if peer.online && !was_online {
-                            let _ = self.tx.send(DiscoveryEvent::PeerDiscovered(peer.clone()));
-                        }
-
-                        if !peer.online && was_online {
-                            let _ = self.tx.send(DiscoveryEvent::PeerOffline(peer.name.clone()));
+                        known_peers.insert(peer.name.clone(), peer.online);
+                        if peer.online {
+                            let _ = self.tx.send(DiscoveryEvent::PeerDiscovered(peer));
                         }
                     }
-
-                    for name in known_peers.keys() {
-                        if !current_online.contains_key(name) {
-                            let _ = self.tx.send(DiscoveryEvent::PeerOffline(name.clone()));
-                        }
-                    }
-
-                    known_peers = current_online;
                 }
-                Err(error) => {
-                    tracing::warn!("peer scan failed: {}", error);
+                Err(e) => {
+                    tracing::warn!(error = %e, "Initial Tailscale peer scan failed");
+                    let _ = self.tx.send(DiscoveryEvent::DiscoveryError { 
+                        method: "initial_scan", 
+                        reason: e.to_string() 
+                    });
                 }
             }
-        }
+
+            let _ = self.tx.send(DiscoveryEvent::ServiceReady);
+
+            loop {
+                ticker.tick().await;
+
+                match self.scan_peers().await {
+                    Ok(peers) => {
+                        let mut current_online: HashMap<String, bool> = HashMap::new();
+
+                        for peer in peers {
+                            current_online.insert(peer.name.clone(), peer.online);
+                            let was_online = known_peers.get(&peer.name).copied().unwrap_or(false);
+
+                            if peer.online && !was_online {
+                                tracing::info!(peer = %peer.name, "Peer came online");
+                                let _ = self.tx.send(DiscoveryEvent::PeerDiscovered(peer.clone()));
+                            }
+
+                            if !peer.online && was_online {
+                                tracing::info!(peer = %peer.name, "Peer went offline");
+                                let _ = self.tx.send(DiscoveryEvent::PeerOffline(peer.name.clone()));
+                            }
+                        }
+
+                        for name in known_peers.keys() {
+                            if !current_online.contains_key(name) {
+                                tracing::info!(peer = %name, "Peer removed from Tailscale");
+                                let _ = self.tx.send(DiscoveryEvent::PeerOffline(name.clone()));
+                            }
+                        }
+
+                        known_peers = current_online;
+                    }
+                    Err(error) => {
+                        tracing::warn!(error = %error, "Periodic Tailscale peer scan failed");
+                    }
+                }
+            }
+        }.instrument(span).await
     }
 
     async fn scan_peers(&self) -> Result<Vec<PeerInfo>> {

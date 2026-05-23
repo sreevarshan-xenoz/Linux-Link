@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 use tokio::process::Command;
 use tokio::sync::broadcast;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use super::PeerInfo;
 
@@ -32,6 +32,8 @@ pub enum LanEvent {
     PeerOffline(String),
     /// The service is ready to emit events.
     ServiceReady,
+    /// Discovery encountered a fatal error (e.g. daemon died).
+    DiscoveryError { method: &'static str, reason: String },
 }
 
 /// LAN peer discovery service using mDNS.
@@ -50,13 +52,16 @@ impl LanDiscoveryService {
 
     /// Register this server on the LAN via mDNS.
     pub fn register_service(&self, name: &str, port: u16, ips: Vec<String>) -> Result<()> {
+        let span = tracing::info_span!("mdns_register", service = %name, %port);
+        let _enter = span.enter();
+
         let hostname = format!("{}.local.", name);
         let service_type = SERVICE_TYPE.to_string();
         let instance_name = name.to_string();
 
         let mut properties = HashMap::new();
         properties.insert("name".to_string(), name.to_string());
-        properties.insert("version".to_string(), crate::PROTOCOL_VERSION.to_string());
+        properties.insert("version".to_string(), crate::protocol::PROTOCOL_VERSION.to_string());
 
         let service_info = ServiceInfo::new(
             &service_type,
@@ -70,7 +75,15 @@ impl LanDiscoveryService {
 
         self.daemon
             .register(service_info)
-            .context("Failed to register mDNS service")?;
+            .map_err(|e| {
+                let err = format!("{e}");
+                error!(error = %err, "mDNS registration failed");
+                let _ = self.tx.send(LanEvent::DiscoveryError { 
+                    method: "mdns_register", 
+                    reason: err.clone() 
+                });
+                anyhow::anyhow!("mDNS registration failed: {err}")
+            })?;
 
         info!("Registered mDNS service: {} on port {}", instance_name, port);
         Ok(())
@@ -83,48 +96,61 @@ impl LanDiscoveryService {
 
     /// Run the discovery loop, polling mDNS at the given interval.
     pub async fn run(&self, scan_interval: Duration) {
-        let mut ticker = tokio::time::interval(scan_interval);
-        let mut known_peers: HashMap<String, bool> = HashMap::new();
+        let span = tracing::info_span!("lan_discovery_loop");
+        use tracing::Instrument;
 
-        // Initial scan
-        match self.scan_lan_peers().await {
-            Ok(peers) => {
-                for peer in peers {
-                    known_peers.insert(peer.name.clone(), true);
-                    let _ = self.tx.send(LanEvent::PeerDiscovered(peer));
-                }
-            }
-            Err(e) => warn!("Initial LAN scan failed: {e}"),
-        }
+        async move {
+            let mut ticker = tokio::time::interval(scan_interval);
+            let mut known_peers: HashMap<String, bool> = HashMap::new();
 
-        let _ = self.tx.send(LanEvent::ServiceReady);
-
-        // Periodic re-scan
-        loop {
-            ticker.tick().await;
+            // Initial scan
             match self.scan_lan_peers().await {
                 Ok(peers) => {
-                    let mut current_names: HashMap<String, bool> = HashMap::new();
-                    for peer in &peers {
-                        let name = peer.name.clone();
-                        current_names.insert(name.clone(), true);
-                        if !known_peers.contains_key(&name) {
-                            info!("Discovered new LAN peer: {}", peer.name);
-                            let _ = self.tx.send(LanEvent::PeerDiscovered(peer.clone()));
-                        }
+                    for peer in peers {
+                        known_peers.insert(peer.name.clone(), true);
+                        let _ = self.tx.send(LanEvent::PeerDiscovered(peer));
                     }
-                    // Detect peers that went offline
-                    for name in known_peers.keys() {
-                        if !current_names.contains_key(name) {
-                            info!("LAN peer went offline: {name}");
-                            let _ = self.tx.send(LanEvent::PeerOffline(name.clone()));
-                        }
-                    }
-                    known_peers = current_names;
                 }
-                Err(e) => warn!("LAN scan failed: {e}"),
+                Err(e) => {
+                    warn!(error = %e, "Initial LAN scan failed");
+                    let _ = self.tx.send(LanEvent::DiscoveryError { 
+                        method: "initial_scan", 
+                        reason: e.to_string() 
+                    });
+                }
             }
-        }
+
+            let _ = self.tx.send(LanEvent::ServiceReady);
+
+            // Periodic re-scan
+            loop {
+                ticker.tick().await;
+                match self.scan_lan_peers().await {
+                    Ok(peers) => {
+                        let mut current_names: HashMap<String, bool> = HashMap::new();
+                        for peer in &peers {
+                            let name = peer.name.clone();
+                            current_names.insert(name.clone(), true);
+                            if !known_peers.contains_key(&name) {
+                                info!(peer = %peer.name, "Discovered new LAN peer");
+                                let _ = self.tx.send(LanEvent::PeerDiscovered(peer.clone()));
+                            }
+                        }
+                        // Detect peers that went offline
+                        for name in known_peers.keys() {
+                            if !current_names.contains_key(name) {
+                                info!(peer = %name, "LAN peer went offline");
+                                let _ = self.tx.send(LanEvent::PeerOffline(name.clone()));
+                            }
+                        }
+                        known_peers = current_names;
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Periodic LAN scan failed");
+                    }
+                }
+            }
+        }.instrument(span).await
     }
 
     /// Perform a single scan of the LAN for Linux Link servers.

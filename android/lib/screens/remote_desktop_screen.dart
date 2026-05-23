@@ -174,7 +174,8 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
   Future<void> _startStreaming() async {
     try {
       // F2: Multi-monitor selection logic
-      final monitors = await bridge.rustApi.getMonitors(widget.address, widget.port);
+      final monitors =
+          await bridge.rustApi.getMonitors(widget.address, widget.port);
       int? selectedIndex;
 
       if (monitors.length > 1 && mounted) {
@@ -188,7 +189,8 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
                 shrinkWrap: true,
                 itemCount: monitors.length,
                 itemBuilder: (context, i) => ListTile(
-                  leading: Icon(monitors[i].isPrimary ? Icons.star : Icons.monitor),
+                  leading:
+                      Icon(monitors[i].isPrimary ? Icons.star : Icons.monitor),
                   title: Text(monitors[i].name),
                   subtitle: Text(monitors[i].resolution),
                   onTap: () => Navigator.pop(context, monitors[i].index),
