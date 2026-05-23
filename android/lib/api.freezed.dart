@@ -21,7 +21,7 @@ mixin _$ConnectionState {
     required TResult Function() connected,
     required TResult Function() disconnected,
     required TResult Function() connecting,
-    required TResult Function(String field0) error,
+    required TResult Function(LinuxLinkErrorDto field0) error,
   }) =>
       throw _privateConstructorUsedError;
   @optionalTypeArgs
@@ -29,7 +29,7 @@ mixin _$ConnectionState {
     TResult? Function()? connected,
     TResult? Function()? disconnected,
     TResult? Function()? connecting,
-    TResult? Function(String field0)? error,
+    TResult? Function(LinuxLinkErrorDto field0)? error,
   }) =>
       throw _privateConstructorUsedError;
   @optionalTypeArgs
@@ -37,7 +37,7 @@ mixin _$ConnectionState {
     TResult Function()? connected,
     TResult Function()? disconnected,
     TResult Function()? connecting,
-    TResult Function(String field0)? error,
+    TResult Function(LinuxLinkErrorDto field0)? error,
     required TResult orElse(),
   }) =>
       throw _privateConstructorUsedError;
@@ -136,7 +136,7 @@ class _$ConnectionState_ConnectedImpl extends ConnectionState_Connected {
     required TResult Function() connected,
     required TResult Function() disconnected,
     required TResult Function() connecting,
-    required TResult Function(String field0) error,
+    required TResult Function(LinuxLinkErrorDto field0) error,
   }) {
     return connected();
   }
@@ -147,7 +147,7 @@ class _$ConnectionState_ConnectedImpl extends ConnectionState_Connected {
     TResult? Function()? connected,
     TResult? Function()? disconnected,
     TResult? Function()? connecting,
-    TResult? Function(String field0)? error,
+    TResult? Function(LinuxLinkErrorDto field0)? error,
   }) {
     return connected?.call();
   }
@@ -158,7 +158,7 @@ class _$ConnectionState_ConnectedImpl extends ConnectionState_Connected {
     TResult Function()? connected,
     TResult Function()? disconnected,
     TResult Function()? connecting,
-    TResult Function(String field0)? error,
+    TResult Function(LinuxLinkErrorDto field0)? error,
     required TResult orElse(),
   }) {
     if (connected != null) {
@@ -258,7 +258,7 @@ class _$ConnectionState_DisconnectedImpl extends ConnectionState_Disconnected {
     required TResult Function() connected,
     required TResult Function() disconnected,
     required TResult Function() connecting,
-    required TResult Function(String field0) error,
+    required TResult Function(LinuxLinkErrorDto field0) error,
   }) {
     return disconnected();
   }
@@ -269,7 +269,7 @@ class _$ConnectionState_DisconnectedImpl extends ConnectionState_Disconnected {
     TResult? Function()? connected,
     TResult? Function()? disconnected,
     TResult? Function()? connecting,
-    TResult? Function(String field0)? error,
+    TResult? Function(LinuxLinkErrorDto field0)? error,
   }) {
     return disconnected?.call();
   }
@@ -280,7 +280,7 @@ class _$ConnectionState_DisconnectedImpl extends ConnectionState_Disconnected {
     TResult Function()? connected,
     TResult Function()? disconnected,
     TResult Function()? connecting,
-    TResult Function(String field0)? error,
+    TResult Function(LinuxLinkErrorDto field0)? error,
     required TResult orElse(),
   }) {
     if (disconnected != null) {
@@ -381,7 +381,7 @@ class _$ConnectionState_ConnectingImpl extends ConnectionState_Connecting {
     required TResult Function() connected,
     required TResult Function() disconnected,
     required TResult Function() connecting,
-    required TResult Function(String field0) error,
+    required TResult Function(LinuxLinkErrorDto field0) error,
   }) {
     return connecting();
   }
@@ -392,7 +392,7 @@ class _$ConnectionState_ConnectingImpl extends ConnectionState_Connecting {
     TResult? Function()? connected,
     TResult? Function()? disconnected,
     TResult? Function()? connecting,
-    TResult? Function(String field0)? error,
+    TResult? Function(LinuxLinkErrorDto field0)? error,
   }) {
     return connecting?.call();
   }
@@ -403,7 +403,7 @@ class _$ConnectionState_ConnectingImpl extends ConnectionState_Connecting {
     TResult Function()? connected,
     TResult Function()? disconnected,
     TResult Function()? connecting,
-    TResult Function(String field0)? error,
+    TResult Function(LinuxLinkErrorDto field0)? error,
     required TResult orElse(),
   }) {
     if (connecting != null) {
@@ -462,7 +462,7 @@ abstract class _$$ConnectionState_ErrorImplCopyWith<$Res> {
           $Res Function(_$ConnectionState_ErrorImpl) then) =
       __$$ConnectionState_ErrorImplCopyWithImpl<$Res>;
   @useResult
-  $Res call({String field0});
+  $Res call({LinuxLinkErrorDto field0});
 }
 
 /// @nodoc
@@ -484,7 +484,7 @@ class __$$ConnectionState_ErrorImplCopyWithImpl<$Res>
       null == field0
           ? _value.field0
           : field0 // ignore: cast_nullable_to_non_nullable
-              as String,
+              as LinuxLinkErrorDto,
     ));
   }
 }
@@ -495,7 +495,7 @@ class _$ConnectionState_ErrorImpl extends ConnectionState_Error {
   const _$ConnectionState_ErrorImpl(this.field0) : super._();
 
   @override
-  final String field0;
+  final LinuxLinkErrorDto field0;
 
   @override
   String toString() {
@@ -528,7 +528,7 @@ class _$ConnectionState_ErrorImpl extends ConnectionState_Error {
     required TResult Function() connected,
     required TResult Function() disconnected,
     required TResult Function() connecting,
-    required TResult Function(String field0) error,
+    required TResult Function(LinuxLinkErrorDto field0) error,
   }) {
     return error(field0);
   }
@@ -539,7 +539,7 @@ class _$ConnectionState_ErrorImpl extends ConnectionState_Error {
     TResult? Function()? connected,
     TResult? Function()? disconnected,
     TResult? Function()? connecting,
-    TResult? Function(String field0)? error,
+    TResult? Function(LinuxLinkErrorDto field0)? error,
   }) {
     return error?.call(field0);
   }
@@ -550,7 +550,7 @@ class _$ConnectionState_ErrorImpl extends ConnectionState_Error {
     TResult Function()? connected,
     TResult Function()? disconnected,
     TResult Function()? connecting,
-    TResult Function(String field0)? error,
+    TResult Function(LinuxLinkErrorDto field0)? error,
     required TResult orElse(),
   }) {
     if (error != null) {
@@ -598,11 +598,11 @@ class _$ConnectionState_ErrorImpl extends ConnectionState_Error {
 }
 
 abstract class ConnectionState_Error extends ConnectionState {
-  const factory ConnectionState_Error(final String field0) =
+  const factory ConnectionState_Error(final LinuxLinkErrorDto field0) =
       _$ConnectionState_ErrorImpl;
   const ConnectionState_Error._() : super._();
 
-  String get field0;
+  LinuxLinkErrorDto get field0;
 
   /// Create a copy of ConnectionState
   /// with the given fields replaced by the non-null parameter values.

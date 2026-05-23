@@ -25,6 +25,9 @@ abstract class RustApiApiImplPlatform extends BaseApiImpl<RustApiWire> {
   bool dco_decode_bool(dynamic raw);
 
   @protected
+  LinuxLinkErrorDto dco_decode_box_autoadd_linux_link_error_dto(dynamic raw);
+
+  @protected
   int dco_decode_box_autoadd_u_32(dynamic raw);
 
   @protected
@@ -46,6 +49,9 @@ abstract class RustApiApiImplPlatform extends BaseApiImpl<RustApiWire> {
   int dco_decode_i_32(dynamic raw);
 
   @protected
+  LinuxLinkErrorDto dco_decode_linux_link_error_dto(dynamic raw);
+
+  @protected
   List<String> dco_decode_list_String(dynamic raw);
 
   @protected
@@ -53,6 +59,9 @@ abstract class RustApiApiImplPlatform extends BaseApiImpl<RustApiWire> {
 
   @protected
   List<Uint8List> dco_decode_list_list_prim_u_8_strict(dynamic raw);
+
+  @protected
+  List<MonitorInfoDto> dco_decode_list_monitor_info_dto(dynamic raw);
 
   @protected
   List<PeerInfoDto> dco_decode_list_peer_info_dto(dynamic raw);
@@ -68,6 +77,9 @@ abstract class RustApiApiImplPlatform extends BaseApiImpl<RustApiWire> {
 
   @protected
   List<RemoteFileDto> dco_decode_list_remote_file_dto(dynamic raw);
+
+  @protected
+  MonitorInfoDto dco_decode_monitor_info_dto(dynamic raw);
 
   @protected
   int? dco_decode_opt_box_autoadd_u_32(dynamic raw);
@@ -103,6 +115,10 @@ abstract class RustApiApiImplPlatform extends BaseApiImpl<RustApiWire> {
   bool sse_decode_bool(SseDeserializer deserializer);
 
   @protected
+  LinuxLinkErrorDto sse_decode_box_autoadd_linux_link_error_dto(
+      SseDeserializer deserializer);
+
+  @protected
   int sse_decode_box_autoadd_u_32(SseDeserializer deserializer);
 
   @protected
@@ -124,6 +140,10 @@ abstract class RustApiApiImplPlatform extends BaseApiImpl<RustApiWire> {
   int sse_decode_i_32(SseDeserializer deserializer);
 
   @protected
+  LinuxLinkErrorDto sse_decode_linux_link_error_dto(
+      SseDeserializer deserializer);
+
+  @protected
   List<String> sse_decode_list_String(SseDeserializer deserializer);
 
   @protected
@@ -131,6 +151,10 @@ abstract class RustApiApiImplPlatform extends BaseApiImpl<RustApiWire> {
 
   @protected
   List<Uint8List> sse_decode_list_list_prim_u_8_strict(
+      SseDeserializer deserializer);
+
+  @protected
+  List<MonitorInfoDto> sse_decode_list_monitor_info_dto(
       SseDeserializer deserializer);
 
   @protected
@@ -148,6 +172,9 @@ abstract class RustApiApiImplPlatform extends BaseApiImpl<RustApiWire> {
   @protected
   List<RemoteFileDto> sse_decode_list_remote_file_dto(
       SseDeserializer deserializer);
+
+  @protected
+  MonitorInfoDto sse_decode_monitor_info_dto(SseDeserializer deserializer);
 
   @protected
   int? sse_decode_opt_box_autoadd_u_32(SseDeserializer deserializer);
@@ -184,6 +211,10 @@ abstract class RustApiApiImplPlatform extends BaseApiImpl<RustApiWire> {
   void sse_encode_bool(bool self, SseSerializer serializer);
 
   @protected
+  void sse_encode_box_autoadd_linux_link_error_dto(
+      LinuxLinkErrorDto self, SseSerializer serializer);
+
+  @protected
   void sse_encode_box_autoadd_u_32(int self, SseSerializer serializer);
 
   @protected
@@ -206,6 +237,10 @@ abstract class RustApiApiImplPlatform extends BaseApiImpl<RustApiWire> {
   void sse_encode_i_32(int self, SseSerializer serializer);
 
   @protected
+  void sse_encode_linux_link_error_dto(
+      LinuxLinkErrorDto self, SseSerializer serializer);
+
+  @protected
   void sse_encode_list_String(List<String> self, SseSerializer serializer);
 
   @protected
@@ -214,6 +249,10 @@ abstract class RustApiApiImplPlatform extends BaseApiImpl<RustApiWire> {
   @protected
   void sse_encode_list_list_prim_u_8_strict(
       List<Uint8List> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_monitor_info_dto(
+      List<MonitorInfoDto> self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_peer_info_dto(
@@ -234,6 +273,10 @@ abstract class RustApiApiImplPlatform extends BaseApiImpl<RustApiWire> {
   @protected
   void sse_encode_list_remote_file_dto(
       List<RemoteFileDto> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_monitor_info_dto(
+      MonitorInfoDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_box_autoadd_u_32(int? self, SseSerializer serializer);

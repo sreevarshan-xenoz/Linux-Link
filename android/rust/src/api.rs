@@ -39,10 +39,37 @@ pub fn set_data_dir(path: String) {
     tracing::info!("Data directory set to: {path}");
 }
 
+/// Check if the LAN discovery service is active.
+#[frb(sync)]
+pub fn is_discovery_active() -> bool {
+    crate::MDNS_ACTIVE.load(Ordering::Acquire)
+}
+
 /// Get version string
 #[frb]
 pub fn version() -> String {
+    let _ = ErrorCode::Generic; // Silence unused warning
     env!("CARGO_PKG_VERSION").to_string()
+}
+
+use linux_link_core::error::{ErrorCode, LinuxLinkError};
+
+/// Structured error information for Flutter.
+#[frb]
+pub struct LinuxLinkErrorDto {
+    pub code: u32,
+    pub message: String,
+    pub is_retryable: bool,
+}
+
+impl From<LinuxLinkError> for LinuxLinkErrorDto {
+    fn from(e: LinuxLinkError) -> Self {
+        Self {
+            code: e.code() as u32,
+            message: e.to_string(),
+            is_retryable: e.is_retryable(),
+        }
+    }
 }
 
 /// Connection state enumeration for Flutter
@@ -51,7 +78,7 @@ pub enum ConnectionState {
     Connected,
     Disconnected,
     Connecting,
-    Error(String),
+    Error(LinuxLinkErrorDto),
 }
 
 /// Peer information for display in Flutter
@@ -158,7 +185,7 @@ pub fn send_wol(mac_address: String, broadcast_addr: String) -> Result<(), Strin
 /// Check Tailscale status
 #[frb]
 pub async fn check_tailscale_status() -> Result<bool, String> {
-    let client = TailscaleClient::new().map_err(|e: anyhow::Error| e.to_string())?;
+    let client = TailscaleClient::new().map_err(|e| e.to_string())?;
     match tokio::time::timeout(
         Duration::from_secs(5),
         client.wait_for_ready(Duration::from_secs(3)),
@@ -183,7 +210,9 @@ pub async fn get_peers() -> Result<Vec<PeerInfoDto>, String> {
     }
 
     // 2. Get LAN peers via mDNS
+    crate::MDNS_ACTIVE.store(true, Ordering::Release);
     let lan_peers = linux_link_core::tailscale::lan::scan_lan_once().await;
+    crate::MDNS_ACTIVE.store(false, Ordering::Release);
     for lp in lan_peers {
         // Avoid duplicates if a peer is found on both Tailscale and LAN
         if !all_peers.iter().any(|p| p.name == lp.name) {
@@ -211,49 +240,83 @@ pub async fn connect_to_peer(address: String, port: u16) -> Result<ConnectionSta
     let conn_mgr = ConnectionManager::new(Duration::from_secs(10));
     let identity = client_identity();
 
-    match conn_mgr.connect(&address, port, &identity).await {
-        Ok(stream) => {
-            let (reader, writer) = stream.into_split();
-            let mut writer_guard = (*CONTROL_WRITER).lock().await;
-            *writer_guard = Some(Arc::new(Mutex::new(writer)));
+    let conn_id = uuid::Uuid::new_v4().to_string();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let span = tracing::info_span!(
+        "conn",
+        id = %conn_id,
+        session = %session_id,
+        peer = %address,
+        transport = "tcp",
+        proto = %linux_link_core::protocol::PROTOCOL_VERSION
+    );
 
-            // Create a broadcast channel for forwarding incoming packets to Flutter
-            let (packet_tx, _) = broadcast::channel(256);
-            {
-                let mut incoming = crate::INCOMING_PACKETS.lock().await;
-                *incoming = Some(packet_tx.clone());
-            }
+    use tracing::Instrument;
 
-            tokio::spawn(async move {
-                let mut reader = tokio::io::BufReader::new(reader);
-                let mut line = String::new();
-                while let Ok(n) = reader.read_line(&mut line).await {
-                    if n == 0 {
-                        break;
-                    }
-                    let trimmed = line.trim().to_string();
-                    if !trimmed.is_empty() {
-                        let _ = packet_tx.send(trimmed);
-                    }
-                    line.clear();
-                }
-                tracing::warn!("Control connection lost");
-                let mut state_guard = (*CONNECTION_STATE).lock().await;
-                *state_guard = ConnectionState::Disconnected;
+    let result = async move {
+        match conn_mgr.connect(&address, port, &identity).await {
+            Ok(stream) => {
+                let (reader, writer) = stream.into_split();
                 let mut writer_guard = (*CONTROL_WRITER).lock().await;
-                *writer_guard = None;
-                let mut incoming = crate::INCOMING_PACKETS.lock().await;
-                *incoming = None;
-            });
+                *writer_guard = Some(Arc::new(Mutex::new(writer)));
 
-            *state_guard = ConnectionState::Connected;
-            Ok(ConnectionState::Connected)
-        }
-        Err(e) => {
-            *state_guard = ConnectionState::Error(e.to_string());
-            Ok(ConnectionState::Error(e.to_string()))
+                // Create a broadcast channel for forwarding incoming packets to Flutter
+                let (packet_tx, _) = broadcast::channel(256);
+                {
+                    let mut incoming = crate::INCOMING_PACKETS.lock().await;
+                    *incoming = Some(packet_tx.clone());
+                }
+
+                tokio::spawn(
+                    async move {
+                        let mut reader = tokio::io::BufReader::new(reader);
+                        let mut line = String::new();
+                        while let Ok(n) = reader.read_line(&mut line).await {
+                            if n == 0 {
+                                break;
+                            }
+                            let trimmed = line.trim().to_string();
+                            if !trimmed.is_empty() {
+                                let _ = packet_tx.send(trimmed);
+                            }
+                            line.clear();
+                        }
+                        tracing::warn!("Control connection lost");
+                        let mut state_guard = (*CONNECTION_STATE).lock().await;
+                        *state_guard = ConnectionState::Disconnected;
+                        let mut writer_guard = (*CONTROL_WRITER).lock().await;
+                        *writer_guard = None;
+                        let mut incoming = crate::INCOMING_PACKETS.lock().await;
+                        *incoming = None;
+                    }
+                    .instrument(tracing::debug_span!("control_reader")),
+                );
+
+                tracing::info!("Connected to peer");
+                Ok(ConnectionState::Connected)
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Connection failed");
+                Ok(ConnectionState::Error(LinuxLinkErrorDto::from(e)))
+            }
         }
     }
+    .instrument(span)
+    .await;
+
+    if let Ok(ref state) = result {
+        *state_guard = match state {
+            ConnectionState::Connected => ConnectionState::Connected,
+            ConnectionState::Disconnected => ConnectionState::Disconnected,
+            ConnectionState::Connecting => ConnectionState::Connecting,
+            ConnectionState::Error(e) => ConnectionState::Error(LinuxLinkErrorDto {
+                code: e.code,
+                message: e.message.clone(),
+                is_retryable: e.is_retryable,
+            }),
+        };
+    }
+    result
 }
 
 /// Poll for incoming KDE Connect packets from the control connection.
@@ -300,7 +363,7 @@ pub async fn send_clipboard(address: String, port: u16, content: String) -> Resu
     sender
         .send_packet(&packet)
         .await
-        .map_err(|e: anyhow::Error| e.to_string())?;
+        .map_err(|e| e.to_string())?;
     tracing::info!(
         "Clipboard sent to {}:{} ({} chars)",
         address,
@@ -328,7 +391,7 @@ pub async fn get_clipboard(address: String, port: u16) -> Result<String, String>
         sender
             .send_packet(&request)
             .await
-            .map_err(|e: anyhow::Error| e.to_string())?;
+            .map_err(|e| e.to_string())?;
 
         // Subscribe to incoming packets and wait for the clipboard response
         let rx = {
@@ -369,19 +432,19 @@ pub async fn get_clipboard(address: String, port: u16) -> Result<String, String>
     let stream = conn_mgr
         .connect(&address, port, &identity)
         .await
-        .map_err(|e: anyhow::Error| e.to_string())?;
+        .map_err(|e| e.to_string())?;
     let (reader, writer) = tokio::io::split(stream);
     let sender = TcpDeviceSender::new(writer, address);
     let request = NetworkPacket::new("kdeconnect.clipboard.connect");
     sender
         .send_packet(&request)
         .await
-        .map_err(|e: anyhow::Error| e.to_string())?;
+        .map_err(|e| e.to_string())?;
     let mut lines = tokio::io::BufReader::new(reader).lines();
     match tokio::time::timeout(Duration::from_secs(5), lines.next_line()).await {
         Ok(Ok(Some(line))) => {
             let packet =
-                NetworkPacket::from_wire(&line).map_err(|e: anyhow::Error| e.to_string())?;
+                NetworkPacket::from_wire(&line).map_err(|e| e.to_string())?;
             if packet.packet_type == "kdeconnect.clipboard" {
                 let content = packet
                     .body
@@ -421,7 +484,7 @@ pub async fn send_file(address: String, port: u16, file_path: String) -> Result<
     let stream = conn_mgr
         .connect(&address, port, &identity)
         .await
-        .map_err(|e: anyhow::Error| e.to_string())?;
+        .map_err(|e| e.to_string())?;
     let (_reader, writer) = tokio::io::split(stream);
     let sender = TcpDeviceSender::new(writer, address);
     let request = NetworkPacket::new("kdeconnect.share.request")
@@ -433,7 +496,7 @@ pub async fn send_file(address: String, port: u16, file_path: String) -> Result<
     sender
         .send_packet(&request)
         .await
-        .map_err(|e: anyhow::Error| format!("Failed to send share request: {}", e))?;
+        .map_err(|e| format!("Failed to send share request: {}", e))?;
     let (mut client_stream, _) = tokio::time::timeout(Duration::from_secs(30), listener.accept())
         .await
         .map_err(|_| "Timeout waiting for file receiver".to_string())?
@@ -477,7 +540,7 @@ pub async fn list_remote_files(
     let stream = conn_mgr
         .connect(&address, port, &identity)
         .await
-        .map_err(|e: anyhow::Error| e.to_string())?;
+        .map_err(|e| e.to_string())?;
     let (reader, writer) = tokio::io::split(stream);
     let sender = TcpDeviceSender::new(writer, address);
     let request = NetworkPacket::new("kdeconnect.filebrowse.request")
@@ -485,12 +548,12 @@ pub async fn list_remote_files(
     sender
         .send_packet(&request)
         .await
-        .map_err(|e: anyhow::Error| e.to_string())?;
+        .map_err(|e| e.to_string())?;
     let mut lines = tokio::io::BufReader::new(reader).lines();
     match tokio::time::timeout(Duration::from_secs(10), lines.next_line()).await {
         Ok(Ok(Some(line))) => {
             let packet =
-                NetworkPacket::from_wire(&line).map_err(|e: anyhow::Error| e.to_string())?;
+                NetworkPacket::from_wire(&line).map_err(|e| e.to_string())?;
             if packet.packet_type != "kdeconnect.filebrowse.response" {
                 return Err(format!("Unexpected packet type: {}", packet.packet_type));
             }
@@ -803,7 +866,7 @@ pub async fn send_power_command(
     let stream = conn_mgr
         .connect(&address, port, &identity)
         .await
-        .map_err(|e: anyhow::Error| e.to_string())?;
+        .map_err(|e| e.to_string())?;
     let (_reader, writer) = tokio::io::split(stream);
     let sender = TcpDeviceSender::new(writer, address);
     let packet = NetworkPacket::new("kdeconnect.linuxlink.power")
@@ -811,7 +874,7 @@ pub async fn send_power_command(
     sender
         .send_packet(&packet)
         .await
-        .map_err(|e: anyhow::Error| e.to_string())?;
+        .map_err(|e| e.to_string())?;
     tracing::info!("Power command sent: {action}");
     Ok(())
 }
@@ -828,7 +891,7 @@ pub async fn execute_remote_command(
     let stream = conn_mgr
         .connect(&address, port, &identity)
         .await
-        .map_err(|e: anyhow::Error| e.to_string())?;
+        .map_err(|e| e.to_string())?;
     let (reader, writer) = tokio::io::split(stream);
     let sender = TcpDeviceSender::new(writer, address);
     let request = NetworkPacket::new("kdeconnect.linuxlink.exec")
@@ -836,7 +899,7 @@ pub async fn execute_remote_command(
     sender
         .send_packet(&request)
         .await
-        .map_err(|e: anyhow::Error| e.to_string())?;
+        .map_err(|e| e.to_string())?;
     let mut lines = tokio::io::BufReader::new(reader).lines();
     match tokio::time::timeout(Duration::from_secs(10), lines.next_line()).await {
         Ok(Ok(Some(line))) => {
@@ -1020,7 +1083,7 @@ pub async fn send_mouse_event(
     sender
         .send_packet(&packet)
         .await
-        .map_err(|e: anyhow::Error| e.to_string())?;
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -1168,7 +1231,7 @@ pub async fn send_keyboard_event(
     sender
         .send_packet(&packet)
         .await
-        .map_err(|e: anyhow::Error| e.to_string())?;
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 

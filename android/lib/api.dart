@@ -8,8 +8,9 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'api.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `android_to_evdev_keycode`
+// These functions are ignored because they are not marked as `pub`: `android_to_evdev_keycode`, `client_identity`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `DiscoveryEvent`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`
 
 /// Set the persistent data directory for certs and state.
 /// Must be called before `connect_streaming` for cert persistence.
@@ -18,6 +19,12 @@ Future<void> setDataDir({required String path}) =>
 
 /// Get version string
 Future<String> version() => RustApi.instance.api.crateApiVersion();
+
+/// Send Wake-on-LAN magic packet to wake a sleeping peer.
+Future<void> sendWol(
+        {required String macAddress, required String broadcastAddr}) =>
+    RustApi.instance.api
+        .crateApiSendWol(macAddress: macAddress, broadcastAddr: broadcastAddr);
 
 /// Check Tailscale status
 Future<bool> checkTailscaleStatus() =>
@@ -69,16 +76,6 @@ Future<List<RemoteFileDto>> listRemoteFiles(
     RustApi.instance.api.crateApiListRemoteFiles(
         address: address, port: port, remotePath: remotePath);
 
-/// Get detailed list of monitors available on the remote server.
-Future<List<MonitorInfoDto>> getMonitors(
-        {required String address, required int port}) =>
-    throw UnimplementedError('Codegen required for getMonitors');
-
-/// Send Wake-on-LAN magic packet to wake a sleeping peer.
-Future<void> sendWol(
-        {required String macAddress, required String broadcastAddr}) =>
-    throw UnimplementedError('Codegen required for sendWol');
-
 /// Request remote screen streaming.
 ///
 /// `monitor_index` selects which display to stream (0 = primary).
@@ -114,6 +111,12 @@ bool forgetTrustedPeer({required String label}) =>
 /// Get the number of monitors available on the remote server.
 ///
 /// F2: Multi-monitor support — returns 0 if detection fails or no display.
+/// Get detailed list of monitors available on the remote server.
+Future<List<MonitorInfoDto>> getMonitors(
+        {required String address, required int port}) =>
+    RustApi.instance.api.crateApiGetMonitors(address: address, port: port);
+
+/// Get the number of monitors available on the remote server (legacy).
 Future<int> getMonitorCount({required String address, required int port}) =>
     RustApi.instance.api.crateApiGetMonitorCount(address: address, port: port);
 
@@ -195,7 +198,7 @@ sealed class ConnectionState with _$ConnectionState {
   const factory ConnectionState.disconnected() = ConnectionState_Disconnected;
   const factory ConnectionState.connecting() = ConnectionState_Connecting;
   const factory ConnectionState.error(
-    String field0,
+    LinuxLinkErrorDto field0,
   ) = ConnectionState_Error;
 }
 
@@ -222,6 +225,67 @@ class FrameDto {
           data == other.data &&
           isKeyframe == other.isKeyframe &&
           sequence == other.sequence;
+}
+
+/// Structured error information for Flutter.
+class LinuxLinkErrorDto {
+  final int code;
+  final String message;
+  final bool isRetryable;
+
+  const LinuxLinkErrorDto({
+    required this.code,
+    required this.message,
+    required this.isRetryable,
+  });
+
+  @override
+  int get hashCode => code.hashCode ^ message.hashCode ^ isRetryable.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is LinuxLinkErrorDto &&
+          runtimeType == other.runtimeType &&
+          code == other.code &&
+          message == other.message &&
+          isRetryable == other.isRetryable;
+}
+
+/// Monitor information for display in Flutter
+class MonitorInfoDto {
+  final int index;
+  final String name;
+  final int width;
+  final int height;
+  final bool isPrimary;
+
+  const MonitorInfoDto({
+    required this.index,
+    required this.name,
+    required this.width,
+    required this.height,
+    required this.isPrimary,
+  });
+
+  @override
+  int get hashCode =>
+      index.hashCode ^
+      name.hashCode ^
+      width.hashCode ^
+      height.hashCode ^
+      isPrimary.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is MonitorInfoDto &&
+          runtimeType == other.runtimeType &&
+          index == other.index &&
+          name == other.name &&
+          width == other.width &&
+          height == other.height &&
+          isPrimary == other.isPrimary;
 }
 
 /// Peer information for display in Flutter
@@ -280,41 +344,6 @@ class RemoteFileDto {
           isDirectory == other.isDirectory &&
           size == other.size &&
           modified == other.modified;
-}
-
-class MonitorInfoDto {
-  final int index;
-  final String name;
-  final int width;
-  final int height;
-  final bool isPrimary;
-
-  const MonitorInfoDto({
-    required this.index,
-    required this.name,
-    required this.width,
-    required this.height,
-    required this.isPrimary,
-  });
-
-  @override
-  int get hashCode =>
-      index.hashCode ^
-      name.hashCode ^
-      width.hashCode ^
-      height.hashCode ^
-      isPrimary.hashCode;
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is MonitorInfoDto &&
-          runtimeType == other.runtimeType &&
-          index == other.index &&
-          name == other.name &&
-          width == other.width &&
-          height == other.height &&
-          isPrimary == other.isPrimary;
 }
 
 /// Streaming statistics for display in Flutter.

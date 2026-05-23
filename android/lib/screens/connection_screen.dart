@@ -328,22 +328,29 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
               connected: () => '',
               connecting: () => '',
               disconnected: () => '',
-              error: (msg) => msg,
-            );
-            debugPrint('Connection error: $errorMsg');
-            String userMessage = 'Failed to connect to $address:$port';
-            if (errorMsg.contains('connection timeout') ||
-                errorMsg.contains('failed to connect')) {
+              error: (dto) => dto.message,
+              );
+              debugPrint('Connection error: $errorMsg');
+              String userMessage = 'Failed to connect to $address:$port';
+
+              // Find the error DTO for more granular check
+              final errorDto = frbState.when(
+                error: (e) => e,
+                connected: () => null,
+                connecting: () => null,
+                disconnected: () => null,
+              );
+
+              if (errorDto != null && (errorDto.code == 2001 || errorDto.code == 2003)) {
               userMessage = 'Cannot reach server at $address:$port.\n\n'
                   'Make sure:\n'
                   '• The Linux Link server is running on your PC\n'
                   '• Tailscale is active on both devices\n'
                   '• No firewall is blocking port $port\n\n'
                   'Start the server with: linux-link-server start';
-            } else if (errorMsg.isNotEmpty) {
+              } else if (errorMsg.isNotEmpty) {
               userMessage += '\n\n$errorMsg';
-            }
-            ScaffoldMessenger.of(context).showSnackBar(
+              }            ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text(userMessage),
                 duration: const Duration(seconds: 6),
