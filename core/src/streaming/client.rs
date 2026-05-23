@@ -45,6 +45,8 @@ pub struct StreamingClient {
     cancel: CancellationToken,
     #[allow(dead_code)]
     channel_capacity: usize,
+    /// Unique session ID for tracking this connection
+    session_id: String,
 }
 
 impl StreamingClient {
@@ -67,6 +69,7 @@ impl StreamingClient {
             audio_tx,
             cancel: CancellationToken::new(),
             channel_capacity,
+            session_id: "".to_string(), // Will be initialized on connect
         };
         (client, frame_rx, audio_rx)
     }
@@ -93,62 +96,72 @@ impl StreamingClient {
         let (frame_tx, frame_rx) = mpsc::channel(channel_capacity);
         let (audio_tx, audio_rx) = mpsc::channel(channel_capacity);
 
-        info!("Connecting to streaming server at {addr}");
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let conn_id = uuid::Uuid::new_v4().to_string();
+        let span = tracing::info_span!(
+            "stream_client",
+            session = %session_id,
+            conn = %conn_id,
+            peer = %addr
+        );
 
-        let transport = StreamClient::new(StreamTransportConfig::default(), &cert_manager)
-            .context("Failed to create QUIC transport")?;
+        use tracing::Instrument;
 
-        let server_name = addr.ip().to_string();
-        let connection = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            transport.connect(addr, &server_name),
-        )
-        .await
-        .context("Connection to streaming server timed out")?
-        .context("Failed to connect to streaming server")?;
+        async move {
+            info!("Connecting to streaming server");
 
-        info!("Streaming connection established to {addr}");
+            let transport = StreamClient::new(StreamTransportConfig::default(), &cert_manager)
+                .context("Failed to create QUIC transport")?;
 
-        // Send optional monitor_index to the server as a config stream
-        if let Some(index) = monitor_index {
-            match connection.open_uni().await {
-                Ok(mut config_stream) => {
-                    // Format: [0xFF, 0x00] config marker + 4 bytes LE monitor_index
-                    let mut config_buf = [0u8; 6];
-                    config_buf[0..2].copy_from_slice(&MONITOR_CONFIG_MARKER);
-                    config_buf[2..6].copy_from_slice(&index.to_le_bytes());
-                    if let Err(e) = config_stream.write_all(&config_buf).await {
-                        warn!("Failed to send monitor index ({index}): {e}");
+            let server_name = addr.ip().to_string();
+            let connection = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                transport.connect(addr, &server_name),
+            )
+            .await
+            .context("Connection to streaming server timed out")?
+            .context("Failed to connect to streaming server")?;
+
+            info!("Streaming connection established");
+
+            // Send optional monitor_index to the server as a config stream
+            if let Some(index) = monitor_index {
+                match connection.open_uni().await {
+                    Ok(mut config_stream) => {
+                        // Format: [0xFF, 0x00] config marker + 4 bytes LE monitor_index
+                        let mut config_buf = [0u8; 6];
+                        config_buf[0..2].copy_from_slice(&MONITOR_CONFIG_MARKER);
+                        config_buf[2..6].copy_from_slice(&index.to_le_bytes());
+                        if let Err(e) = config_stream.write_all(&config_buf).await {
+                            warn!(error = %e, "Failed to send monitor index");
+                        }
+                        if let Err(e) = config_stream.finish() {
+                            warn!(error = %e, "Failed to finish config stream");
+                        }
+                        info!(index, "Sent monitor selection to server");
                     }
-                    if let Err(e) = config_stream.finish() {
-                        warn!("Failed to finish config stream: {e}");
+                    Err(e) => {
+                        warn!(error = %e, "Failed to open config stream");
                     }
-                    info!("Sent monitor_index={index} to server");
-                }
-                Err(e) => {
-                    warn!("Failed to open config stream for monitor_index: {e}");
                 }
             }
-        }
 
-        let client = Self {
-            connection: Some(connection),
-            transport_config: StreamTransportConfig::default(),
-            cert_manager,
-            frame_tx,
-            audio_tx,
-            cancel: CancellationToken::new(),
-            channel_capacity,
-        };
+            let client = Self {
+                connection: Some(connection),
+                transport_config: StreamTransportConfig::default(),
+                cert_manager,
+                frame_tx,
+                audio_tx,
+                cancel: CancellationToken::new(),
+                channel_capacity,
+                session_id,
+            };
 
-        Ok((client, frame_rx, audio_rx))
+            Ok((client, frame_rx, audio_rx))
+        }.instrument(span).await
     }
 
     /// Start receiving frames. This runs until cancelled or the connection closes.
-    ///
-    /// Spawns a background receive task and a stats-feedback task, then waits
-    /// for cancellation. The caller should have already taken the `frame_rx`
-    /// channel from `connect()` to consume packets.
     pub async fn start(&mut self) {
         let connection = match &self.connection {
             Some(conn) => conn.clone(),
@@ -162,39 +175,50 @@ impl StreamingClient {
         let frame_tx = self.frame_tx.clone();
         let audio_tx = self.audio_tx.clone();
 
-        info!("Starting frame receiver");
+        let span = tracing::info_span!(
+            "client_loop",
+            session = %self.session_id,
+            transport = "quic"
+        );
 
-        // Clone connection for the stats task before it gets moved into recv task
-        let stats_connection = connection.clone();
+        use tracing::Instrument;
 
-        // Spawn the receive loop using our cancel-aware receiver
-        let recv_cancel = cancel.clone();
-        let recv_handle = tokio::spawn(async move {
-            let result = recv_with_cancel(&connection, frame_tx, audio_tx, recv_cancel).await;
-            match result {
-                Ok(()) => debug!("Frame receiver finished normally"),
-                Err(e) => warn!("Frame receiver error: {e}"),
-            }
-        });
+        async move {
+            info!("Starting frame receiver tasks");
 
-        // Spawn a stats feedback loop that periodically sends RTT data
-        // back to the server on a second unidirectional stream.
-        let stats_cancel = cancel.clone();
-        let _stats_handle = tokio::spawn(async move {
-            send_stats_loop(&stats_connection, stats_cancel).await;
-        });
+            // Clone connection for the stats task before it gets moved into recv task
+            let stats_connection = connection.clone();
 
-        // Wait for cancellation or receive task completion
-        tokio::select! {
-            _ = cancel.cancelled() => {
-                info!("Streaming client cancelled");
-            }
-            result = recv_handle => {
-                if let Err(e) = result {
-                    warn!("Receive task panicked: {e}");
+            // Spawn the receive loop using our cancel-aware receiver
+            let recv_cancel = cancel.clone();
+            let recv_span = tracing::info_span!("packet_recv");
+            let recv_handle = tokio::spawn(async move {
+                let result = recv_with_cancel(&connection, frame_tx, audio_tx, recv_cancel).await;
+                match result {
+                    Ok(()) => debug!("Frame receiver finished normally"),
+                    Err(e) => warn!(error = %e, "Frame receiver error"),
+                }
+            }.instrument(recv_span));
+
+            // Spawn a stats feedback loop that periodically sends RTT data
+            let stats_cancel = cancel.clone();
+            let stats_span = tracing::info_span!("stats_feedback");
+            let _stats_handle = tokio::spawn(async move {
+                send_stats_loop(&stats_connection, stats_cancel).await;
+            }.instrument(stats_span));
+
+            // Wait for cancellation or receive task completion
+            tokio::select! {
+                _ = cancel.cancelled() => {
+                    info!("Streaming client loop cancelled");
+                }
+                result = recv_handle => {
+                    if let Err(e) = result {
+                        warn!(error = %e, "Receive task panicked");
+                    }
                 }
             }
-        }
+        }.instrument(span).await
     }
 
     /// Signal the client to stop receiving.

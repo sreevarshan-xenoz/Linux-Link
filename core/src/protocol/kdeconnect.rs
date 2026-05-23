@@ -1,4 +1,5 @@
-use anyhow::{Context, Result};
+use anyhow::Context;
+use crate::error::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -52,9 +53,15 @@ impl NetworkPacket {
     pub fn from_wire(line: &str) -> Result<Self> {
         let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
         if trimmed.is_empty() {
-            anyhow::bail!("empty packet line");
+            return Err(crate::error::LinuxLinkError::ProtocolError {
+                detail: "empty packet line".to_string(),
+            });
         }
-        serde_json::from_str(trimmed).context("failed to parse NetworkPacket")
+        serde_json::from_str(trimmed)
+            .map_err(|e| crate::error::LinuxLinkError::Serialization {
+                format: "JSON",
+                detail: e.to_string(),
+            })
     }
 }
 
@@ -113,6 +120,9 @@ pub trait DeviceSender: Send + Sync {
     /// Get the unique ID of the connected device (e.g. IP address or UUID).
     fn device_id(&self) -> &str;
 
+    /// Get a unique ID for this specific connection session.
+    fn connection_id(&self) -> &str;
+
     async fn send_packet(&self, packet: &NetworkPacket) -> Result<()>;
 }
 
@@ -120,6 +130,7 @@ pub trait DeviceSender: Send + Sync {
 pub struct TcpDeviceSender<W> {
     writer: Arc<Mutex<W>>,
     device_id: String,
+    connection_id: String,
 }
 
 impl<W> Clone for TcpDeviceSender<W> {
@@ -127,6 +138,7 @@ impl<W> Clone for TcpDeviceSender<W> {
         Self {
             writer: self.writer.clone(),
             device_id: self.device_id.clone(),
+            connection_id: self.connection_id.clone(),
         }
     }
 }
@@ -139,11 +151,21 @@ where
         Self {
             writer: Arc::new(Mutex::new(writer)),
             device_id,
+            connection_id: uuid::Uuid::new_v4().to_string(),
         }
     }
 
     pub fn from_arc(writer: Arc<Mutex<W>>, device_id: String) -> Self {
-        Self { writer, device_id }
+        Self {
+            writer,
+            device_id,
+            connection_id: uuid::Uuid::new_v4().to_string(),
+        }
+    }
+
+    pub fn with_connection_id(mut self, id: String) -> Self {
+        self.connection_id = id;
+        self
     }
 }
 
@@ -154,6 +176,10 @@ where
 {
     fn device_id(&self) -> &str {
         &self.device_id
+    }
+
+    fn connection_id(&self) -> &str {
+        &self.connection_id
     }
 
     async fn send_packet(&self, packet: &NetworkPacket) -> Result<()> {

@@ -6,11 +6,41 @@
 
 use std::fmt;
 
+/// Machine-readable error codes for the FFI boundary and telemetry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ErrorCode {
+    Generic = 1000,
+    
+    // Transport (2xxx)
+    ConnectionRefused = 2001,
+    HandshakeFailed = 2002,
+    HandshakeTimeout = 2003,
+    TlsVerificationFailed = 2004,
+    QuicProtocolError = 2005,
+    ConnectionReset = 2006,
+    
+    // Auth & Trust (3xxx)
+    PeerNotTrusted = 3001,
+    AuthChallengeFailed = 3002,
+    PairingRejected = 3003,
+    
+    // Discovery (4xxx)
+    MdnsDaemonFailed = 4001,
+    TailscaleCliNotFound = 4002,
+    TailscaleAuthExpired = 4003,
+    
+    // Streaming & Codec (5xxx)
+    EncoderInitializationFailed = 5001,
+    PipeWireCaptureDenied = 5002,
+    X11CaptureFailed = 5003,
+    BitrateStall = 5004,
+    
+    // Lifecycle (6xxx)
+    ShutdownInProgress = 6001,
+    TaskCancelled = 6002,
+}
+
 /// The primary error type for Linux Link operations.
-///
-/// Returned from public APIs instead of `anyhow::Error` so callers can
-/// discriminate between failure modes (e.g., "connection refused" vs
-/// "handshake failed").
 #[derive(Debug, Clone)]
 pub enum LinuxLinkError {
     /// A network connection could not be established.
@@ -59,6 +89,46 @@ pub enum LinuxLinkError {
     PeerDeclined { reason: String },
     /// Generic / catch-all for errors that don't fit other variants.
     Other { detail: String },
+}
+
+impl LinuxLinkError {
+    /// Get a stable machine-readable error code.
+    pub fn code(&self) -> ErrorCode {
+        match self {
+            Self::ConnectionFailed { .. } => ErrorCode::ConnectionRefused,
+            Self::HandshakeFailed { .. } => ErrorCode::HandshakeFailed,
+            Self::Timeout { operation, .. } => {
+                if *operation == "handshake" {
+                    ErrorCode::HandshakeTimeout
+                } else {
+                    ErrorCode::Generic
+                }
+            }
+            Self::ProtocolError { .. } => ErrorCode::Generic,
+            Self::CaptureNotAvailable { .. } => ErrorCode::PipeWireCaptureDenied,
+            Self::PipeWireError { .. } => ErrorCode::PipeWireCaptureDenied,
+            Self::X11Error { .. } => ErrorCode::X11CaptureFailed,
+            Self::TailscaleError { .. } => ErrorCode::TailscaleCliNotFound,
+            Self::DiscoveryFailed { .. } => ErrorCode::MdnsDaemonFailed,
+            Self::TlsError { .. } => ErrorCode::TlsVerificationFailed,
+            Self::QuicError { .. } => ErrorCode::QuicProtocolError,
+            Self::PeerDeclined { .. } => ErrorCode::PairingRejected,
+            Self::Other { .. } => ErrorCode::Generic,
+            Self::Io { .. } => ErrorCode::Generic,
+            Self::Serialization { .. } => ErrorCode::Generic,
+        }
+    }
+
+    /// Whether the operation should be retried automatically.
+    pub fn is_retryable(&self) -> bool {
+        match self.code() {
+            ErrorCode::ConnectionRefused
+            | ErrorCode::HandshakeTimeout
+            | ErrorCode::BitrateStall
+            | ErrorCode::MdnsDaemonFailed => true,
+            _ => false,
+        }
+    }
 }
 
 impl fmt::Display for LinuxLinkError {

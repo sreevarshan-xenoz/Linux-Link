@@ -9,7 +9,8 @@ use anyhow::{Context, Result};
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, warn, Instrument};
+use uuid::Uuid;
 
 use super::audio::{AudioConfig, AudioEncoder as AudioOpusEncoder};
 use super::audio_capture;
@@ -26,6 +27,8 @@ pub struct StreamingServer {
     transport_config: StreamTransportConfig,
     cert_manager: std::sync::Arc<CertManager>,
     cancel: CancellationToken,
+    /// Unique session ID for the lifetime of this server instance
+    session_id: String,
     /// Watch channel for adaptive bitrate updates
     bitrate_tx: watch::Sender<u32>,
     /// Adaptive bitrate controller (optional)
@@ -47,6 +50,7 @@ impl StreamingServer {
             transport_config,
             cert_manager,
             cancel: CancellationToken::new(),
+            session_id: Uuid::new_v4().to_string(),
             bitrate_tx,
             adaptive_bitrate: None,
             input_tx: None,
@@ -87,42 +91,53 @@ impl StreamingServer {
     }
 
     /// Start the streaming server — accepts one client connection and runs the pipeline
-    ///
-    /// This function:
-    /// 1. Creates the QUIC server endpoint
-    /// 2. Accepts an incoming connection
-    /// 3. Starts the capture → encode → send pipeline
-    /// 4. Runs until the connection is closed or an error occurs
     pub async fn run(&mut self) -> Result<()> {
-        info!(
-            "Starting streaming server: {}x{}@{}fps, {}bps",
-            self.config.width, self.config.height, self.config.fps, self.config.bitrate_bps
+        let conn_id = Uuid::new_v4().to_string();
+        let span = tracing::info_span!(
+            "stream_session",
+            session = %self.session_id,
+            conn = %conn_id,
+            proto = %crate::protocol::PROTOCOL_VERSION,
+            peer = tracing::field::Empty,
+            transport = "quic"
         );
 
-        // 1. Create QUIC server endpoint
-        let server = StreamServer::new(self.transport_config.clone(), &self.cert_manager)
-            .await
-            .context("Failed to create QUIC server")?;
+        use tracing::Instrument;
 
-        let local_addr = server.local_addr()?;
-        info!("Streaming server listening on {}", local_addr);
+        async {
+            info!(
+                "Starting streaming server: {}x{}@{}fps, {}bps",
+                self.config.width, self.config.height, self.config.fps, self.config.bitrate_bps
+            );
 
-        // 2. Wait for incoming connection
-        let incoming = tokio::select! {
-            Some(conn) = server.accept_connection() => conn,
-            _ = self.cancel.cancelled() => {
-                info!("Streaming server cancelled while waiting for connection");
-                return Ok(());
-            }
-        };
+            // 1. Create QUIC server endpoint
+            let server = StreamServer::new(self.transport_config.clone(), &self.cert_manager)
+                .await
+                .context("Failed to create QUIC server")?;
 
-        let connection = incoming.await.context("Failed to accept QUIC connection")?;
+            let local_addr = server.local_addr()?;
+            info!("Streaming server listening on {}", local_addr);
 
-        let peer = connection.remote_address();
-        info!("Streaming client connected: {}", peer);
+            // 2. Wait for incoming connection
+            let incoming = tokio::select! {
+                Some(conn) = server.accept_connection() => conn,
+                _ = self.cancel.cancelled() => {
+                    info!("Streaming server cancelled while waiting for connection");
+                    return Ok(());
+                }
+            };
 
-        // 3. Run the capture → encode → send pipeline
-        self.run_pipeline(connection, server).await
+            let connection = incoming.await.context("Failed to accept QUIC connection")?;
+
+            let peer = connection.remote_address();
+            tracing::Span::current().record("peer", &peer.to_string());
+            info!("Streaming client connected: {}", peer);
+
+            // 3. Run the capture → encode → send pipeline
+            self.run_pipeline(connection, server).await
+        }
+        .instrument(span)
+        .await
     }
 
     /// Run the full streaming pipeline for a single connection
@@ -132,10 +147,6 @@ impl StreamingServer {
         _server: StreamServer,
     ) -> Result<()> {
         // Read optional client config stream before starting the pipeline.
-        // The client may send a config packet (monitor index) immediately after
-        // establishing the QUIC connection. This is a small 6-byte message:
-        //   [0..2] marker [0xFF, 0x00]
-        //   [2..6] monitor_index (u32 LE)
         read_client_config(&connection, &mut self.config).await;
 
         let cancel = self.cancel.clone();
@@ -157,6 +168,7 @@ impl StreamingServer {
         // Clone connection for use across multiple tasks
         let conn_for_transport = connection.clone();
         let conn_for_monitor = connection.clone();
+        let conn_for_bitrate = connection.clone();
         let conn_for_audio = connection.clone();
 
         // Task 2: Video encoding
@@ -174,6 +186,7 @@ impl StreamingServer {
 
         // Spawn encoding task — reads frames, produces packets
         let encode_cancel = cancel.clone();
+        let encode_span = tracing::info_span!("video_encode");
         tasks.spawn(async move {
             info!("Encoding task started");
             let mut packets_encoded = 0u64;
@@ -192,9 +205,6 @@ impl StreamingServer {
                     Ok(()) = encoder_bitrate_rx.changed() => {
                         let current_bitrate = *encoder_bitrate_rx.borrow();
                         debug!("Bitrate updated to {} bps", current_bitrate);
-                        // Note: FFmpeg process can't change bitrate mid-stream
-                        // This would require restarting the encoder for dynamic bitrate
-                        // For now, we log and apply on next encoder lifecycle
                     }
 
                     // Process next frame
@@ -216,13 +226,12 @@ impl StreamingServer {
                             Ok(None) => {
                                 // Encoder has no output yet (latency/drain phase)
                                 frames_dropped += 1;
-                                if frames_dropped.is_multiple_of(30) {
+                                if frames_dropped % 30 == 0 {
                                     debug!("Encoder latency: {} frames waiting for output", frames_dropped);
                                 }
                             }
                             Err(e) => {
-                                error!("Encoding error: {}", e);
-                                // Try to recover — continue processing frames
+                                error!(error = %e, "Encoding failure");
                             }
                         }
                     }
@@ -238,25 +247,28 @@ impl StreamingServer {
                             break;
                         }
                     }
-                    info!("Drained {} remaining packets from encoder", count);
+                    info!(count, "Drained remaining packets from encoder");
                 }
                 Err(e) => {
-                    warn!("Error draining encoder: {}", e);
+                    warn!(error = %e, "Error draining encoder");
                 }
             }
 
             info!(
-                "Encoding task complete: {} packets encoded, {} frames dropped",
-                packets_encoded, frames_dropped
+                packets_encoded,
+                frames_dropped,
+                "Encoding task complete"
             );
-        });
+        }.instrument(encode_span));
 
         // Task 3: Packet transport — sends packets over QUIC
         let transport_cancel = cancel.clone();
+        let transport_span = tracing::info_span!("video_transport");
         tasks.spawn(async move {
             info!("Transport task started");
             let mut packets_sent = 0u64;
             let mut bytes_sent = 0u64;
+            let mut packets_dropped = 0u64;
             let mut connection_closed = false;
 
             loop {
@@ -271,7 +283,7 @@ impl StreamingServer {
                     // Send next packet
                     Some(packet) = packet_rx.recv() => {
                         if connection_closed {
-                            warn!("Connection closed, dropping packet");
+                            packets_dropped += 1;
                             continue;
                         }
 
@@ -287,39 +299,44 @@ impl StreamingServer {
                                 };
 
                                 if let Err(e) = send_stream.write_all(&header.as_bytes()).await {
-                                    error!("Failed to send packet header (seq={}): {}", packet.sequence, e);
+                                    error!(error = %e, seq = packet.sequence, "Failed to send packet header");
                                     connection_closed = true;
+                                    packets_dropped += 1;
                                     continue;
                                 }
 
                                 let data_len = packet.data.len();
                                 if let Err(e) = send_stream.write_all(&packet.data).await {
-                                    error!("Failed to send packet data (seq={}): {}", packet.sequence, e);
+                                    error!(error = %e, seq = packet.sequence, "Failed to send packet data");
                                     connection_closed = true;
+                                    packets_dropped += 1;
                                     continue;
                                 }
 
                                 if let Err(e) = send_stream.finish() {
-                                    error!("Failed to finish stream (seq={}): {}", packet.sequence, e);
+                                    error!(error = %e, seq = packet.sequence, "Failed to finish stream");
                                     connection_closed = true;
+                                    packets_dropped += 1;
                                     continue;
                                 }
 
                                 packets_sent += 1;
                                 bytes_sent += data_len as u64;
 
-                                if packets_sent.is_multiple_of(60) {
+                                if packets_sent % 60 == 0 {
                                     debug!(
-                                        "Transport stats: {} packets, {} bytes ({:.1} Mbps)",
-                                        packets_sent,
-                                        bytes_sent,
-                                        (bytes_sent as f64 * 8.0) / 1_000_000.0
+                                        sent = packets_sent,
+                                        bytes = bytes_sent,
+                                        dropped = packets_dropped,
+                                        mbps = %format!("{:.1}", (bytes_sent as f64 * 8.0) / 1_000_000.0),
+                                        "Transport stats"
                                     );
                                 }
                             }
                             Err(e) => {
-                                error!("Failed to open stream: {}", e);
+                                error!(error = %e, "Failed to open QUIC stream");
                                 connection_closed = true;
+                                packets_dropped += 1;
                             }
                         }
                     }
@@ -333,18 +350,17 @@ impl StreamingServer {
             }
 
             info!(
-                "Transport task complete: {} packets sent, {} bytes transmitted",
-                packets_sent, bytes_sent
+                packets_sent,
+                bytes_sent,
+                packets_dropped,
+                "Transport task complete"
             );
-        });
+        }.instrument(transport_span));
 
         // Task 4: Monitor connection state and handle input streams from client
-        //
-        // Accepts unidirectional QUIC streams from the client, parses them as
-        // binary `InputPacket` values, and forwards them to the input channel
-        // for injection on the host system.
         let monitor_cancel = cancel.clone();
         let input_tx = self.input_tx.clone();
+        let monitor_span = tracing::info_span!("connection_monitor");
         tasks.spawn(async move {
             info!("Connection monitor started");
 
@@ -359,18 +375,16 @@ impl StreamingServer {
                     result = conn_for_monitor.accept_uni() => {
                         match result {
                             Ok(mut stream) => {
-                                debug!("Received client stream");
+                                debug!("Accepted client stream");
                                 // Read the entire payload (max 64KB per input packet)
                                 let data = stream.read_to_end(64 * 1024).await;
                                 match data {
                                     Ok(data) if !data.is_empty() => {
-                                        debug!("Received {} bytes from client", data.len());
+                                        debug!(size = data.len(), "Received client data");
 
                                         // Skip 16-byte packets: these are stats feedback
-                                        // (RTT + lost packets) from the client's
-                                        // send_stats_loop, not input events.
                                         if data.len() == 16 {
-                                            debug!("Skipping stats packet");
+                                            debug!("Handled stats packet via low-level loop");
                                             continue;
                                         }
 
@@ -378,60 +392,57 @@ impl StreamingServer {
                                         match InputPacket::decode(&data) {
                                             Ok(packet) => {
                                                 // Forward to input injector via channel
-                                                if let Some(ref tx) = input_tx
-                                                    && tx.send(packet).await.is_err()
-                                                {
-                                                    debug!("Input receiver dropped");
+                                                if let Some(ref tx) = input_tx {
+                                                   if tx.send(packet).await.is_err() {
+                                                       debug!("Input receiver dropped, stopping monitor");
+                                                       break;
+                                                   }
                                                 }
                                             }
                                             Err(e) => {
-                                                debug!("Failed to parse input packet: {e}");
+                                                warn!(error = %e, "Failed to parse input packet");
                                             }
                                         }
                                     }
                                     Ok(_) => {
-                                        debug!("Client stream closed (empty)");
+                                        debug!("Client stream closed gracefully");
                                     }
                                     Err(e) => {
-                                        warn!("Error reading client stream: {}", e);
+                                        warn!(error = %e, "Error reading client stream");
                                     }
                                 }
                             }
                             Err(quinn::ConnectionError::ApplicationClosed(_)) => {
-                                info!("Client disconnected");
+                                info!("Client disconnected via application close");
                                 break;
                             }
                             Err(e) => {
-                                warn!("Connection error: {}", e);
+                                warn!(error = %e, "Connection error in monitor");
                                 break;
                             }
                         }
                     }
                 }
             }
-        });
+        }.instrument(monitor_span));
 
         // Task 5: Adaptive bitrate monitoring (if enabled)
         if let Some(adaptive_bitrate) = self.adaptive_bitrate.take() {
             let bitrate_cancel = cancel.clone();
-            let rtt_connection = connection.clone();
+            let bitrate_span = tracing::info_span!("bitrate_monitor");
             tasks.spawn(async move {
                 info!("Adaptive bitrate monitor started");
                 let monitor = AdaptiveBitrateMonitor::new(adaptive_bitrate);
-                monitor.run(&rtt_connection, bitrate_cancel).await;
-            });
+                monitor.run(&conn_for_bitrate, bitrate_cancel).await;
+            }.instrument(bitrate_span));
         }
 
         // Task 6: Audio capture + Opus encoding + QUIC send (F1: Audio Streaming)
-        //
-        // Captures system audio via PipeWire loopback when available,
-        // encodes to Opus at 48 kHz / stereo / 64 kbps, and sends over QUIC
-        // as unidirectional streams with STREAM_KIND_AUDIO.
-        // Falls back to silence if PipeWire audio capture is unavailable.
         let audio_cancel = cancel.clone();
         let audio_pipeline_cancel = cancel.clone();
+        let audio_span = tracing::info_span!("audio_pipeline");
         tasks.spawn(async move {
-            info!("Audio capture task started");
+            info!("Audio task started");
 
             let audio_config = AudioConfig {
                 sample_rate: 48000,
@@ -443,7 +454,7 @@ impl StreamingServer {
             let mut encoder = match AudioOpusEncoder::new(audio_config) {
                 Ok(e) => e,
                 Err(e) => {
-                    error!("Failed to create Opus encoder: {e}");
+                    error!(error = %e, "Failed to create Opus encoder");
                     return;
                 }
             };
@@ -461,11 +472,11 @@ impl StreamingServer {
             .await
             {
                 Ok(_session) => {
-                    info!("Using PipeWire audio loopback capture");
+                    info!("PipeWire audio loopback active");
                     None
                 }
                 Err(e) => {
-                    info!("PipeWire audio capture unavailable: {e}, falling back to silence");
+                    info!(error = %e, "PipeWire audio capture unavailable, falling back to silence");
                     Some(e)
                 }
             };
@@ -481,17 +492,16 @@ impl StreamingServer {
             let mut connection_closed = false;
 
             if using_pipewire {
-                // Audio capture with real PCM frames from PipeWire
                 loop {
                     tokio::select! {
                         biased;
                         _ = audio_cancel.cancelled() => {
-                            info!("Audio capture task cancelled after {packets_sent} packets");
+                            info!(packets = packets_sent, "Audio task cancelled");
                             break;
                         }
                         pcm = pcm_rx.recv() => {
                             let Some(pcm) = pcm else {
-                                info!("PipeWire audio capture ended");
+                                info!("Audio capture source closed");
                                 break;
                             };
                             if connection_closed { break; }
@@ -499,13 +509,13 @@ impl StreamingServer {
                             let packet = match encoder.encode(&pcm.data) {
                                 Ok(Some(p)) => p,
                                 Ok(None) => continue,
-                                Err(e) => { debug!("Audio encode error: {e}"); continue; }
+                                Err(e) => { debug!(error = %e, "Opus encode skip"); continue; }
                             };
 
                             if let Err(e) = send_audio_packet(
                                 &conn_for_audio, packet, packet_seq, &mut connection_closed,
                             ).await {
-                                warn!("Audio send failed: {e}");
+                                warn!(error = %e, "Audio transport failed");
                                 connection_closed = true;
                                 continue;
                             }
@@ -513,20 +523,18 @@ impl StreamingServer {
                             packets_sent += 1;
                             packet_seq += 1;
 
-                            if packets_sent.is_multiple_of(600) {
-                                info!("Audio streamed: {packets_sent} packets ({}s of audio)",
-                                    packets_sent * frame_size_ms / 1000);
+                            if packets_sent % 600 == 0 {
+                                debug!(sent = packets_sent, "Audio streaming healthy");
                             }
                         }
                     }
                 }
             } else {
-                // Fallback: encode silence at frame interval
                 loop {
                     tokio::select! {
                         biased;
                         _ = audio_cancel.cancelled() => {
-                            info!("Silence audio task cancelled after {packets_sent} packets");
+                            info!(packets = packets_sent, "Silence audio task cancelled");
                             break;
                         }
                         _ = silence_interval.tick() => {
@@ -535,31 +543,26 @@ impl StreamingServer {
                             let packet = match encoder.encode(&silence_buffer) {
                                 Ok(Some(p)) => p,
                                 Ok(None) => continue,
-                                Err(e) => { debug!("Audio encode error: {e}"); continue; }
+                                Err(e) => { debug!(error = %e, "Silence encode skip"); continue; }
                             };
 
                             if let Err(e) = send_audio_packet(
                                 &conn_for_audio, packet, packet_seq, &mut connection_closed,
                             ).await {
-                                warn!("Audio send failed: {e}");
+                                warn!(error = %e, "Silence audio transport failed");
                                 connection_closed = true;
                                 continue;
                             }
 
                             packets_sent += 1;
                             packet_seq += 1;
-
-                            if packets_sent.is_multiple_of(600) {
-                                info!("Audio streamed (silence): {packets_sent} packets ({}s)",
-                                    packets_sent * frame_size_ms / 1000);
-                            }
                         }
                     }
                 }
             }
 
-            info!("Audio capture task complete: {packets_sent} Opus packets sent");
-        });
+            info!(packets_sent, "Audio task complete");
+        }.instrument(audio_span));
 
         // Wait for all tasks to complete or connection to close
         let result = tasks.join_next().await;

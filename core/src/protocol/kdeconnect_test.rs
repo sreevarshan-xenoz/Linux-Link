@@ -8,7 +8,7 @@ mod tests {
     use super::super::kdeconnect::{
         DeviceSender, KdeConnectService, NetworkPacket, Plugin, PluginRegistry,
     };
-    use anyhow::Result;
+    use crate::error::Result;
     use serde_json::json;
     use std::sync::Arc;
     use tokio::sync::Mutex;
@@ -38,6 +38,10 @@ mod tests {
     impl DeviceSender for MockDeviceSender {
         fn device_id(&self) -> &str {
             "mock-device"
+        }
+
+        fn connection_id(&self) -> &str {
+            "mock-connection"
         }
 
         async fn send_packet(&self, packet: &NetworkPacket) -> Result<()> {
