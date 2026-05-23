@@ -65,6 +65,21 @@ pub struct StreamingConfig {
     pub monitor_index: u32,
 }
 
+/// Metadata about a physical or virtual monitor available for streaming.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonitorInfo {
+    /// Monitor index (0-based)
+    pub index: u32,
+    /// Human-readable name (e.g., "eDP-1", "HDMI-A-1")
+    pub name: String,
+    /// Horizontal resolution in pixels
+    pub width: u32,
+    /// Vertical resolution in pixels
+    pub height: u32,
+    /// Whether this is the primary monitor
+    pub is_primary: bool,
+}
+
 /// H.264 encoding profile
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub enum H264Profile {
