@@ -69,6 +69,11 @@ Future<List<RemoteFileDto>> listRemoteFiles(
     RustApi.instance.api.crateApiListRemoteFiles(
         address: address, port: port, remotePath: remotePath);
 
+/// Get detailed list of monitors available on the remote server.
+Future<List<MonitorInfoDto>> getMonitors(
+        {required String address, required int port}) =>
+    throw UnimplementedError('Codegen required for getMonitors');
+
 /// Request remote screen streaming.
 ///
 /// `monitor_index` selects which display to stream (0 = primary).
@@ -270,6 +275,41 @@ class RemoteFileDto {
           isDirectory == other.isDirectory &&
           size == other.size &&
           modified == other.modified;
+}
+
+class MonitorInfoDto {
+  final int index;
+  final String name;
+  final int width;
+  final int height;
+  final bool isPrimary;
+
+  const MonitorInfoDto({
+    required this.index,
+    required this.name,
+    required this.width,
+    required this.height,
+    required this.isPrimary,
+  });
+
+  @override
+  int get hashCode =>
+      index.hashCode ^
+      name.hashCode ^
+      width.hashCode ^
+      height.hashCode ^
+      isPrimary.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is MonitorInfoDto &&
+          runtimeType == other.runtimeType &&
+          index == other.index &&
+          name == other.name &&
+          width == other.width &&
+          height == other.height &&
+          isPrimary == other.isPrimary;
 }
 
 /// Streaming statistics for display in Flutter.
