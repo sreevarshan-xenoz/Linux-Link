@@ -71,13 +71,34 @@ impl AdaptiveBitrate {
             self.rtt_history.remove(0);
         }
 
-        // Check if it's time to evaluate
+        // Fast-path: if RTT is extremely high (> 500ms), reduce bitrate immediately
+        if rtt_ms > 500 && self.current_bitrate_bps > self.min_bitrate_bps {
+            let reduction = (self.current_bitrate_bps as f64 * 0.40) as u32; // Aggressive 40% reduction
+            let new_bitrate = self.current_bitrate_bps.saturating_sub(reduction).max(self.min_bitrate_bps);
+            
+            if new_bitrate != self.current_bitrate_bps {
+                warn!("ABR FAST-PATH: Severe latency detected ({}ms), dropping bitrate to {} bps", rtt_ms, new_bitrate);
+                self.current_bitrate_bps = new_bitrate;
+                self.send_bitrate_update();
+                self.last_evaluation = Instant::now(); // Reset timer to avoid double-dip
+                self.congestion_count = 0;
+                return;
+            }
+        }
+
+        // Check if it's time for regular evaluation
         if self.last_evaluation.elapsed() < Duration::from_millis(self.evaluation_interval_ms) {
             return;
         }
 
         self.last_evaluation = Instant::now();
         self.evaluate(rtt_ms);
+    }
+
+    /// Update with the latest packet loss count
+    pub fn update_loss(&mut self, _lost_packets: u64) {
+        // TODO: Implement loss-based bitrate reduction for improved internet streaming.
+        // RustDesk uses loss as a primary indicator for congestion.
     }
 
     /// Evaluate current conditions and adjust bitrate
