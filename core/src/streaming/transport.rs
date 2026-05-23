@@ -172,6 +172,11 @@ impl CertManager {
         peers.iter().map(|(k, v)| (k.clone(), *v)).collect()
     }
 
+    /// Check if a peer with the given label is already trusted.
+    pub fn is_peer_trusted(&self, label: &str) -> bool {
+        self.known_peers.lock().unwrap().contains_key(label)
+    }
+
     /// Remove a known peer by label. Returns true if the peer was found and removed.
     pub fn remove_peer(&self, label: &str) -> bool {
         let mut peers = self.known_peers.lock().unwrap();

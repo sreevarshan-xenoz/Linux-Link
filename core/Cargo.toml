@@ -26,6 +26,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 tracing.workspace = true
 uuid.workspace = true
 async-trait.workspace = true
+rand = "0.8"
 
 # Screen capture (Linux-only, optional)
 ashpd = { workspace = true, optional = true }
