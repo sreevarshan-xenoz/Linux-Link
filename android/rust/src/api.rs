@@ -87,7 +87,6 @@ pub struct RemoteFileDto {
     pub size: u64,
     pub modified: u64,
 }
-
 /// Streaming statistics for display in Flutter.
 #[frb]
 pub struct StreamingStatsDto {
@@ -95,6 +94,17 @@ pub struct StreamingStatsDto {
     pub bitrate_kbps: u64,
     pub e2e_latency_ms: u64,
     pub frame_drops: u64,
+}
+
+/// Monitor information for display in Flutter
+#[frb]
+#[derive(serde::Deserialize, serde::Serialize)]
+pub struct MonitorInfoDto {
+    pub index: u32,
+    pub name: String,
+    pub width: u32,
+    pub height: u32,
+    pub is_primary: bool,
 }
 
 /// Check Tailscale status
@@ -668,9 +678,9 @@ pub fn forget_trusted_peer(label: String) -> bool {
 ///
 /// F2: Multi-monitor support — returns 0 if detection fails or no display.
 #[frb]
-pub async fn get_monitor_count(address: String, port: u16) -> Result<u32, String> {
-    // Connect to the remote server and query monitor info.
-    // Uses a lightweight TCP query to the streaming server's control channel.
+/// Get detailed list of monitors available on the remote server.
+#[frb]
+pub async fn get_monitors(address: String, port: u16) -> Result<Vec<MonitorInfoDto>, String> {
     let conn_mgr = ConnectionManager::new(Duration::from_secs(5));
     match conn_mgr.connect(&address, port).await {
         Ok(stream) => {
@@ -678,34 +688,53 @@ pub async fn get_monitor_count(address: String, port: u16) -> Result<u32, String
             let sender = TcpDeviceSender::new(writer, address);
             let request = NetworkPacket::new("kdeconnect.linuxlink.monitors")
                 .with_body(serde_json::json!({}));
+            
             if let Err(e) = sender.send_packet(&request).await {
                 return Err(format!("Failed to send monitor query: {e}"));
             }
+
             let mut lines = tokio::io::BufReader::new(reader).lines();
             match tokio::time::timeout(Duration::from_secs(5), lines.next_line()).await {
                 Ok(Ok(Some(line))) => {
                     match NetworkPacket::from_wire(&line) {
                         Ok(packet) => {
                             if packet.packet_type == "kdeconnect.linuxlink.monitors" {
-                                let count = packet
+                                let monitors: Vec<MonitorInfoDto> = packet
                                     .body
-                                    .get("count")
-                                    .and_then(|v| v.as_u64())
-                                    .unwrap_or(1)
-                                    as u32;
-                                Ok(count.max(1)) // At least 1 monitor
+                                    .get("monitors")
+                                    .and_then(|v| serde_json::from_value(v.clone()).ok())
+                                    .unwrap_or_else(|| {
+                                        // Legacy fallback if server only returns count
+                                        let count = packet.body.get("count").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+                                        (0..count).map(|i| MonitorInfoDto {
+                                            index: i,
+                                            name: format!("Monitor {i}"),
+                                            width: 1920,
+                                            height: 1080,
+                                            is_primary: i == 0,
+                                        }).collect()
+                                    });
+                                Ok(monitors)
                             } else {
-                                Ok(1) // Default to 1
+                                Err("Unexpected response packet type".to_string())
                             }
                         }
-                        Err(_) => Ok(1),
+                        Err(e) => Err(format!("Failed to parse monitor response: {e}")),
                     }
                 }
-                _ => Ok(1),
+                Ok(Ok(None)) => Err("Connection closed by peer".to_string()),
+                Ok(Err(e)) => Err(format!("Read error: {e}")),
+                Err(_) => Err("Timeout waiting for monitor response".to_string()),
             }
         }
-        Err(_) => Ok(1), // Default to 1 if can't connect
+        Err(e) => Err(format!("Connection failed: {e}")),
     }
+}
+
+/// Get the number of monitors available on the remote server (legacy).
+#[frb]
+pub async fn get_monitor_count(address: String, port: u16) -> Result<u32, String> {
+    get_monitors(address, port).await.map(|m| m.len() as u32)
 }
 
 /// Execute a power management command on the remote server.
