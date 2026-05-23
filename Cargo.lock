@@ -1971,6 +1971,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "xcap",
  "zbus",
 ]
 
