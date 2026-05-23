@@ -91,6 +91,9 @@ abstract class RustApiApiImplPlatform extends BaseApiImpl<RustApiWire> {
   RemoteFileDto dco_decode_remote_file_dto(dynamic raw);
 
   @protected
+  SessionStatus dco_decode_session_status(dynamic raw);
+
+  @protected
   StreamingStatsDto dco_decode_streaming_stats_dto(dynamic raw);
 
   @protected
@@ -184,6 +187,9 @@ abstract class RustApiApiImplPlatform extends BaseApiImpl<RustApiWire> {
 
   @protected
   RemoteFileDto sse_decode_remote_file_dto(SseDeserializer deserializer);
+
+  @protected
+  SessionStatus sse_decode_session_status(SseDeserializer deserializer);
 
   @protected
   StreamingStatsDto sse_decode_streaming_stats_dto(
@@ -286,6 +292,9 @@ abstract class RustApiApiImplPlatform extends BaseApiImpl<RustApiWire> {
 
   @protected
   void sse_encode_remote_file_dto(RemoteFileDto self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_session_status(SessionStatus self, SseSerializer serializer);
 
   @protected
   void sse_encode_streaming_stats_dto(

@@ -56,6 +56,7 @@ use linux_link_core::error::{ErrorCode, LinuxLinkError};
 
 /// Structured error information for Flutter.
 #[frb]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LinuxLinkErrorDto {
     pub code: u32,
     pub message: String,
@@ -72,7 +73,22 @@ impl From<LinuxLinkError> for LinuxLinkErrorDto {
     }
 }
 
-/// Connection state enumeration for Flutter
+/// High-level session status for reconnection state machine.
+#[frb]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum SessionStatus {
+    Disconnected,
+    Connecting,
+    Active,
+    /// Connection is alive but RTT is extremely high or packets are being lost.
+    Stale { rtt_ms: u64 },
+    /// Attempting to automatically recover a lost connection.
+    Reconnecting { attempt: u32, next_retry_ms: u64 },
+    /// A fatal error occurred that cannot be automatically recovered.
+    Error(LinuxLinkErrorDto),
+}
+
+/// Connection state enumeration for Flutter (legacy control channel state).
 #[frb]
 pub enum ConnectionState {
     Connected,
@@ -309,11 +325,7 @@ pub async fn connect_to_peer(address: String, port: u16) -> Result<ConnectionSta
             ConnectionState::Connected => ConnectionState::Connected,
             ConnectionState::Disconnected => ConnectionState::Disconnected,
             ConnectionState::Connecting => ConnectionState::Connecting,
-            ConnectionState::Error(e) => ConnectionState::Error(LinuxLinkErrorDto {
-                code: e.code,
-                message: e.message.clone(),
-                is_retryable: e.is_retryable,
-            }),
+            ConnectionState::Error(e) => ConnectionState::Error(e.clone()),
         };
     }
     result
@@ -603,6 +615,27 @@ pub async fn connect_streaming(
     };
 
     let addr = format!("{address}:{streaming_port}");
+    
+    // F2: Idempotent session check
+    {
+        let mut handle_guard = (*STREAMING_HANDLE).lock().await;
+        if let Some(handle) = &*handle_guard {
+            if handle.address == address && handle.port == streaming_port {
+                tracing::info!("Session already active for {addr}, skipping connect");
+                return Ok(());
+            }
+            tracing::info!("Stopping existing session for {} before connecting to {}", handle.address, address);
+        }
+        
+        if let Some(handle) = handle_guard.take() {
+            // Cleanly stop existing session
+            handle.cancel.cancel();
+            let _ = handle.task.await;
+            let _ = handle.rtt_task.await;
+        }
+    }
+
+    *crate::SESSION_STATUS.lock().unwrap() = SessionStatus::Connecting;
     tracing::info!("Connecting to streaming server at {addr}");
 
     // Create a CertManager with persistent TOFU peer certificate verification.
@@ -633,10 +666,26 @@ pub async fn connect_streaming(
         *cm_guard = Some(cert_manager.clone());
     }
 
+    // F6: Trust revalidation logging
+    let peer_label = addr.clone();
+    if cert_manager.is_peer_trusted(&peer_label) {
+        tracing::info!(peer = %peer_label, "Connecting to already trusted peer");
+    } else {
+        tracing::info!(peer = %peer_label, "Establishing new trust bond with peer (TOFU)");
+    }
+
     let (mut client, packet_rx, audio_rx) =
         StreamingClient::connect(&addr, cert_manager, monitor_index)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| {
+                let err_dto = LinuxLinkErrorDto::from(linux_link_core::error::LinuxLinkError::from(e));
+                *crate::SESSION_STATUS.lock().unwrap() = SessionStatus::Error(LinuxLinkErrorDto {
+                    code: err_dto.code,
+                    message: err_dto.message.clone(),
+                    is_retryable: err_dto.is_retryable,
+                });
+                err_dto.message
+            })?;
 
     let connection = client
         .connection()
@@ -664,15 +713,27 @@ pub async fn connect_streaming(
                 _ = interval.tick() => {
                     let rtt_us = rtt_connection.stats().path.rtt.as_micros() as u64;
                     update_streaming_rtt(rtt_us);
+
+                    // Update session status based on RTT (detect staleness)
+                    let mut status_guard = crate::SESSION_STATUS.lock().unwrap();
+                    let rtt_ms = rtt_us / 1000;
+                    if rtt_ms > 2000 {
+                        *status_guard = SessionStatus::Stale { rtt_ms };
+                    } else if matches!(*status_guard, SessionStatus::Stale { .. }) {
+                        *status_guard = SessionStatus::Active;
+                    }
                 }
             }
         }
     });
 
     STREAMING_ACTIVE.store(true, std::sync::atomic::Ordering::Release);
+    *crate::SESSION_STATUS.lock().unwrap() = SessionStatus::Active;
 
     let mut handle = (*STREAMING_HANDLE).lock().await;
     *handle = Some(StreamingHandle {
+        address,
+        port: streaming_port,
         cancel: client_cancel,
         task,
         rtt_task,
@@ -685,6 +746,40 @@ pub async fn connect_streaming(
     Ok(())
 }
 
+/// Reset the reconnection backoff timer (e.g. after a successful manual connect).
+#[frb(sync)]
+pub fn reset_reconnect_backoff() {
+    crate::RECONNECT_BACKOFF.lock().unwrap().reset();
+}
+
+/// Attempt to reconnect the current streaming session using exponential backoff.
+#[frb]
+pub async fn reconnect_streaming(
+    address: String,
+    port: u16,
+    monitor_index: Option<u32>,
+    attempt: u32,
+) -> Result<(), String> {
+    let next_retry = crate::RECONNECT_BACKOFF.lock().unwrap().next_delay();
+    let next_retry_ms = next_retry.as_millis() as u64;
+
+    {
+        let mut status_guard = crate::SESSION_STATUS.lock().unwrap();
+        *status_guard = SessionStatus::Reconnecting {
+            attempt,
+            next_retry_ms,
+        };
+    }
+
+    tracing::info!(attempt, next_retry_ms, "Reconnecting streaming session...");
+    
+    // Perform the delay in Rust to own the timing semantics
+    tokio::time::sleep(next_retry).await;
+
+    // Delegate to idempotent connect_streaming
+    connect_streaming(address, port, monitor_index).await
+}
+
 /// Stop remote screen streaming.
 #[frb]
 pub async fn stop_streaming() -> Result<(), String> {
@@ -693,6 +788,7 @@ pub async fn stop_streaming() -> Result<(), String> {
     STREAMING_BYTE_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
     *crate::STREAMING_START_TIME.lock().unwrap() = None;
     STREAMING_RTT_US.store(0, std::sync::atomic::Ordering::Relaxed);
+    *crate::SESSION_STATUS.lock().unwrap() = SessionStatus::Disconnected;
 
     let handle = {
         let mut guard = (*STREAMING_HANDLE).lock().await;
@@ -722,6 +818,12 @@ pub fn is_streaming_active() -> bool {
 #[frb(sync)]
 pub fn get_streaming_rtt() -> u64 {
     STREAMING_RTT_US.load(Ordering::Relaxed)
+}
+
+/// Get the current high-level status of the streaming session.
+#[frb(sync)]
+pub fn get_session_status() -> SessionStatus {
+    crate::SESSION_STATUS.lock().unwrap().clone()
 }
 
 /// Get detailed streaming session statistics.

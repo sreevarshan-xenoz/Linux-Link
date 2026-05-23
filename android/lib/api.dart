@@ -10,12 +10,15 @@ part 'api.freezed.dart';
 
 // These functions are ignored because they are not marked as `pub`: `android_to_evdev_keycode`, `client_identity`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `DiscoveryEvent`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `fmt`, `from`
 
 /// Set the persistent data directory for certs and state.
 /// Must be called before `connect_streaming` for cert persistence.
 Future<void> setDataDir({required String path}) =>
     RustApi.instance.api.crateApiSetDataDir(path: path);
+
+/// Check if the LAN discovery service is active.
+bool isDiscoveryActive() => RustApi.instance.api.crateApiIsDiscoveryActive();
 
 /// Get version string
 Future<String> version() => RustApi.instance.api.crateApiVersion();
@@ -85,6 +88,22 @@ Future<void> connectStreaming(
     RustApi.instance.api.crateApiConnectStreaming(
         address: address, port: port, monitorIndex: monitorIndex);
 
+/// Reset the reconnection backoff timer (e.g. after a successful manual connect).
+void resetReconnectBackoff() =>
+    RustApi.instance.api.crateApiResetReconnectBackoff();
+
+/// Attempt to reconnect the current streaming session using exponential backoff.
+Future<void> reconnectStreaming(
+        {required String address,
+        required int port,
+        int? monitorIndex,
+        required int attempt}) =>
+    RustApi.instance.api.crateApiReconnectStreaming(
+        address: address,
+        port: port,
+        monitorIndex: monitorIndex,
+        attempt: attempt);
+
 /// Stop remote screen streaming.
 Future<void> stopStreaming() => RustApi.instance.api.crateApiStopStreaming();
 
@@ -93,6 +112,10 @@ bool isStreamingActive() => RustApi.instance.api.crateApiIsStreamingActive();
 
 /// Get the current RTT to the streaming server in microseconds.
 BigInt getStreamingRtt() => RustApi.instance.api.crateApiGetStreamingRtt();
+
+/// Get the current high-level status of the streaming session.
+SessionStatus getSessionStatus() =>
+    RustApi.instance.api.crateApiGetSessionStatus();
 
 /// Get detailed streaming session statistics.
 StreamingStatsDto getStreamingStats() =>
@@ -344,6 +367,31 @@ class RemoteFileDto {
           isDirectory == other.isDirectory &&
           size == other.size &&
           modified == other.modified;
+}
+
+@freezed
+sealed class SessionStatus with _$SessionStatus {
+  const SessionStatus._();
+
+  const factory SessionStatus.disconnected() = SessionStatus_Disconnected;
+  const factory SessionStatus.connecting() = SessionStatus_Connecting;
+  const factory SessionStatus.active() = SessionStatus_Active;
+
+  /// Connection is alive but RTT is extremely high or packets are being lost.
+  const factory SessionStatus.stale({
+    required BigInt rttMs,
+  }) = SessionStatus_Stale;
+
+  /// Attempting to automatically recover a lost connection.
+  const factory SessionStatus.reconnecting({
+    required int attempt,
+    required BigInt nextRetryMs,
+  }) = SessionStatus_Reconnecting;
+
+  /// A fatal error occurred that cannot be automatically recovered.
+  const factory SessionStatus.error(
+    LinuxLinkErrorDto field0,
+  ) = SessionStatus_Error;
 }
 
 /// Streaming statistics for display in Flutter.

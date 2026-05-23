@@ -46,6 +46,14 @@ pub(crate) static DEVICE_IDENTITY: LazyLock<std::sync::Mutex<Option<linux_link_c
 /// mDNS discovery service status flag.
 pub(crate) static MDNS_ACTIVE: AtomicBool = AtomicBool::new(false);
 
+/// Exponential backoff state for reconnection.
+pub(crate) static RECONNECT_BACKOFF: LazyLock<std::sync::Mutex<linux_link_core::protocol::backoff::ExponentialBackoff>> =
+    LazyLock::new(|| std::sync::Mutex::new(linux_link_core::protocol::backoff::ExponentialBackoff::default()));
+
+/// High-level session status for reconnection state machine.
+pub(crate) static SESSION_STATUS: LazyLock<std::sync::Mutex<api::SessionStatus>> =
+    LazyLock::new(|| std::sync::Mutex::new(api::SessionStatus::Disconnected));
+
 /// Last known RTT in microseconds, updated by the streaming stats task.
 pub(crate) static STREAMING_RTT_US: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
@@ -78,6 +86,8 @@ pub(crate) static INCOMING_PACKETS: LazyLock<TokioMutex<Option<broadcast::Sender
 
 /// Holds the live streaming client and its packet receiver.
 pub(crate) struct StreamingHandle {
+    pub(crate) address: String,
+    pub(crate) port: u16,
     /// Token that can be used to cancel the receive loop.
     pub(crate) cancel: tokio_util::sync::CancellationToken,
     /// JoinHandle of the background `client.start()` task.
@@ -93,7 +103,6 @@ pub(crate) struct StreamingHandle {
     /// The QUIC connection, kept alive for sending input events.
     pub(crate) connection: quinn::Connection,
 }
-
 /// Update the global streaming RTT value (called from the stats task).
 pub(crate) fn update_streaming_rtt(rtt_us: u64) {
     STREAMING_RTT_US.store(rtt_us, std::sync::atomic::Ordering::Relaxed);
