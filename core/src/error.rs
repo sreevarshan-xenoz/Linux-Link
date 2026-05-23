@@ -230,6 +230,14 @@ impl From<quinn::WriteError> for LinuxLinkError {
     }
 }
 
+impl From<quinn::ReadExactError> for LinuxLinkError {
+    fn from(e: quinn::ReadExactError) -> Self {
+        Self::QuicError {
+            detail: e.to_string(),
+        }
+    }
+}
+
 impl From<rustls::Error> for LinuxLinkError {
     fn from(e: rustls::Error) -> Self {
         Self::TlsError {
