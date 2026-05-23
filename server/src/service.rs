@@ -20,13 +20,12 @@ use std::sync::Arc;
 use std::sync::LazyLock;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::net::tcp::OwnedWriteHalf;
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::time::timeout;
 
 /// Active KDE Connect client connections for broadcasting notifications.
-static ACTIVE_CLIENTS: LazyLock<Mutex<Vec<TcpDeviceSender<OwnedWriteHalf>>>> =
+pub static ACTIVE_CLIENTS: LazyLock<Mutex<Vec<Arc<dyn DeviceSender>>>> =
     LazyLock::new(|| Mutex::new(Vec::new()));
 
 pub async fn run(config: Config) -> Result<()> {
@@ -132,7 +131,7 @@ pub async fn run(config: Config) -> Result<()> {
                                 let mut alive = Vec::new();
                                 for sender in clients.iter() {
                                     match sender.send_packet(&packet).await {
-                                        Ok(()) => alive.push(sender.clone()),
+                                        Ok(()) => alive.push(Arc::clone(sender)),
                                         Err(e) => {
                                             tracing::debug!("Removing dead client from broadcast: {e}");
                                         }
@@ -491,8 +490,8 @@ async fn handle_connection_with_kde(
             .map(|a| a.ip().to_string())
             .unwrap_or_else(|| "unknown".to_string());
         
-        let sender = TcpDeviceSender::from_arc(writer, device_id.clone());
-        let sender_ref = &sender;
+        let sender: Arc<dyn DeviceSender> = Arc::new(TcpDeviceSender::from_arc(writer, device_id.clone()));
+        let sender_ref = &*sender;
 
         // Update span with device_id
         tracing::Span::current().record("peer", &device_id);
@@ -500,7 +499,7 @@ async fn handle_connection_with_kde(
         // Register this client for notification broadcasting
         {
             let mut clients = ACTIVE_CLIENTS.lock().await;
-            clients.push(sender.clone());
+            clients.push(Arc::clone(&sender));
             tracing::debug!(active_clients = clients.len(), "Client registered for broadcasts");
         }
 
