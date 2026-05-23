@@ -266,11 +266,11 @@
      │                                         │  Task 2: FFmpeg encode
      │                                         │  Task 3: QUIC transport
      │══════ Audio Stream (uni streams) ════════│
-     │←── [18B Header | Opus packet] ──────────│  Task 6: Silence (TODO: PW)
+     │←── [18B Header | Opus packet] ──────────│  Task 6: PipeWire loopback capture
      │                                         │
      │══════ Input Events (uni streams) ═══════│
-     │──── [InputPacket binary] ───────────────→│  Task 4: → InputInjector
-     │                                         │
+     │──── [InputPacket binary] ───────────────→│  Task 4: → InputInjector (Unified)
+     │                                         │  (Handles Mouse/Keyboard/Gamepad)
      │══════ Stats Feedback (uni streams) ══════│
      │──── [8B RTT | 8B lost] ─────────────────→│  Task 5: AdaptiveBitrate
      │                                         │</div>
@@ -436,22 +436,22 @@ File: <code>android/rust/src/api.rs</code><br>
 
 <h3>🟡 Warnings &amp; Design Issues</h3>
 
-<div class="warning">
+<div class="done">
 <strong>WARN-1: Streaming stats always return zeros</strong><br>
 File: <code>android/rust/src/api.rs:472-480</code><br>
-`get_streaming_stats()` hardcodes `fps: 0.0`, `bitrate_kbps: 0`, `frame_drops: 0`. The streaming client has no metrics tracking. The health provider and stats overlay in Flutter will always show zeros.
+<strong>Fixed:</strong> `get_streaming_stats()` now correctly calculates and returns real-time FPS, bitrate, and latency by using global atomic counters updated during the receive loop.
 </div>
 
-<div class="warning">
+<div class="done">
 <strong>WARN-2: Audio streaming is silence (PipeWire loopback not implemented)</strong><br>
 File: <code>core/src/streaming/streamer.rs:452-533</code><br>
-Audio task 6 encodes silence PCM frames. The TODO comment says "Replace with PipeWire audio loopback capture." Audio streaming (F1) is not functional.
+<strong>Fixed:</strong> PipeWire loopback capture is now fully implemented in <code>core/src/streaming/audio_capture.rs</code> and integrated into the streaming pipeline.
 </div>
 
-<div class="warning">
+<div class="done">
 <strong>WARN-3: Parallel input paths may conflict</strong><br>
 Files: <code>android/rust/src/api.rs send_mouse_event/send_keyboard_event</code> (QUIC) vs <code>server/src/plugins/input.rs</code> (KDE Connect TCP)<br>
-Android sends input via QUIC when streaming is active, but falls back to KDE Connect TCP. The server has TWO input receivers: (1) Streamer Task 4 reads QUIC streams and injects via `handle_input_packet()`, (2) KDE Connect InputPlugin reads TCP packets and injects via `InputInjector`. These use different key mapping functions (`android_to_evdev_keycode` vs `key_name_to_enigo_key`), leading to inconsistent behavior.
+<strong>Fixed:</strong> Input injection is now unified. <code>KeyEvent</code> handling was added to the binary QUIC stream, allowing for low-latency keyboard control that uses the same <code>InputInjector</code> logic as the legacy TCP path.
 </div>
 
 <div class="warning">
