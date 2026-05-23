@@ -237,87 +237,71 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
     }
   }
 
-  /// Attempt to reconnect with exponential backoff.
+  /// Attempt to reconnect using the Rust-managed state machine.
   Future<void> _attemptReconnect(int attempt) async {
-    ref.read(reconnectStateProvider.notifier).state =
-        ReconnectState.reconnecting(attempt: attempt);
-    final backoff =
-        ReconnectState.reconnecting(attempt: attempt).backoffSeconds;
-
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Reconnecting (attempt $attempt/5) in ${backoff}s…'),
-          duration: const Duration(seconds: 2),
-        ),
-      );
-    }
-
-    await Future.delayed(Duration(seconds: backoff));
-    if (!mounted) return;
-
     try {
       final monitorIndex = ref.read(monitorIndexProvider);
-      await bridge.rustApi.startStreaming(widget.address, widget.port,
-          monitorIndex: monitorIndex);
-      if (mounted) {
-        ref.read(isStreamingProvider.notifier).state = true;
-        ref.read(reconnectStateProvider.notifier).state =
-            const ReconnectState.idle();
-        // Restart polling timers
-        _startFramePolling();
-        _startAudioPolling();
-        _startLatencyPolling();
-        _startStatsPolling();
-      }
+      await bridge.rustApi.reconnectStreaming(
+        widget.address,
+        widget.port,
+        monitorIndex: monitorIndex,
+        attempt: attempt,
+      );
     } catch (e) {
-      if (!mounted) return;
-      final nextAttempt = attempt + 1;
-      if (nextAttempt <= 5) {
-        await _attemptReconnect(nextAttempt);
-      } else {
-        ref.read(reconnectStateProvider.notifier).state =
-            const ReconnectState.failed();
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Failed to reconnect after 5 attempts'),
-              duration: Duration(seconds: 4),
-            ),
-          );
-        }
-      }
+      debugPrint('Reconnect attempt $attempt failed: $e');
     }
   }
 
   void _startStreamingCheck() {
     _streamingCheckTimer = Timer.periodic(
-      const Duration(seconds: 2),
+      const Duration(seconds: 1),
       (_) async {
         if (!mounted) return;
-        final isActive = bridge.rustApi.isStreamingActive();
-        if (mounted) {
-          // Skip reconnect checks if user is intentionally disconnecting
-          if (_isDisconnecting) return;
-          final wasActive = ref.read(isStreamingProvider);
-          ref.read(isStreamingProvider.notifier).state = isActive;
-          // Trigger auto-reconnect if streaming dropped unexpectedly
-          if (wasActive && !isActive) {
-            final reconnectState = ref.read(reconnectStateProvider);
-            if (!reconnectState.isReconnecting) {
-              // Cancel polling timers before attempting reconnect
-              _frameTimer?.cancel();
-              _frameTimer = null;
-              _audioTimer?.cancel();
-              _audioTimer = null;
-              _latencyTimer?.cancel();
-              _latencyTimer = null;
-              _statsTimer?.cancel();
-              _statsTimer = null;
-              _attemptReconnect(1);
+
+        final status = bridge.rustApi.getSessionStatus();
+
+        status.when(
+          active: () {
+            if (!ref.read(isStreamingProvider)) {
+              ref.read(isStreamingProvider.notifier).state = true;
             }
-          }
-        }
+          },
+          stale: (rttMs) {
+            debugPrint('Session STALE (RTT: ${rttMs}ms)');
+            if (mounted) {
+               ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Unstable connection (${rttMs}ms)'),
+                  duration: const Duration(seconds: 1),
+                ),
+              );
+            }
+          },
+          reconnecting: (attempt, nextRetryMs) {
+            debugPrint('Session RECONNECTING (Attempt $attempt, next in ${nextRetryMs}ms)');
+            // Re-cancel polling timers if they somehow got restarted
+            _frameTimer?.cancel();
+            _frameTimer = null;
+            _audioTimer?.cancel();
+            _audioTimer = null;
+          },
+          disconnected: () {
+            if (!_isDisconnecting && ref.read(isStreamingProvider)) {
+               debugPrint('Session disconnected unexpectedly, triggering reconnect');
+               _attemptReconnect(1);
+            }
+          },
+          error: (dto) {
+            debugPrint('Session FATAL ERROR: ${dto.message}');
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Fatal streaming error: ${dto.message}')),
+              );
+            }
+            _disconnect();
+          },
+          connecting: () {},
+        );
       },
     );
   }

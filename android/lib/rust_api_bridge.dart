@@ -147,6 +147,27 @@ class _RustApiBridge {
     return frb.isStreamingActive();
   }
 
+  /// Get high-level session status (Active, Stale, Reconnecting, etc.)
+  frb.SessionStatus getSessionStatus() {
+    return frb.getSessionStatus();
+  }
+
+  /// Reconnect to a streaming server using exponential backoff.
+  Future<void> reconnectStreaming(String address, int port,
+      {int? monitorIndex, required int attempt}) async {
+    await frb.reconnectStreaming(
+      address: address,
+      port: port,
+      monitorIndex: monitorIndex,
+      attempt: attempt,
+    );
+  }
+
+  /// Reset the reconnection backoff timer.
+  void resetReconnectBackoff() {
+    frb.resetReconnectBackoff();
+  }
+
   /// Receive queued H.264 frames from the streaming client.
   Future<List<FrameDtoWrapper>> receiveFrames(int timeoutMs) async {
     final dtos = await frb.receiveFrames(timeoutMs: BigInt.from(timeoutMs));
@@ -302,7 +323,7 @@ class _RustApiBridge {
       connected: () => ConnectionState.connected,
       disconnected: () => ConnectionState.disconnected,
       connecting: () => ConnectionState.connecting,
-      error: (_) => ConnectionState.error,
+      error: (dto) => ConnectionState.error,
     );
   }
 }
