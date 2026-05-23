@@ -567,21 +567,23 @@ impl StreamingServer {
         // Wait for all tasks to complete or connection to close
         let result = tasks.join_next().await;
 
-        // Cancel all tasks
-        info!("Shutting down streaming pipeline...");
+        // 4. Shutdown & Cleanup (Mandate 7.1)
+        info!("Initiating pipeline shutdown...");
         cancel.cancel();
 
-        // Drop capture session to clean up PipeWire resources
+        // Drop capture session explicitly to trigger immediate PipeWire resource cleanup
         drop(capture_session);
 
-        // Wait for remaining tasks
+        // Explicitly drain remaining tasks to prevent zombies
+        let mut cleanup_count = 0;
         while let Some(res) = tasks.join_next().await {
+            cleanup_count += 1;
             if let Err(e) = res {
-                warn!("Task panicked: {}", e);
+                warn!(error = %e, "Cleanup: task panicked during shutdown");
             }
         }
 
-        info!("Streaming pipeline shut down complete");
+        info!(tasks_drained = cleanup_count, "Streaming pipeline shut down complete");
 
         match result {
             Some(Ok(_)) => Ok(()),
