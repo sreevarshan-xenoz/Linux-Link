@@ -36,6 +36,16 @@ pub struct InputInjector {
     backend: InputBackend,
 }
 
+impl Drop for InputInjector {
+    fn drop(&mut self) {
+        let backend_type = match &self.backend {
+            InputBackend::Enigo(_) => "enigo",
+            InputBackend::Uinput(_) => "uinput",
+        };
+        info!(backend = %backend_type, "InputInjector dropped, closing backend resources");
+    }
+}
+
 impl InputInjector {
     /// Create a new input injector.
     ///
