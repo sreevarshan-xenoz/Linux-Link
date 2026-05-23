@@ -2,9 +2,12 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-use crate::error::Result;
+use crate::error::{LinuxLinkError, Result};
 
 pub const ALPN_V2: &[u8] = b"linux-link-v2";
+
+/// Maximum size for control payloads to prevent OOM attacks.
+pub const MAX_CONTROL_PAYLOAD_SIZE: usize = 16 * 1024 * 1024; // 16 MB
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -61,6 +64,12 @@ where
     recv.read_exact(&mut len_buf).await?;
     let len = u32::from_be_bytes(len_buf) as usize;
 
+    if len > MAX_CONTROL_PAYLOAD_SIZE {
+        return Err(LinuxLinkError::ProtocolError {
+            detail: format!("Payload size {} exceeds limit {}", len, MAX_CONTROL_PAYLOAD_SIZE),
+        });
+    }
+
     let mut buf = vec![0u8; len];
     recv.read_exact(&mut buf).await?;
 
@@ -107,6 +116,47 @@ mod tests {
         s_write_res?;
         let received_reply = c_read_res?;
         assert_eq!(reply, received_reply);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_oversized_payload() -> anyhow::Result<()> {
+        let (mut client, mut server) = tokio::io::duplex(1024);
+
+        // Write a length that exceeds MAX_CONTROL_PAYLOAD_SIZE
+        let oversized_len = (MAX_CONTROL_PAYLOAD_SIZE + 1) as u32;
+        client.write_all(&oversized_len.to_be_bytes()).await?;
+
+        let result = read_framed_json_internal::<_, IdentityPacketV2>(&mut server).await;
+        
+        match result {
+            Err(LinuxLinkError::ProtocolError { detail }) => {
+                assert!(detail.contains("exceeds limit"));
+            }
+            _ => panic!("Expected ProtocolError for oversized payload, got {:?}", result),
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_malformed_json() -> anyhow::Result<()> {
+        let (mut client, mut server) = tokio::io::duplex(1024);
+
+        let malformed_data = b"{ \"not\": \"valid\" json";
+        let len = malformed_data.len() as u32;
+        client.write_all(&len.to_be_bytes()).await?;
+        client.write_all(malformed_data).await?;
+
+        let result = read_framed_json_internal::<_, IdentityPacketV2>(&mut server).await;
+
+        match result {
+            Err(LinuxLinkError::Serialization { format, .. }) => {
+                assert_eq!(format, "JSON");
+            }
+            _ => panic!("Expected Serialization error for malformed JSON, got {:?}", result),
+        }
 
         Ok(())
     }
