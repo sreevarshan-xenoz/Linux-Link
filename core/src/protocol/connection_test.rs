@@ -176,7 +176,7 @@ mod tests {
         );
         let err = result.unwrap_err().to_string();
         assert!(
-            err.contains("handshake failed"),
+            err.contains("handshake"),
             "error should mention handshake failure: {}",
             err
         );

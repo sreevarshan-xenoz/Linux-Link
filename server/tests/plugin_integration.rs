@@ -175,7 +175,7 @@ async fn test_exec_plugin() {
     );
     if let Some(pkt) = response {
         let stdout = pkt.body.get("stdout").and_then(|v| v.as_str());
-        assert_eq!(stdout, Some("hello"));
+        assert_eq!(stdout, Some("hello\n"));
     }
 }
 

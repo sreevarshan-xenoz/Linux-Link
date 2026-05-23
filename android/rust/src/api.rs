@@ -818,11 +818,45 @@ pub async fn connect_v2(address: String, port: u16) -> Result<(), String> {
 
         tracing::info!("v2 Handshake successful with {}", peer_identity.device_name);
 
+        // Create a broadcast channel for forwarding incoming packets to Flutter
+        let (packet_tx, _) = broadcast::channel(256);
+        {
+            let mut incoming = crate::INCOMING_PACKETS.lock().await;
+            *incoming = Some(packet_tx.clone());
+        }
+
+        let mut control_recv = recv0;
+        let task = tokio::spawn(async move {
+            loop {
+                let mut len_buf = [0u8; 4];
+                if let Err(_) = control_recv.read_exact(&mut len_buf).await {
+                    break;
+                }
+                let len = u32::from_be_bytes(len_buf) as usize;
+                if len > linux_link_core::protocol::v2::MAX_CONTROL_PAYLOAD_SIZE {
+                    tracing::error!("v2 payload exceeds limit: {}", len);
+                    break;
+                }
+                let mut buf = vec![0u8; len];
+                if let Err(_) = control_recv.read_exact(&mut buf).await {
+                    break;
+                }
+                if let Ok(json_str) = String::from_utf8(buf) {
+                    let _ = packet_tx.send(json_str);
+                }
+            }
+            tracing::warn!("v2 control stream closed");
+            let mut handle_guard = crate::V2_HANDLE.lock().await;
+            *handle_guard = None;
+            let mut incoming = crate::INCOMING_PACKETS.lock().await;
+            *incoming = None;
+        });
+
         let mut handle_guard = crate::V2_HANDLE.lock().await;
         *handle_guard = Some(crate::V2Handle {
             connection,
-            control_send: send0,
-            control_recv: recv0,
+            control_send: Arc::new(Mutex::new(send0)),
+            task,
         });
 
         *crate::SESSION_STATUS.lock().unwrap() = SessionStatus::Active;
@@ -875,6 +909,22 @@ pub async fn reconnect_streaming(
     connect_streaming(address, port, monitor_index).await
 }
 
+/// Stop the v2 multiplexed connection and clear its handle.
+#[frb]
+pub async fn stop_v2() -> Result<(), String> {
+    let handle = {
+        let mut guard = crate::V2_HANDLE.lock().await;
+        guard.take()
+    };
+    if let Some(handle) = handle {
+        handle.task.abort();
+        let _ = handle.task.await;
+        handle.connection.close(0u32.into(), b"Stopped");
+        tracing::info!("v2 session stopped");
+    }
+    Ok(())
+}
+
 /// Stop remote screen streaming.
 #[frb]
 pub async fn stop_streaming() -> Result<(), String> {
@@ -899,6 +949,10 @@ pub async fn stop_streaming() -> Result<(), String> {
         }
         tracing::info!("Streaming session stopped");
     }
+    
+    // F4: Also clear v2 handle if it exists during stop_streaming
+    let _ = stop_v2().await;
+
     STREAMING_ACTIVE.store(false, std::sync::atomic::Ordering::Release);
     Ok(())
 }
@@ -1219,12 +1273,17 @@ pub async fn send_mouse_event(
     is_pressed: bool,
 ) -> Result<(), String> {
     // Try QUIC streaming channel first (lower latency, compact binary protocol)
-    let streaming_conn = {
+    let quic_conn = {
         let guard = (*STREAMING_HANDLE).lock().await;
-        guard.as_ref().map(|h| h.connection.clone())
+        if let Some(h) = guard.as_ref() {
+            Some(h.connection.clone())
+        } else {
+            let v2_guard = (*crate::V2_HANDLE).lock().await;
+            v2_guard.as_ref().map(|h| h.connection.clone())
+        }
     };
 
-    if let Some(conn) = streaming_conn {
+    if let Some(conn) = quic_conn {
         let packet = if button == 2 {
             // Scroll event (button=2 is reserved for scroll on the Flutter side)
             InputPacket::MouseScroll {
@@ -1295,12 +1354,17 @@ pub async fn send_keyboard_event(
     text: String,
 ) -> Result<(), String> {
     // Try QUIC streaming channel first (lower latency, compact binary protocol)
-    let streaming_conn = {
+    let quic_conn = {
         let guard = (*STREAMING_HANDLE).lock().await;
-        guard.as_ref().map(|h| h.connection.clone())
+        if let Some(h) = guard.as_ref() {
+            Some(h.connection.clone())
+        } else {
+            let v2_guard = (*crate::V2_HANDLE).lock().await;
+            v2_guard.as_ref().map(|h| h.connection.clone())
+        }
     };
 
-    if let Some(conn) = streaming_conn {
+    if let Some(conn) = quic_conn {
         if !text.is_empty() {
             // Send as text packet
             let packet = InputPacket::Text(text);
@@ -1443,12 +1507,17 @@ pub async fn send_gamepad_event(
     axes: Vec<i16>,
     buttons: u32,
 ) -> Result<(), String> {
-    let streaming_conn = {
+    let quic_conn = {
         let guard = (*STREAMING_HANDLE).lock().await;
-        guard.as_ref().map(|h| h.connection.clone())
+        if let Some(h) = guard.as_ref() {
+            Some(h.connection.clone())
+        } else {
+            let v2_guard = (*crate::V2_HANDLE).lock().await;
+            v2_guard.as_ref().map(|h| h.connection.clone())
+        }
     };
 
-    let Some(conn) = streaming_conn else {
+    let Some(conn) = quic_conn else {
         return Err("No active streaming session for gamepad input".to_string());
     };
 

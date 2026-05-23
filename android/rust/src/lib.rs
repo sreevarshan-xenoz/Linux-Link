@@ -111,8 +111,8 @@ pub(crate) struct StreamingHandle {
 /// Holds the unified v2 connection and its persistent control streams.
 pub(crate) struct V2Handle {
     pub(crate) connection: quinn::Connection,
-    pub(crate) control_send: quinn::SendStream,
-    pub(crate) control_recv: quinn::RecvStream,
+    pub(crate) control_send: Arc<TokioMutex<quinn::SendStream>>,
+    pub(crate) task: tokio::task::JoinHandle<()>,
 }
 
 /// Update the global streaming RTT value (called from the stats task).
