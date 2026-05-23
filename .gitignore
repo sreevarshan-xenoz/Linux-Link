@@ -122,17 +122,20 @@ local.properties
 # Flutter Android lib (exclude from generic lib/ pattern)
 !android/lib/
 
-# Flutter build artifacts (Git LFS tracks large files)
-# Allow directory traversal so negation patterns below are evaluated
-!.dart_tool/
-!.dart_tool/**/
-# Ignore all files inside (but not directories)
-.dart_tool/**/*
-# Un-ignore specific large binary files for Git LFS tracking
-!.dart_tool/**/*.dill
-!.dart_tool/**/*.snapshot
-!.dart_tool/**/*.so
-!.dart_tool/**/sdk.sum
+# Flutter build artifacts
+android/.dart_tool/
+android/build/
+android/android/local.properties
+android/android/.gradle/
+android/android/app/build/
+
+# General build and temporary files
+target/
+debug/
+release/
+*.swp
+*.bak
+*~
 
 # Logs
 audit.log
