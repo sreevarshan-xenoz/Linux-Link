@@ -34,7 +34,10 @@ async fn main() -> Result<()> {
         cli::Commands::List => service::list_peers().await,
         cli::Commands::Watch { interval } => service::watch_peers(interval).await,
         cli::Commands::Capabilities => service::print_capabilities().await,
-        cli::Commands::Connect { peer, port } => service::connect_peer(peer, port).await,
+        cli::Commands::Connect { peer, port } => {
+            let identity = kde::host_identity();
+            service::connect_peer(peer, port, &identity).await
+        }
         cli::Commands::Pair { pin } => service::pair(pin).await,
     }
 }

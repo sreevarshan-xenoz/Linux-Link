@@ -4,7 +4,9 @@ use crate::kde;
 use crate::notification_monitor::start_notification_monitor;
 use anyhow::{Context, Result, bail};
 use linux_link_core::protocol::connection::ConnectionManager;
-use linux_link_core::protocol::kdeconnect::{DeviceSender, NetworkPacket, PluginRegistry, TcpDeviceSender};
+use linux_link_core::protocol::kdeconnect::{
+    DeviceIdentity, DeviceSender, NetworkPacket, PluginRegistry, TcpDeviceSender,
+};
 use linux_link_core::protocol::{HANDSHAKE_HELLO, HANDSHAKE_OK};
 use linux_link_core::streaming::StreamingServer;
 use linux_link_core::streaming::input_packet::InputPacket;
@@ -340,13 +342,13 @@ pub async fn watch_peers(interval_secs: u64) -> Result<()> {
     Ok(())
 }
 
-pub async fn connect_peer(peer: String, port: u16) -> Result<()> {
+pub async fn connect_peer(peer: String, port: u16, identity: &DeviceIdentity) -> Result<()> {
     let tailscale = TailscaleClient::new().context("failed to initialize Tailscale client")?;
     let address = resolve_peer_address(&tailscale, &peer).await?;
 
     let manager = ConnectionManager::new(Duration::from_secs(10));
     let _stream = manager
-        .connect(&address, port)
+        .connect(&address, port, identity)
         .await
         .with_context(|| format!("failed to connect to {}:{}", address, port))?;
 

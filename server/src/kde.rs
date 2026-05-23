@@ -16,6 +16,10 @@ use crate::plugins::{
     notification::NotificationPlugin, power::PowerPlugin, share::SharePlugin,
 };
 
+pub fn host_identity() -> DeviceIdentity {
+    DeviceIdentity::new(host_device_id(), host_device_name())
+}
+
 pub fn build_default_service() -> Result<KdeConnectService> {
     let mut service = KdeConnectService::new();
 
@@ -31,7 +35,7 @@ pub fn build_default_service() -> Result<KdeConnectService> {
 
     let (incoming, outgoing) = service.registry.capability_sets();
 
-    let mut identity = DeviceIdentity::new(host_device_id(), host_device_name());
+    let mut identity = host_identity();
     identity.incoming_capabilities = incoming;
     identity.outgoing_capabilities = outgoing;
     service.set_identity(identity);
