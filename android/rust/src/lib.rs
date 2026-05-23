@@ -39,6 +39,13 @@ pub(crate) static CONTROL_WRITER: LazyLock<TokioMutex<Option<Arc<TokioMutex<Owne
 pub(crate) static CONNECTION_STATE: LazyLock<TokioMutex<api::ConnectionState>> =
     LazyLock::new(|| TokioMutex::new(api::ConnectionState::Disconnected));
 
+/// Persistent device identity for the Android client.
+pub(crate) static DEVICE_IDENTITY: LazyLock<std::sync::Mutex<Option<linux_link_core::protocol::kdeconnect::DeviceIdentity>>> =
+    LazyLock::new(|| std::sync::Mutex::new(None));
+
+/// mDNS discovery service status flag.
+pub(crate) static MDNS_ACTIVE: AtomicBool = AtomicBool::new(false);
+
 /// Last known RTT in microseconds, updated by the streaming stats task.
 pub(crate) static STREAMING_RTT_US: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
@@ -49,8 +56,8 @@ pub(crate) static STREAMING_ACTIVE: AtomicBool = AtomicBool::new(false);
 /// Streaming metrics for stats display.
 pub(crate) static STREAMING_FRAME_COUNT: AtomicU64 = AtomicU64::new(0);
 pub(crate) static STREAMING_BYTE_COUNT: AtomicU64 = AtomicU64::new(0);
-pub(crate) static STREAMING_START_TIME: LazyLock<TokioMutex<Option<std::time::Instant>>> =
-    LazyLock::new(|| TokioMutex::new(None));
+pub(crate) static STREAMING_START_TIME: LazyLock<std::sync::Mutex<Option<std::time::Instant>>> =
+    LazyLock::new(|| std::sync::Mutex::new(None));
 
 /// Global handle for the active streaming client session.
 pub(crate) static STREAMING_HANDLE: LazyLock<TokioMutex<Option<StreamingHandle>>> =

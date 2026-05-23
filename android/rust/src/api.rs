@@ -17,11 +17,11 @@ use tokio::sync::Mutex;
 use linux_link_core::streaming::InputPacket;
 
 use crate::{
-    CONNECTION_STATE, CONTROL_WRITER,
-    MAX_AUDIO_PACKETS_PER_RECEIVE, MAX_FRAMES_PER_RECEIVE, STREAMING_ACTIVE, STREAMING_BYTE_COUNT,
-    STREAMING_FRAME_COUNT, STREAMING_HANDLE, STREAMING_RTT_US, STREAMING_START_TIME,
-    StreamingHandle, update_streaming_rtt,
+    CONNECTION_STATE, CONTROL_WRITER, MAX_AUDIO_PACKETS_PER_RECEIVE, MAX_FRAMES_PER_RECEIVE,
+    STREAMING_ACTIVE, STREAMING_BYTE_COUNT, STREAMING_FRAME_COUNT, STREAMING_HANDLE,
+    STREAMING_RTT_US, StreamingHandle, update_streaming_rtt,
 };
+use uuid;
 
 /// Initialize the Linux Link backend
 #[frb(init)]
@@ -107,6 +107,54 @@ pub struct MonitorInfoDto {
     pub is_primary: bool,
 }
 
+/// Get or create the persistent device identity for this Android client.
+fn client_identity() -> linux_link_core::protocol::kdeconnect::DeviceIdentity {
+    let mut guard = crate::DEVICE_IDENTITY.lock().unwrap();
+    if let Some(id) = &*guard {
+        return id.clone();
+    }
+
+    // Try to load from disk
+    let id_path = {
+        let dir_guard = crate::CERT_DIR.lock().unwrap();
+        dir_guard.as_ref().map(|d| d.join("device_id"))
+    };
+
+    if let Some(ref path) = id_path {
+        if let Ok(data) = std::fs::read_to_string(path) {
+            let trimmed = data.trim().to_string();
+            if !trimmed.is_empty() {
+                let identity = linux_link_core::protocol::kdeconnect::DeviceIdentity::new(
+                    &trimmed,
+                    "Linux Link Android Client",
+                );
+                *guard = Some(identity.clone());
+                return identity;
+            }
+        }
+    }
+
+    // Generate and persist new ID
+    let new_id = uuid::Uuid::new_v4().to_string();
+    if let Some(path) = id_path {
+        let _ = std::fs::write(&path, &new_id);
+    }
+
+    let identity = linux_link_core::protocol::kdeconnect::DeviceIdentity::new(
+        &new_id,
+        "Linux Link Android Client",
+    );
+    *guard = Some(identity.clone());
+    identity
+}
+
+/// Send Wake-on-LAN magic packet to wake a sleeping peer.
+#[frb]
+pub fn send_wol(mac_address: String, broadcast_addr: String) -> Result<(), String> {
+    linux_link_core::tailscale::wol::send_wol(&mac_address, &broadcast_addr)
+        .map_err(|e| e.to_string())
+}
+
 /// Check Tailscale status
 #[frb]
 pub async fn check_tailscale_status() -> Result<bool, String> {
@@ -161,8 +209,9 @@ pub async fn connect_to_peer(address: String, port: u16) -> Result<ConnectionSta
     *state_guard = ConnectionState::Connecting;
 
     let conn_mgr = ConnectionManager::new(Duration::from_secs(10));
+    let identity = client_identity();
 
-    match conn_mgr.connect(&address, port).await {
+    match conn_mgr.connect(&address, port, &identity).await {
         Ok(stream) => {
             let (reader, writer) = stream.into_split();
             let mut writer_guard = (*CONTROL_WRITER).lock().await;
@@ -316,8 +365,9 @@ pub async fn get_clipboard(address: String, port: u16) -> Result<String, String>
 
     // Fall back to a new TCP connection
     let conn_mgr = ConnectionManager::new(Duration::from_secs(10));
+    let identity = client_identity();
     let stream = conn_mgr
-        .connect(&address, port)
+        .connect(&address, port, &identity)
         .await
         .map_err(|e: anyhow::Error| e.to_string())?;
     let (reader, writer) = tokio::io::split(stream);
@@ -367,8 +417,9 @@ pub async fn send_file(address: String, port: u16, file_path: String) -> Result<
         .map_err(|e| format!("Failed to bind port: {}", e))?;
     let transfer_port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let conn_mgr = ConnectionManager::new(Duration::from_secs(10));
+    let identity = client_identity();
     let stream = conn_mgr
-        .connect(&address, port)
+        .connect(&address, port, &identity)
         .await
         .map_err(|e: anyhow::Error| e.to_string())?;
     let (_reader, writer) = tokio::io::split(stream);
@@ -422,8 +473,9 @@ pub async fn list_remote_files(
     remote_path: String,
 ) -> Result<Vec<RemoteFileDto>, String> {
     let conn_mgr = ConnectionManager::new(Duration::from_secs(10));
+    let identity = client_identity();
     let stream = conn_mgr
-        .connect(&address, port)
+        .connect(&address, port, &identity)
         .await
         .map_err(|e: anyhow::Error| e.to_string())?;
     let (reader, writer) = tokio::io::split(stream);
@@ -576,7 +628,7 @@ pub async fn stop_streaming() -> Result<(), String> {
     // Reset streaming metrics
     STREAMING_FRAME_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
     STREAMING_BYTE_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
-    *STREAMING_START_TIME.lock().await = None;
+    *crate::STREAMING_START_TIME.lock().unwrap() = None;
     STREAMING_RTT_US.store(0, std::sync::atomic::Ordering::Relaxed);
 
     let handle = {
@@ -615,10 +667,10 @@ pub fn get_streaming_stats() -> StreamingStatsDto {
     let rtt_ms = STREAMING_RTT_US.load(Ordering::Relaxed) / 1000;
     let frame_count = STREAMING_FRAME_COUNT.load(Ordering::Relaxed);
     let byte_count = STREAMING_BYTE_COUNT.load(Ordering::Relaxed);
-    let elapsed = STREAMING_START_TIME
-        .try_lock()
-        .ok()
-        .and_then(|g| g.map(|t| t.elapsed()))
+    let elapsed = crate::STREAMING_START_TIME
+        .lock()
+        .unwrap()
+        .map(|t| t.elapsed())
         .unwrap_or_default();
 
     let fps = if elapsed.as_secs() > 0 {
@@ -682,7 +734,8 @@ pub fn forget_trusted_peer(label: String) -> bool {
 #[frb]
 pub async fn get_monitors(address: String, port: u16) -> Result<Vec<MonitorInfoDto>, String> {
     let conn_mgr = ConnectionManager::new(Duration::from_secs(5));
-    match conn_mgr.connect(&address, port).await {
+    let identity = client_identity();
+    match conn_mgr.connect(&address, port, &identity).await {
         Ok(stream) => {
             let (reader, writer) = tokio::io::split(stream);
             let sender = TcpDeviceSender::new(writer, address);
@@ -746,8 +799,9 @@ pub async fn send_power_command(
     action: String,
 ) -> Result<(), String> {
     let conn_mgr = ConnectionManager::new(Duration::from_secs(10));
+    let identity = client_identity();
     let stream = conn_mgr
-        .connect(&address, port)
+        .connect(&address, port, &identity)
         .await
         .map_err(|e: anyhow::Error| e.to_string())?;
     let (_reader, writer) = tokio::io::split(stream);
@@ -770,8 +824,9 @@ pub async fn execute_remote_command(
     command: String,
 ) -> Result<String, String> {
     let conn_mgr = ConnectionManager::new(Duration::from_secs(10));
+    let identity = client_identity();
     let stream = conn_mgr
-        .connect(&address, port)
+        .connect(&address, port, &identity)
         .await
         .map_err(|e: anyhow::Error| e.to_string())?;
     let (reader, writer) = tokio::io::split(stream);
@@ -858,8 +913,8 @@ pub async fn receive_frames(timeout_ms: u64) -> Vec<FrameDto> {
                 STREAMING_FRAME_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 STREAMING_BYTE_COUNT
                     .fetch_add(packet.data.len() as u64, std::sync::atomic::Ordering::Relaxed);
-                if STREAMING_START_TIME.lock().await.is_none() {
-                    *STREAMING_START_TIME.lock().await = Some(std::time::Instant::now());
+                if crate::STREAMING_START_TIME.lock().unwrap().is_none() {
+                    *crate::STREAMING_START_TIME.lock().unwrap() = Some(std::time::Instant::now());
                 }
                 frames.push(FrameDto {
                     data: packet.data,
