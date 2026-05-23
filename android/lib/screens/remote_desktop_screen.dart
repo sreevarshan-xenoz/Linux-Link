@@ -173,7 +173,49 @@ class _RemoteDesktopScreenState extends ConsumerState<RemoteDesktopScreen> {
 
   Future<void> _startStreaming() async {
     try {
-      final monitorIndex = ref.read(monitorIndexProvider);
+      // F2: Multi-monitor selection logic
+      final monitors = await bridge.rustApi.getMonitors(widget.address, widget.port);
+      int? selectedIndex;
+
+      if (monitors.length > 1 && mounted) {
+        selectedIndex = await showDialog<int>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Select Monitor'),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: monitors.length,
+                itemBuilder: (context, i) => ListTile(
+                  leading: Icon(monitors[i].isPrimary ? Icons.star : Icons.monitor),
+                  title: Text(monitors[i].name),
+                  subtitle: Text(monitors[i].resolution),
+                  onTap: () => Navigator.pop(context, monitors[i].index),
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel'),
+              ),
+            ],
+          ),
+        );
+
+        if (selectedIndex == null) {
+          // User cancelled selection, exit screen
+          _disconnect();
+          return;
+        }
+      } else if (monitors.isNotEmpty) {
+        selectedIndex = monitors[0].index;
+      }
+
+      final int monitorIndex = selectedIndex ?? ref.read(monitorIndexProvider);
+      ref.read(monitorIndexProvider.notifier).state = monitorIndex;
+
       await bridge.rustApi.startStreaming(widget.address, widget.port,
           monitorIndex: monitorIndex);
       if (mounted) {
