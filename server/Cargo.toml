@@ -39,3 +39,4 @@ tokio-util.workspace = true
 # UUID for persistent device ID
 uuid.workspace = true
 dashmap = "6.1.0"
+xcap.workspace = true
