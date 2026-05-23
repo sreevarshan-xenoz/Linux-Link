@@ -9,6 +9,7 @@ import 'package:flutter/foundation.dart';
 
 import 'api.dart' as frb;
 import 'frb_generated.dart';
+import 'models/monitor_info.dart';
 import 'models/peer_info.dart';
 import 'models/remote_file.dart';
 import 'providers/connection_provider.dart';
@@ -254,16 +255,34 @@ class _RustApiBridge {
 
   /// Receive queued Opus-encoded audio packets from the streaming client (F1).
   Future<List<List<int>>> receiveAudio(int timeoutMs) async {
-    final packets = await frb.receiveAudio(timeoutMs: BigInt.from(timeoutMs));
-    return packets;
+    return await frb.receiveAudio(timeoutMs: BigInt.from(timeoutMs));
+  }
+
+  /// Get detailed list of monitors available on the remote server.
+  Future<List<MonitorInfo>> getMonitors(String address, int port) async {
+    try {
+      final dtos = await frb.getMonitors(address: address, port: port);
+      return dtos
+          .map((dto) => MonitorInfo(
+                index: dto.index,
+                name: dto.name,
+                width: dto.width,
+                height: dto.height,
+                isPrimary: dto.isPrimary,
+              ))
+          .toList();
+    } catch (e) {
+      debugPrint('Failed to get monitors: $e');
+      return [];
+    }
   }
 
   /// Get the number of monitors available on the remote server (F2: multi-monitor).
   /// Uses Rust FFI with proper ConnectionManager handshake.
   Future<int> getMonitorCount(String address, int port) async {
     try {
-      final result = await frb.getMonitorCount(address: address, port: port);
-      return result.toInt();
+      final monitors = await getMonitors(address, port);
+      return monitors.length;
     } catch (e) {
       debugPrint('Failed to get monitor count: $e');
       return 1;
