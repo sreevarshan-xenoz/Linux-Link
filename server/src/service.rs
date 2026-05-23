@@ -127,17 +127,27 @@ pub async fn run(config: Config) -> Result<()> {
                         let packet_json = notification.to_kdeconnect_payload();
                         match NetworkPacket::from_wire(&packet_json) {
                             Ok(packet) => {
-                                let mut clients = ACTIVE_CLIENTS.lock().await;
-                                let mut alive = Vec::new();
+                                // Optimized: Clone the list of clients and release the lock immediately
+                                // to prevent slow clients from blocking the entire registration system.
+                                let clients = {
+                                    let clients_guard = ACTIVE_CLIENTS.lock().await;
+                                    clients_guard.clone()
+                                };
+
+                                let mut dead_clients = Vec::new();
                                 for sender in clients.iter() {
-                                    match sender.send_packet(&packet).await {
-                                        Ok(()) => alive.push(Arc::clone(sender)),
-                                        Err(e) => {
-                                            tracing::debug!("Removing dead client from broadcast: {e}");
-                                        }
+                                    if let Err(e) = sender.send_packet(&packet).await {
+                                        tracing::debug!("Detected dead client during broadcast: {e}");
+                                        dead_clients.push(sender.connection_id().to_string());
                                     }
                                 }
-                                *clients = alive;
+
+                                // Prune dead clients if any were detected
+                                if !dead_clients.is_empty() {
+                                    let mut clients_guard = ACTIVE_CLIENTS.lock().await;
+                                    clients_guard.retain(|c| !dead_clients.iter().any(|d| d == c.connection_id()));
+                                }
+
                                 if !clients.is_empty() {
                                     tracing::debug!("Forwarded notification to {} client(s)", clients.len());
                                 }
