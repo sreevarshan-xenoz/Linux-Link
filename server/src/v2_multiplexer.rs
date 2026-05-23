@@ -120,6 +120,7 @@ pub async fn handle_v2_session(
         }
 
         // Cleanup
+        control_task.abort(); // Ensure the control task is terminated immediately
         {
             let mut clients = ACTIVE_CLIENTS.lock().await;
             clients.retain(|c| c.connection_id() != session_id);
@@ -166,8 +167,10 @@ async fn handle_unidirectional_stream(mut recv: RecvStream) -> anyhow::Result<()
         debug!("Incoming File stream (Reliable Uni)");
         handle_persistent_stream(recv, "file").await
     } else {
-        warn!("Unknown unidirectional stream kind: {}", kind_raw);
-        Ok(())
+        Err(LinuxLinkError::ProtocolError {
+            detail: format!("Unknown unidirectional stream kind: {}", kind_raw),
+        }
+        .into())
     }
 }
 
@@ -176,8 +179,10 @@ async fn handle_bidirectional_stream(_send: SendStream, mut recv: RecvStream) ->
     recv.read_exact(&mut header).await?;
     let kind_raw = header[0];
 
-    warn!("Unexpected bidirectional stream kind: {}", kind_raw);
-    Ok(())
+    Err(LinuxLinkError::ProtocolError {
+        detail: format!("Unexpected bidirectional stream kind: {}", kind_raw),
+    }
+    .into())
 }
 
 async fn handle_persistent_stream(mut recv: RecvStream, name: &'static str) -> anyhow::Result<()> {
