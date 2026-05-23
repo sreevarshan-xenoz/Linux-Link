@@ -6,6 +6,7 @@
 #[cfg(test)]
 mod tests {
     use crate::protocol::connection::ConnectionManager;
+    use crate::protocol::kdeconnect::DeviceIdentity;
     use crate::protocol::{HANDSHAKE_HELLO, HANDSHAKE_OK};
     use std::time::Duration;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -146,9 +147,10 @@ mod tests {
     async fn connect_succeeds_with_valid_handshake() {
         let port = spawn_mock_server().await;
         let manager = ConnectionManager::new(Duration::from_secs(5));
+        let identity = DeviceIdentity::new("test-client", "Test Client");
 
         let stream = manager
-            .connect("127.0.0.1", port)
+            .connect("127.0.0.1", port, &identity)
             .await
             .expect("connect should succeed with valid handshake");
 
@@ -165,8 +167,9 @@ mod tests {
     async fn connect_fails_with_bad_handshake_response() {
         let port = spawn_mock_server_bad_handshake().await;
         let manager = ConnectionManager::new(Duration::from_secs(5));
+        let identity = DeviceIdentity::new("test-client", "Test Client");
 
-        let result = manager.connect("127.0.0.1", port).await;
+        let result = manager.connect("127.0.0.1", port, &identity).await;
         assert!(
             result.is_err(),
             "connect should fail with bad handshake response"
@@ -188,8 +191,9 @@ mod tests {
         let port = spawn_mock_server_silent().await;
         // Use a short timeout so the test doesn't hang
         let manager = ConnectionManager::new(Duration::from_millis(500));
+        let identity = DeviceIdentity::new("test-client", "Test Client");
 
-        let result = manager.connect("127.0.0.1", port).await;
+        let result = manager.connect("127.0.0.1", port, &identity).await;
         assert!(
             result.is_err(),
             "connect should time out with silent server"
@@ -200,8 +204,9 @@ mod tests {
     async fn connect_times_out_when_no_server() {
         // Connect to a port that nothing is listening on (extremely unlikely to be in use)
         let manager = ConnectionManager::new(Duration::from_millis(500));
+        let identity = DeviceIdentity::new("test-client", "Test Client");
 
-        let result = manager.connect("127.0.0.1", 51999).await;
+        let result = manager.connect("127.0.0.1", 51999, &identity).await;
         assert!(
             result.is_err(),
             "connect should fail when no server is listening"
@@ -218,9 +223,10 @@ mod tests {
         let port = spawn_mock_server_silent().await;
         let start = std::time::Instant::now();
         let timeout = Duration::from_millis(200);
+        let identity = DeviceIdentity::new("test-client", "Test Client");
 
         let manager = ConnectionManager::new(timeout);
-        let _result = manager.connect("127.0.0.1", port).await;
+        let _result = manager.connect("127.0.0.1", port, &identity).await;
 
         let elapsed = start.elapsed();
         // Should fail within a reasonable bound of the configured timeout
@@ -238,11 +244,12 @@ mod tests {
     #[tokio::test]
     async fn multiple_connections_succeed() {
         let manager = ConnectionManager::new(Duration::from_secs(5));
+        let identity = DeviceIdentity::new("test-client", "Test Client");
 
         for _ in 0..3 {
             let port = spawn_mock_server().await;
             let stream = manager
-                .connect("127.0.0.1", port)
+                .connect("127.0.0.1", port, &identity)
                 .await
                 .expect("connect should succeed");
             let peer_addr = stream.peer_addr().expect("get peer addr");
@@ -260,9 +267,10 @@ mod tests {
         // server receives (the mock asserts the identity packet starts with '{')
         let port = spawn_mock_server().await;
         let manager = ConnectionManager::new(Duration::from_secs(5));
+        let identity = DeviceIdentity::new("test-client", "Test Client");
 
         let stream = manager
-            .connect("127.0.0.1", port)
+            .connect("127.0.0.1", port, &identity)
             .await
             .expect("connect should succeed");
 

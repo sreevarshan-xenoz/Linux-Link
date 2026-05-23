@@ -94,7 +94,8 @@ async fn start_mock_server() -> (u16, Arc<Mutex<Vec<NetworkPacket>>>) {
 async fn test_handshake_success() {
     let (port, _received) = start_mock_server().await;
     let manager = ConnectionManager::new(Duration::from_secs(10));
-    let result = manager.connect("127.0.0.1", port).await;
+    let identity = DeviceIdentity::new("test-client", "Test Client");
+    let result = manager.connect("127.0.0.1", port, &identity).await;
     assert!(result.is_ok(), "Handshake should succeed: {:?}", result.err());
 }
 
@@ -117,7 +118,8 @@ async fn test_handshake_wrong_protocol() {
     });
 
     let manager = ConnectionManager::new(Duration::from_secs(5));
-    let result = manager.connect("127.0.0.1", port).await;
+    let identity = DeviceIdentity::new("test-client", "Test Client");
+    let result = manager.connect("127.0.0.1", port, &identity).await;
     assert!(result.is_err(), "Handshake with wrong protocol should fail");
 }
 
@@ -139,7 +141,8 @@ async fn test_handshake_timeout() {
     });
 
     let manager = ConnectionManager::new(Duration::from_secs(2));
-    let result = manager.connect("127.0.0.1", port).await;
+    let identity = DeviceIdentity::new("test-client", "Test Client");
+    let result = manager.connect("127.0.0.1", port, &identity).await;
     assert!(result.is_err(), "Timeout should cause handshake failure");
 }
 
@@ -147,7 +150,8 @@ async fn test_handshake_timeout() {
 async fn test_send_and_receive_packet() {
     let (port, received) = start_mock_server().await;
     let manager = ConnectionManager::new(Duration::from_secs(10));
-    let stream = manager.connect("127.0.0.1", port).await.unwrap();
+    let identity = DeviceIdentity::new("test-client", "Test Client");
+    let stream = manager.connect("127.0.0.1", port, &identity).await.unwrap();
 
     let (_reader, writer) = stream.into_split();
     let sender = TcpDeviceSender::new(writer, "127.0.0.1".to_string());
@@ -175,7 +179,8 @@ async fn test_send_and_receive_packet() {
 async fn test_packet_with_body() {
     let (port, received) = start_mock_server().await;
     let manager = ConnectionManager::new(Duration::from_secs(10));
-    let stream = manager.connect("127.0.0.1", port).await.unwrap();
+    let identity = DeviceIdentity::new("test-client", "Test Client");
+    let stream = manager.connect("127.0.0.1", port, &identity).await.unwrap();
 
     let (_reader, writer) = stream.into_split();
     let sender = TcpDeviceSender::new(writer, "127.0.0.1".to_string());
@@ -224,13 +229,15 @@ async fn test_concurrent_connections() {
     });
 
     let manager = ConnectionManager::new(Duration::from_secs(5));
+    let identity = DeviceIdentity::new("test-client", "Test Client");
 
     // Connect 3 clients concurrently
     let mut handles = vec![];
     for _ in 0..3 {
         let mgr = manager.clone();
+        let ident = identity.clone();
         handles.push(tokio::spawn(async move {
-            mgr.connect("127.0.0.1", port).await
+            mgr.connect("127.0.0.1", port, &ident).await
         }));
     }
 

@@ -15,7 +15,7 @@ impl ConnectionManager {
         Self { timeout }
     }
 
-    pub async fn connect(&self, address: &str, port: u16) -> Result<TcpStream> {
+    pub async fn connect(&self, address: &str, port: u16, identity: &DeviceIdentity) -> Result<TcpStream> {
         let socket_addr = format!("{address}:{port}");
 
         let mut stream = tokio::time::timeout(self.timeout, TcpStream::connect(&socket_addr))
@@ -55,7 +55,6 @@ impl ConnectionManager {
         }
 
         // Step 4: Send client identity packet
-        let identity = DeviceIdentity::new("linux-link-client", "Linux Link Android Client");
         let identity_packet = identity.as_identity_packet();
         let identity_bytes = identity_packet.to_wire()?;
 
