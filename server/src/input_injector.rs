@@ -272,11 +272,33 @@ impl InputInjector {
             }
             InputPacket::MouseScroll { dx, dy } => self.scroll(*dx as i32, *dy as i32),
             InputPacket::KeyEvent {
-                key: _key,
-                pressed: _pressed,
+                key,
+                pressed,
             } => {
-                // Key events are handled via the KDE Connect keyboard protocol
-                // This InputPacket variant is for the QUIC streaming channel
+                // Key events handled via the binary QUIC channel for ultra-low latency.
+                // Map the evdev keycode back to an enigo key or use directly for uinput.
+                match &mut self.backend {
+                    InputBackend::Enigo(enigo) => {
+                        let e = enigo.get_mut().unwrap();
+                        let key = keycode_to_enigo(*key);
+                        if *pressed {
+                            e.key(key, enigo::Direction::Press)
+                                .context("enigo key press failed (QUIC)")?;
+                        } else {
+                            e.key(key, enigo::Direction::Release)
+                                .context("enigo key release failed (QUIC)")?;
+                        }
+                    }
+                    InputBackend::Uinput(device) => {
+                        let dev = device.get_mut().unwrap();
+                        let value = if *pressed { 1 } else { 0 };
+                        let events = [
+                            InputEvent::new(EV_KEY, *key, value),
+                            InputEvent::new(EV_SYN, SYN_REPORT, 0),
+                        ];
+                        dev.emit(&events).context("uinput key event failed (QUIC)")?;
+                    }
+                }
                 Ok(())
             }
             InputPacket::Text(text) => self.text(text),
@@ -379,7 +401,6 @@ pub fn button_id_to_mouse(button: i32) -> MouseKey {
 }
 
 /// Map a Linux evdev keycode to an enigo Key.
-#[cfg(test)]
 fn keycode_to_enigo(code: u16) -> Key {
     match code {
         36 => Key::Return,
