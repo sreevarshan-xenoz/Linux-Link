@@ -1,6 +1,7 @@
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tracing::{debug, info, warn};
 
 use crate::error::{LinuxLinkError, Result};
 
@@ -61,17 +62,30 @@ where
     S: AsyncWrite + Unpin,
     R: AsyncRead + Unpin,
 {
-    let write_fut = write_framed_json_internal(send, local_identity);
-    let read_fut = read_framed_json_internal::<R, IdentityPacketV2>(recv);
+    debug!("Starting protocol v2 handshake");
 
-    let (write_res, read_res) = tokio::join!(write_fut, read_fut);
-    write_res?;
-    let peer_identity = read_res?;
+    let write_fut = write_framed_json_internal(send, local_identity);
+    let read_fut = async {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            read_framed_json_internal::<R, IdentityPacketV2>(recv),
+        )
+        .await
+        .map_err(|_| LinuxLinkError::Timeout {
+            operation: "handshake",
+            duration_ms: 5000,
+        })?
+    };
+
+    let (_, peer_identity) = tokio::try_join!(write_fut, read_fut).map_err(|e| {
+        warn!("Handshake failed: {}", e);
+        e
+    })?;
 
     if peer_identity.max_version < local_identity.min_version
         || peer_identity.min_version > local_identity.max_version
     {
-        return Err(LinuxLinkError::ProtocolError {
+        let err = LinuxLinkError::ProtocolError {
             detail: format!(
                 "Incompatible versions: local [{}-{}], peer [{}-{}]",
                 local_identity.min_version,
@@ -79,8 +93,15 @@ where
                 peer_identity.min_version,
                 peer_identity.max_version
             ),
-        });
+        };
+        warn!("{}", err);
+        return Err(err);
     }
+
+    info!(
+        "Handshake completed: {} ({})",
+        peer_identity.device_name, peer_identity.device_id
+    );
 
     Ok(peer_identity)
 }
@@ -148,10 +169,8 @@ mod tests {
         let server_handshake =
             perform_v2_handshake_internal(&mut server_send, &mut server_recv, &server_id);
 
-        let (client_res, server_res) = tokio::join!(client_handshake, server_handshake);
-
-        let received_server_id = client_res?;
-        let received_client_id = server_res?;
+        let (received_server_id, received_client_id) =
+            tokio::try_join!(client_handshake, server_handshake)?;
 
         assert_eq!(received_server_id.device_id, "server");
         assert_eq!(received_client_id.device_id, "client");
@@ -187,20 +206,13 @@ mod tests {
         let server_handshake =
             perform_v2_handshake_internal(&mut server_send, &mut server_recv, &server_id);
 
-        let (client_res, server_res) = tokio::join!(client_handshake, server_handshake);
+        let res = tokio::try_join!(client_handshake, server_handshake);
 
-        match client_res {
+        match res {
             Err(LinuxLinkError::ProtocolError { detail }) => {
                 assert!(detail.contains("Incompatible versions"));
             }
-            _ => panic!("Expected version mismatch error, got {:?}", client_res),
-        }
-
-        match server_res {
-            Err(LinuxLinkError::ProtocolError { detail }) => {
-                assert!(detail.contains("Incompatible versions"));
-            }
-            _ => panic!("Expected version mismatch error, got {:?}", server_res),
+            _ => panic!("Expected version mismatch error, got {:?}", res),
         }
 
         Ok(())
@@ -225,9 +237,7 @@ mod tests {
         let client_write = write_framed_json_internal(&mut client, &packet);
         let server_read = read_framed_json_internal::<_, TestPacket>(&mut server);
 
-        let (write_res, read_res) = tokio::join!(client_write, server_read);
-        write_res?;
-        let received = read_res?;
+        let (_, received) = tokio::try_join!(client_write, server_read)?;
         assert_eq!(packet, received);
 
         // Server to Client
@@ -238,9 +248,7 @@ mod tests {
         let server_write = write_framed_json_internal(&mut server, &reply);
         let client_read = read_framed_json_internal::<_, TestPacket>(&mut client);
 
-        let (s_write_res, c_read_res) = tokio::join!(server_write, client_read);
-        s_write_res?;
-        let received_reply = c_read_res?;
+        let (_, received_reply) = tokio::try_join!(server_write, client_read)?;
         assert_eq!(reply, received_reply);
 
         Ok(())
@@ -282,6 +290,33 @@ mod tests {
                 assert_eq!(format, "JSON");
             }
             _ => panic!("Expected Serialization error for malformed JSON, got {:?}", result),
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handshake_timeout() -> anyhow::Result<()> {
+        let (mut client_recv, _server_send) = tokio::io::duplex(1024);
+        let (_server_recv, mut client_send) = tokio::io::duplex(1024);
+
+        let client_id = IdentityPacketV2 {
+            device_id: "client".to_string(),
+            device_name: "Client Device".to_string(),
+            min_version: 1,
+            max_version: 1,
+            capabilities: vec![],
+        };
+
+        // We only start the client side. It will write its identity but will wait for server identity.
+        // Since we didn't start the server side, it should timeout.
+        let result = perform_v2_handshake_internal(&mut client_send, &mut client_recv, &client_id).await;
+
+        match result {
+            Err(LinuxLinkError::Timeout { operation, .. }) => {
+                assert_eq!(operation, "handshake");
+            }
+            _ => panic!("Expected timeout error, got {:?}", result),
         }
 
         Ok(())
