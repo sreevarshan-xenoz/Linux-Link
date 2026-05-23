@@ -3,8 +3,6 @@
 /// Delegates to flutter_rust_bridge generated code.
 library rust_api_bridge;
 
-import 'dart:io';
-
 import 'package:flutter/foundation.dart';
 
 import 'api.dart' as frb;
@@ -194,42 +192,9 @@ class _RustApiBridge {
   }
 
   /// Send Wake-on-LAN magic packet to wake a sleeping peer.
-  /// Uses raw UDP socket directly (no Rust FFI needed for this).
+  /// Uses Rust FFI for centralized networking.
   Future<void> sendWol(String macAddress, String broadcastAddr) async {
-    final mac = _parseMacAddress(macAddress);
-    // Build magic packet: 6 bytes of 0xFF + MAC repeated 16 times
-    final packet = <int>[...List.filled(6, 0xFF)];
-    for (int i = 0; i < 16; i++) {
-      packet.addAll(mac);
-    }
-    final socket = await RawDatagramSocket.bind(
-      InternetAddress.anyIPv4,
-      0,
-    );
-    socket.broadcastEnabled = true;
-    socket.send(
-      packet,
-      InternetAddress(broadcastAddr),
-      9, // WOL port
-    );
-    socket.close();
-  }
-
-  /// Parse a MAC address string (e.g., "AA:BB:CC:DD:EE:FF") into a 6-byte list.
-  List<int> _parseMacAddress(String mac) {
-    final hex = mac.replaceAll(RegExp(r'[^0-9a-fA-F]'), '');
-    if (hex.length != 12) {
-      throw ArgumentError.value(
-        mac,
-        'macAddress',
-        'Invalid MAC address: expected 12 hex digits, got ${hex.length}',
-      );
-    }
-    final bytes = <int>[];
-    for (int i = 0; i < 12; i += 2) {
-      bytes.add(int.parse(hex.substring(i, i + 2), radix: 16));
-    }
-    return bytes;
+    await frb.sendWol(macAddress: macAddress, broadcastAddr: broadcastAddr);
   }
 
   /// Send power management command (sleep/shutdown/restart/hibernate) to the remote PC.

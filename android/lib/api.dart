@@ -74,6 +74,11 @@ Future<List<MonitorInfoDto>> getMonitors(
         {required String address, required int port}) =>
     throw UnimplementedError('Codegen required for getMonitors');
 
+/// Send Wake-on-LAN magic packet to wake a sleeping peer.
+Future<void> sendWol(
+        {required String macAddress, required String broadcastAddr}) =>
+    throw UnimplementedError('Codegen required for sendWol');
+
 /// Request remote screen streaming.
 ///
 /// `monitor_index` selects which display to stream (0 = primary).
