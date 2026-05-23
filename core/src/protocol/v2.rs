@@ -29,6 +29,15 @@ pub struct IdentityPacketV2 {
 }
 
 /// Encodes `data` as JSON, prepends a 4-byte Big-Endian length, and writes to the stream.
+pub async fn perform_v2_handshake(
+    send: &mut quinn::SendStream,
+    recv: &mut quinn::RecvStream,
+    local_identity: &IdentityPacketV2,
+) -> Result<IdentityPacketV2> {
+    perform_v2_handshake_internal(send, recv, local_identity).await
+}
+
+/// Encodes `data` as JSON, prepends a 4-byte Big-Endian length, and writes to the stream.
 pub async fn write_framed_json<T: Serialize>(
     send: &mut quinn::SendStream,
     data: &T,
@@ -41,6 +50,39 @@ pub async fn read_framed_json<T: DeserializeOwned>(
     recv: &mut quinn::RecvStream,
 ) -> Result<T> {
     read_framed_json_internal(recv).await
+}
+
+async fn perform_v2_handshake_internal<S, R>(
+    send: &mut S,
+    recv: &mut R,
+    local_identity: &IdentityPacketV2,
+) -> Result<IdentityPacketV2>
+where
+    S: AsyncWrite + Unpin,
+    R: AsyncRead + Unpin,
+{
+    let write_fut = write_framed_json_internal(send, local_identity);
+    let read_fut = read_framed_json_internal::<R, IdentityPacketV2>(recv);
+
+    let (write_res, read_res) = tokio::join!(write_fut, read_fut);
+    write_res?;
+    let peer_identity = read_res?;
+
+    if peer_identity.max_version < local_identity.min_version
+        || peer_identity.min_version > local_identity.max_version
+    {
+        return Err(LinuxLinkError::ProtocolError {
+            detail: format!(
+                "Incompatible versions: local [{}-{}], peer [{}-{}]",
+                local_identity.min_version,
+                local_identity.max_version,
+                peer_identity.min_version,
+                peer_identity.max_version
+            ),
+        });
+    }
+
+    Ok(peer_identity)
 }
 
 async fn write_framed_json_internal<S, T>(send: &mut S, data: &T) -> Result<()>
@@ -79,6 +121,90 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn test_v2_handshake_success() -> anyhow::Result<()> {
+        let (mut client_recv, mut server_send) = tokio::io::duplex(1024);
+        let (mut server_recv, mut client_send) = tokio::io::duplex(1024);
+
+        let client_id = IdentityPacketV2 {
+            device_id: "client".to_string(),
+            device_name: "Client Device".to_string(),
+            min_version: 1,
+            max_version: 2,
+            capabilities: vec!["cap1".to_string()],
+        };
+
+        let server_id = IdentityPacketV2 {
+            device_id: "server".to_string(),
+            device_name: "Server Device".to_string(),
+            min_version: 2,
+            max_version: 3,
+            capabilities: vec!["cap2".to_string()],
+        };
+
+        let client_handshake =
+            perform_v2_handshake_internal(&mut client_send, &mut client_recv, &client_id);
+        let server_handshake =
+            perform_v2_handshake_internal(&mut server_send, &mut server_recv, &server_id);
+
+        let (client_res, server_res) = tokio::join!(client_handshake, server_handshake);
+
+        let received_server_id = client_res?;
+        let received_client_id = server_res?;
+
+        assert_eq!(received_server_id.device_id, "server");
+        assert_eq!(received_client_id.device_id, "client");
+        assert_eq!(received_server_id.min_version, 2);
+        assert_eq!(received_client_id.max_version, 2);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_v2_handshake_version_mismatch() -> anyhow::Result<()> {
+        let (mut client_recv, mut server_send) = tokio::io::duplex(1024);
+        let (mut server_recv, mut client_send) = tokio::io::duplex(1024);
+
+        let client_id = IdentityPacketV2 {
+            device_id: "client".to_string(),
+            device_name: "Client Device".to_string(),
+            min_version: 1,
+            max_version: 1,
+            capabilities: vec![],
+        };
+
+        let server_id = IdentityPacketV2 {
+            device_id: "server".to_string(),
+            device_name: "Server Device".to_string(),
+            min_version: 2,
+            max_version: 2,
+            capabilities: vec![],
+        };
+
+        let client_handshake =
+            perform_v2_handshake_internal(&mut client_send, &mut client_recv, &client_id);
+        let server_handshake =
+            perform_v2_handshake_internal(&mut server_send, &mut server_recv, &server_id);
+
+        let (client_res, server_res) = tokio::join!(client_handshake, server_handshake);
+
+        match client_res {
+            Err(LinuxLinkError::ProtocolError { detail }) => {
+                assert!(detail.contains("Incompatible versions"));
+            }
+            _ => panic!("Expected version mismatch error, got {:?}", client_res),
+        }
+
+        match server_res {
+            Err(LinuxLinkError::ProtocolError { detail }) => {
+                assert!(detail.contains("Incompatible versions"));
+            }
+            _ => panic!("Expected version mismatch error, got {:?}", server_res),
+        }
+
+        Ok(())
+    }
 
     #[tokio::test]
     async fn test_framed_json_roundtrip() -> anyhow::Result<()> {
