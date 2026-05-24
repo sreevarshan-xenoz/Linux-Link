@@ -8,6 +8,7 @@ pub mod bitrate;
 pub mod client;
 pub mod encoder_detect;
 pub mod input_packet;
+pub mod chaos;
 pub mod session;
 pub mod transport;
 
