@@ -168,7 +168,7 @@ pub async fn run(config: Config) -> Result<()> {
     }
 
     // Input injection channel shared between v1 and v2
-    let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<InputPacket>(128);
+    let (input_tx, mut input_rx) = tokio::sync::broadcast::channel::<InputPacket>(16);
     let streaming_config = config.video_quality.to_streaming_config();
 
     // Spawn input injection task — receives InputPacket from the QUIC
@@ -183,9 +183,19 @@ pub async fn run(config: Config) -> Result<()> {
             }
         };
 
-        while let Some(packet) = input_rx.recv().await {
-            if let Err(e) = handle_input_packet(&mut injector, packet) {
-                tracing::warn!("Input injection error: {e}");
+        loop {
+            match input_rx.recv().await {
+                Ok(packet) => {
+                    if let Err(e) = handle_input_packet(&mut injector, packet) {
+                        tracing::warn!("Input injection error: {e}");
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!("Input injection lagged by {n} messages, dropped oldest");
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    break;
+                }
             }
         }
 

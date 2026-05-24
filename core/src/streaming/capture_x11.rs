@@ -77,9 +77,13 @@ pub async fn start_x11_capture(
                 _ = tokio::time::sleep(frame_interval) => {
                     match capture_frame(monitor_idx) {
                         Ok(frame) => {
-                            if frame_tx.send(frame).await.is_err() {
-                                debug!("Frame channel closed, stopping X11 capture");
-                                break;
+                            match frame_tx.try_send(frame) {
+                                Ok(_) => {}
+                                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {}
+                                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                                    debug!("Frame channel closed, stopping X11 capture");
+                                    break;
+                                }
                             }
                             frame_count += 1;
                             if frame_count.is_multiple_of(30) {

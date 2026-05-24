@@ -34,7 +34,7 @@ pub struct StreamingServer {
     /// Adaptive bitrate controller (optional)
     adaptive_bitrate: Option<AdaptiveBitrate>,
     /// Channel for routing input events received from client over this QUIC connection
-    input_tx: Option<mpsc::Sender<InputPacket>>,
+    input_tx: Option<tokio::sync::broadcast::Sender<InputPacket>>,
 }
 
 impl StreamingServer {
@@ -68,7 +68,7 @@ impl StreamingServer {
     ///
     /// When set, the server will parse incoming QUIC streams as binary `InputPacket`
     /// values and forward them through this channel for injection on the host system.
-    pub fn set_input_channel(&mut self, tx: mpsc::Sender<InputPacket>) {
+    pub fn set_input_channel(&mut self, tx: tokio::sync::broadcast::Sender<InputPacket>) {
         self.input_tx = Some(tx);
     }
 
@@ -174,7 +174,7 @@ impl StreamingServer {
         read_client_config(&connection, &mut self.config).await;
 
         let cancel = self.cancel.clone();
-        let (frame_tx, mut frame_rx) = mpsc::channel::<VideoFrame>(4);
+        let (frame_tx, mut frame_rx) = mpsc::channel::<VideoFrame>(2);
         let (packet_tx, mut packet_rx) = mpsc::channel::<EncodedPacket>(8);
 
         let mut tasks = JoinSet::new();
@@ -417,10 +417,9 @@ impl StreamingServer {
                                             Ok(packet) => {
                                                 // Forward to input injector via channel
                                                 if let Some(ref tx) = input_tx {
-                                                   if tx.send(packet).await.is_err() {
-                                                       debug!("Input receiver dropped, stopping monitor");
-                                                       break;
-                                                   }
+                                                   // Use send() without await (broadcast is sync).
+                                                   // If there are no receivers, it returns an error which we can ignore.
+                                                   let _ = tx.send(packet);
                                                 }
                                             }
                                             Err(e) => {

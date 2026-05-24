@@ -356,13 +356,19 @@ fn on_process(stream: &pipewire::stream::Stream, user_data: &StreamUserData) {
         stride: stride as u32,
         timestamp: Instant::now(),
     };
-
     // Send the frame through the channel.
-    // Use blocking_send since we're on a PipeWire thread, not a tokio runtime.
-    if user_data.frame_tx.blocking_send(frame).is_err() {
-        // Channel closed -- receiver dropped, stop capturing.
-        debug!("Frame channel closed, cancelling capture");
-        user_data.cancel.cancel();
+    // Use try_send to implement Latest-Frame-Wins by dropping the newest frame if full.
+    match user_data.frame_tx.try_send(frame) {
+        Ok(_) => {}
+        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+            // Ignore Full error to drop the frame if encoder is busy
+        }
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+            // Channel closed -- receiver dropped, stop capturing.
+            debug!("Frame channel closed, stopping capture");
+            user_data.cancel.cancel();
+            return;
+        }
     }
 }
 
@@ -588,11 +594,17 @@ fn run_x11_capture_loop(
                         stride,
                         timestamp: Instant::now(),
                     };
-
-                    if frame_tx.blocking_send(frame).is_err() {
-                        debug!("Frame channel closed, stopping capture");
-                        break;
-                    }
+// Send frame to pipeline
+match frame_tx.try_send(frame) {
+    Ok(_) => {}
+    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+        // Ignore Full error
+    }
+    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+        debug!("Frame channel closed, stopping capture");
+        break;
+    }
+}
 
                     // Maintain target framerate
                     let elapsed = frame_start.elapsed();
