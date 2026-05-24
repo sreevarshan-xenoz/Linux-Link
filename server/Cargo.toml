@@ -43,3 +43,6 @@ tokio-util.workspace = true
 uuid.workspace = true
 dashmap = "6.1.0"
 xcap.workspace = true
+
+[dev-dependencies]
+rustls.workspace = true
