@@ -14,13 +14,22 @@ To prevent Head-of-Line (HOL) blocking and ensure the system degrades gracefully
 
 | Channel (Priority) | Capacity | Drop Strategy | Stale Rule | Explanation |
 | :--- | :--- | :--- | :--- | :--- |
-| **0 - Control** | Infinite (Reliable) | **None** | Must deliver. | Heartbeats, handshakes, reconnects. Loss of control implies session loss. |
-| **1 - Input** | Tiny (16 events) | **Drop Oldest** | Preserve order. | A stale mouse movement from 500ms ago is destructive. If queue fills (flood), discard oldest to maintain real-time feel. |
+| **0 - Control** | Large (1024 msgs) | **Disconnect on Overflow** | Must deliver. | Heartbeats, handshakes. Infinite queues are DoS vectors. Saturated control queue = broken protocol. Disconnect immediately. |
+| **1 - Input** | Tiny (16 events) | **Coalesce / Drop Oldest** | Preserve responsiveness. | Mouse motion MUST coalesce to the latest coordinates. Keystrokes/buttons preserve order but drop oldest if flooded. |
 | **2 - Audio** | Small (32 frames) | **Drop Oldest** | Short glitch > Delay. | Audio must be continuous, but if buffered too deeply, it desyncs from video. Better to drop a frame and pop/crackle than delay by 1 second. |
 | **3 - Video** | Minimal (2 frames) | **Latest-Frame-Wins** | Overwrite instantly. | Video must absorb network pain. If the transport cannot send the current frame before the encoder produces the next, the unsent frame is obliterated. |
 | **4 - File/Util** | Bounded (1MB chunks) | **Backpressure** | Yield to higher prio. | File transfers are greedy. They must use QUIC flow control to back off instantly when Control or Media streams need bandwidth. |
 
-### 1.2 Backpressure & Congestion Protocol
+### 1.2 Graceful Degradation Ladder
+The system must react to congestion in a strict, deterministic hierarchy to preserve interactivity:
+1. **Drop unsent Video frames** (Latest-Frame-Wins).
+2. **Reduce Video Bitrate** (ABR Fast-Path trigger).
+3. **Reduce Target FPS** (Signal capture loop to slow down).
+4. **Reduce Capture Resolution** (Downscale before encode).
+5. **Pause Video Entirely** (Stream 0 sends `VideoPaused` event).
+6. **Preserve Control/Input at all costs.**
+
+### 1.3 Backpressure & Congestion Protocol
 - **Encoder Restraint:** If the Video queue is full (2 frames), the `StreamingServer` MUST NOT pull another frame from PipeWire. It must signal the capture loop to yield.
 - **Bitrate Guillotine:** If `quinn` reports a congestion event (via `rtt_stats`), the Adaptive Bitrate controller must instantly execute a 40% reduction (Fast-Path), overriding any smoothing window.
 
@@ -57,9 +66,14 @@ These named profiles define the exact network conditions we will inject using th
 - **Condition:** Client attempts 10 simultaneous reconnections within 100ms.
 - **Pass Criteria:** Server accepts ONLY the first valid handshake, explicitly rejecting or dropping the others. No "Parallel Brain" state is created. `ACTIVE_CLIENTS` shows exactly 1 connection.
 
-### 3.5 `video_flood` (HOL Blocking Test)
+### 3.5 `video_flood` (HOL Blocking & Starvation Test)
 - **Condition:** Encoder goes rogue and attempts to push 4K 120FPS uncompressed data.
-- **Pass Criteria:** `Latest-Frame-Wins` policy engages. Video stream is violently throttled by `quinn` backpressure. **Control and Input streams remain sub-50ms responsive.** Telemetry reports massive "dropped frames" but zero "input delay".
+- **Pass Criteria:** 
+  1. `Latest-Frame-Wins` policy engages.
+  2. Video stream is violently throttled by `quinn` backpressure. 
+  3. **Control and Input streams remain sub-50ms responsive.**
+  4. **Runtime Health:** Tokio async runtime remains unblocked. Telemetry task continues to fire exactly every 1.0s without starvation.
+  5. Telemetry reports massive "dropped frames" but zero "input delay".
 
 ---
 
