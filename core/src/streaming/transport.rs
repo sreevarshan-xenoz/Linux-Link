@@ -122,6 +122,8 @@ impl CertManager {
         let mut transport = quinn::TransportConfig::default();
         transport.datagram_send_buffer_size(16 * 1024 * 1024);
         transport.datagram_receive_buffer_size(Some(16 * 1024 * 1024));
+        transport.max_concurrent_uni_streams(1024u32.into());
+        transport.max_concurrent_bidi_streams(128u32.into());
 
         let mut crypto = rustls::ServerConfig::builder()
             .with_no_client_auth()
@@ -163,6 +165,8 @@ impl CertManager {
         let mut transport = quinn::TransportConfig::default();
         transport.datagram_send_buffer_size(16 * 1024 * 1024);
         transport.datagram_receive_buffer_size(Some(16 * 1024 * 1024));
+        transport.max_concurrent_uni_streams(1024u32.into());
+        transport.max_concurrent_bidi_streams(128u32.into());
         client_config.transport_config(Arc::new(transport));
 
         Ok(client_config)

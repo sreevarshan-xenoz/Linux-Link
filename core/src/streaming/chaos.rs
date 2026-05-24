@@ -118,7 +118,7 @@ pub mod proxy {
             let socket = Arc::new(socket);
             
             // Map of client addresses to their dedicated forwarder sockets
-            let clients: Arc<RwLock<std::collections::HashMap<SocketAddr, Arc<UdpSocket>>>> = 
+            let clients: Arc<RwLock<std::collections::HashMap<SocketAddr, (Arc<UdpSocket>, tokio::sync::mpsc::UnboundedSender<(tokio::time::Instant, Vec<u8>)>)>>> = 
                 Arc::new(RwLock::new(std::collections::HashMap::new()));
 
             info!("ChaosProxy listening on {} -> forwarding to {}", self.listen_addr, self.target_addr);
@@ -159,31 +159,56 @@ pub mod proxy {
                             }
 
                             // Ensure we have a proxy socket for this client to receive return traffic
-                            let mut c_guard = clients_ref.write().await;
-                            let fwd_sock = if let Some(s) = c_guard.get(&src_addr) {
-                                s.clone()
-                            } else {
-                                // Create a new socket to talk to the server on behalf of this client
-                                let s = Arc::new(UdpSocket::bind("0.0.0.0:0").await.unwrap());
-                                c_guard.insert(src_addr, s.clone());
-                                
-                                // Spawn a task to listen for return traffic from the server
-                                let s_clone = s.clone();
-                                let mut ret_buf = vec![0u8; 65535];
-                                tokio::spawn(async move {
-                                    loop {
-                                        if let Ok((n, _)) = s_clone.recv_from(&mut ret_buf).await {
-                                            let _ = server_sock.send_to(&ret_buf[..n], src_addr).await;
-                                        } else {
-                                            break;
-                                        }
+                            let fwd_sock = {
+                                let c_guard = clients_ref.read().await;
+                                if let Some((s, _)) = c_guard.get(&src_addr) {
+                                    s.clone()
+                                } else {
+                                    drop(c_guard);
+                                    let mut c_guard = clients_ref.write().await;
+                                    if let Some((s, _)) = c_guard.get(&src_addr) {
+                                        s.clone()
+                                    } else {
+                                        // Create a new socket to talk to the server on behalf of this client
+                                        let s = Arc::new(UdpSocket::bind("0.0.0.0:0").await.unwrap());
+                                        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(tokio::time::Instant, Vec<u8>)>();
+                                        c_guard.insert(src_addr, (s.clone(), tx));
+                                        
+                                        // Spawn a task to listen for return traffic from the server
+                                        let s_clone = s.clone();
+                                        let mut ret_buf = vec![0u8; 65535];
+                                        let server_sock_clone = server_sock.clone();
+                                        tokio::spawn(async move {
+                                            loop {
+                                                if let Ok((n, _)) = s_clone.recv_from(&mut ret_buf).await {
+                                                    let _ = server_sock_clone.send_to(&ret_buf[..n], src_addr).await;
+                                                } else {
+                                                    break;
+                                                }
+                                            }
+                                        });
+
+                                        // Spawn a task to send forwarded traffic in order
+                                        let s_clone2 = s.clone();
+                                        let target_clone = target;
+                                        tokio::spawn(async move {
+                                            while let Some((deliver_at, data)) = rx.recv().await {
+                                                tokio::time::sleep_until(deliver_at.into()).await;
+                                                let _ = s_clone2.send_to(&data, target_clone).await;
+                                            }
+                                        });
+
+                                        s
                                     }
-                                });
-                                s
+                                }
                             };
                             
-                            // Send to target
-                            let _ = fwd_sock.send_to(&data, target).await;
+                            // Queue packet for ordered delivery
+                            let c_guard = clients_ref.read().await;
+                            if let Some((_, tx)) = c_guard.get(&src_addr) {
+                                let deliver_at = tokio::time::Instant::now() + delay;
+                                let _ = tx.send((deliver_at, data));
+                            }
                         });
                     }
                 }
