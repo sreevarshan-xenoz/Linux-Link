@@ -6,20 +6,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/remote_file.dart';
 import '../rust_api_bridge.dart' as bridge;
 
-class FileItem {
-  final String name;
-  final bool isDirectory;
-  final String? size;
-  final String? modified;
-
-  const FileItem({
-    required this.name,
-    required this.isDirectory,
-    this.size,
-    this.modified,
-  });
-}
-
 class FileBrowserScreen extends ConsumerStatefulWidget {
   final String address;
   final int port;
