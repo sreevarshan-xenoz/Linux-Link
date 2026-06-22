@@ -9,4 +9,5 @@ pub mod kde;
 pub mod notification_monitor;
 pub mod plugins;
 pub mod service;
+pub mod state;
 pub mod v2_multiplexer;
