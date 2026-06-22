@@ -1,15 +1,19 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'clipboard_service.dart';
 import '../rust_api_bridge.dart' as bridge;
+import '../providers/clipboard_history_provider.dart';
 
 /// Service that periodically syncs clipboard content between Android and the remote PC.
 ///
 /// - Polls local Android clipboard every 3 seconds.
 /// - Listens for remote clipboard changes from the Rust backend.
 /// - Uses content hash comparison to avoid sync loops.
+/// - Records every unique clipboard change into [clipboardHistoryProvider].
 ///
 /// Call [start] when a streaming session begins, [stop] when it ends.
 class ClipboardSyncService {
@@ -22,6 +26,8 @@ class ClipboardSyncService {
   String? _currentAddress;
   int? _currentPort;
   bool _isRunning = false;
+  /// ProviderRef to record history entries (injected at start time).
+  ProviderRef? _ref;
 
   /// Whether the auto-sync feature is enabled in settings.
   static Future<bool> isEnabled() async {
@@ -36,13 +42,14 @@ class ClipboardSyncService {
   }
 
   /// Start the sync service. Call when streaming begins.
-  void start(String address, int port) {
+  void start(String address, int port, {ProviderRef? ref}) {
     if (_isRunning) return;
     _isRunning = true;
     _currentAddress = address;
     _currentPort = port;
     _lastLocalHash = '';
     _lastRemoteHash = '';
+    _ref = ref;
     _startLocalPolling();
     debugPrint('ClipboardSyncService: started');
   }
@@ -56,6 +63,7 @@ class ClipboardSyncService {
     _currentPort = null;
     _lastLocalHash = '';
     _lastRemoteHash = '';
+    _ref = null;
     debugPrint('ClipboardSyncService: stopped');
   }
 
@@ -63,6 +71,8 @@ class ClipboardSyncService {
   /// Updates the remote hash so local polling doesn't re-send it.
   void onRemoteClipboardChanged(String content) {
     _lastRemoteHash = _computeHash(content);
+    // Record into history
+    _recordHistory(content);
     // Push the remote content to the local Android clipboard
     ClipboardService.setClipboard(content);
     debugPrint('ClipboardSyncService: remote → local sync');
@@ -89,6 +99,8 @@ class ClipboardSyncService {
       if (hash == _lastLocalHash || hash == _lastRemoteHash) return;
 
       _lastLocalHash = hash;
+      // Record into history
+      _recordHistory(text);
       await bridge.rustApi.sendClipboard(address, port, text);
       debugPrint('ClipboardSyncService: local → remote sync');
     } catch (e) {
@@ -96,9 +108,18 @@ class ClipboardSyncService {
     }
   }
 
+  /// Record a clipboard change into the history ring buffer (if ref available).
+  void _recordHistory(String text) {
+    _ref?.read(clipboardHistoryProvider.notifier).addEntry(text);
+    debugPrint('ClipboardSyncService: recorded history entry (${text.length} chars)');
+  }
+
   String _computeHash(String content) {
-    return const JsonEncoder().convert(content.length) +
-        content.hashCode.toString();
+    // Use SHA-256 for a collision-resistant hash to reliably detect real changes.
+    // The previous approach (content.length + content.hashCode) had high
+    // collision probability due to Dart's 32-bit hash and weak mixing.
+    final bytes = utf8.encode(content);
+    return sha256.convert(bytes).toString();
   }
 }
 
