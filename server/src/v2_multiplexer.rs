@@ -10,7 +10,7 @@ use linux_link_core::protocol::v2::{
     perform_v2_handshake, read_framed_json, write_framed_json, ChannelKind, IdentityPacketV2,
 };
 
-use crate::service::ACTIVE_CLIENTS;
+use crate::state;
 
 /// Handles a v2 multiplexed QUIC session.
 pub async fn handle_v2_session(
@@ -52,12 +52,8 @@ pub async fn handle_v2_session(
             session_id.clone(),
         ));
 
-        // Register v2 client for broadcasts
-        {
-            let mut clients = ACTIVE_CLIENTS.lock().await;
-            clients.push(Arc::clone(&sender));
-            debug!(active_clients = clients.len(), "v2 Client registered for broadcasts");
-        }
+        // Register v2 client for broadcasts and enforce single-session rule
+        state::register_client(Arc::clone(&sender)).await;
 
         // Spawn a dedicated task for the control stream (Stream 0) to ensure cancellation safety
         let control_registry = Arc::clone(&registry);
@@ -121,11 +117,7 @@ pub async fn handle_v2_session(
 
         // Cleanup
         control_task.abort(); // Ensure the control task is terminated immediately
-        {
-            let mut clients = ACTIVE_CLIENTS.lock().await;
-            clients.retain(|c| c.connection_id() != session_id);
-            info!(active_clients = clients.len(), "v2 Client disconnected, removed from registry");
-        }
+        state::unregister_client(&session_id).await;
 
         info!("v2 session ended");
         Ok(())
