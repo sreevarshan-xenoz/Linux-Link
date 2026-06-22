@@ -9,7 +9,7 @@ use linux_link_core::protocol::kdeconnect::PluginRegistry;
 
 // We need to access handle_v2_session and ACTIVE_CLIENTS
 use linux_link_server::v2_multiplexer::handle_v2_session;
-use linux_link_server::service::ACTIVE_CLIENTS;
+use linux_link_server::state::ACTIVE_CLIENTS;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_reconnect_storm_kills_stale_sessions() -> anyhow::Result<()> {
