@@ -2,6 +2,7 @@ use crate::config::Config;
 use crate::input_injector::InputInjector;
 use crate::kde;
 use crate::notification_monitor::start_notification_monitor;
+use crate::state;
 use uuid;
 use anyhow::{Context, Result, bail};
 use linux_link_core::protocol::connection::ConnectionManager;
@@ -17,20 +18,15 @@ use linux_link_core::tailscale::{DiscoveryEvent, DiscoveryService, TailscaleClie
 use crate::v2_multiplexer::handle_v2_session;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::LazyLock;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::time::timeout;
 
-/// Active KDE Connect client connections for broadcasting notifications.
-pub static ACTIVE_CLIENTS: LazyLock<Mutex<Vec<Arc<dyn DeviceSender>>>> =
-    LazyLock::new(|| Mutex::new(Vec::new()));
-
 pub async fn run(config: Config) -> Result<()> {
-    let pid_file = pid_file_path()?;
-    write_pid_file(&pid_file)?;
+    let pid_file = state::pid_file_path()?;
+    state::write_pid_file(&pid_file)?;
     let _pid_guard = PidFileGuard { path: pid_file };
 
     let tailscale = TailscaleClient::new().context("failed to initialize Tailscale client")?;
@@ -86,7 +82,7 @@ pub async fn run(config: Config) -> Result<()> {
     });
 
     // Prepare shared state for v2 multiplexer and v1 streaming
-    let cert_manager = Arc::new(CertManager::new().expect("Failed to create CertManager"));
+    let cert_manager = Arc::new(CertManager::new().context("Failed to create CertManager")?);
     let registry = Arc::new(kde_service.registry.clone_for_dispatch());
     let local_v2_identity = IdentityPacketV2 {
         device_id: kde_service.identity.as_ref().map(|i| i.device_id.clone()).unwrap_or_default(),
@@ -105,13 +101,14 @@ pub async fn run(config: Config) -> Result<()> {
 
     // QUIC Multiplexer (v2) and Streaming (v1) listener
     let streaming_port = config.streaming_port;
-    let quic_addr = format!("0.0.0.0:{}", streaming_port).parse::<std::net::SocketAddr>().unwrap();
+    let quic_addr = format!("0.0.0.0:{}", streaming_port).parse::<std::net::SocketAddr>()
+        .with_context(|| format!("invalid QUIC listen address for port {streaming_port}"))?;
     let alpns = vec![
         ALPN_V2.to_vec(),
         b"linux-link-stream".to_vec(),
     ];
-    let server_config = cert_manager.server_config(alpns).expect("Failed to create server config");
-    let quic_endpoint = quinn::Endpoint::server(server_config, quic_addr).expect("Failed to bind QUIC endpoint");
+    let server_config = cert_manager.server_config(alpns).context("Failed to create QUIC server config")?;
+    let quic_endpoint = quinn::Endpoint::server(server_config, quic_addr).context("Failed to bind QUIC endpoint")?;
     tracing::info!("Unified QUIC listener ready on {}", quic_addr);
 
     // F19: Start notification monitor for forwarding PC notifications to Android clients
@@ -129,10 +126,7 @@ pub async fn run(config: Config) -> Result<()> {
                             Ok(packet) => {
                                 // Optimized: Clone the list of clients and release the lock immediately
                                 // to prevent slow clients from blocking the entire registration system.
-                                let clients = {
-                                    let clients_guard = ACTIVE_CLIENTS.lock().await;
-                                    clients_guard.clone()
-                                };
+                                let clients = state::clone_clients().await;
 
                                 let mut dead_clients = Vec::new();
                                 for sender in clients.iter() {
@@ -144,8 +138,7 @@ pub async fn run(config: Config) -> Result<()> {
 
                                 // Prune dead clients if any were detected
                                 if !dead_clients.is_empty() {
-                                    let mut clients_guard = ACTIVE_CLIENTS.lock().await;
-                                    clients_guard.retain(|c| !dead_clients.iter().any(|d| d == c.connection_id()));
+                                    state::prune_dead_clients(&dead_clients).await;
                                 }
 
                                 if !clients.is_empty() {
@@ -305,7 +298,7 @@ pub async fn run(config: Config) -> Result<()> {
 }
 
 pub async fn stop() -> Result<()> {
-    let pid_file = pid_file_path()?;
+    let pid_file = state::pid_file_path()?;
     if !pid_file.exists() {
         println!("No running Linux Link server found");
         return Ok(());
@@ -516,12 +509,8 @@ async fn handle_connection_with_kde(
         // Update span with device_id
         tracing::Span::current().record("peer", &device_id);
 
-        // Register this client for notification broadcasting
-        {
-            let mut clients = ACTIVE_CLIENTS.lock().await;
-            clients.push(Arc::clone(&sender));
-            tracing::debug!(active_clients = clients.len(), "Client registered for broadcasts");
-        }
+        // Register this client for notification broadcasting and enforce single-session rule
+        state::register_client(sender.clone()).await;
 
         tracing::info!("Entering main packet loop");
         loop {
@@ -566,12 +555,7 @@ async fn handle_connection_with_kde(
         }
 
         // Cleanup
-        {
-            let conn_id_to_remove = sender.connection_id().to_string();
-            let mut clients = ACTIVE_CLIENTS.lock().await;
-            clients.retain(|c| c.connection_id() != conn_id_to_remove);
-            tracing::info!(active_clients = clients.len(), "Client disconnected, removed from registry");
-        }
+        state::unregister_client(sender.connection_id()).await;
 
         Ok(())
     }
@@ -623,7 +607,7 @@ pub async fn pair(pin: Option<String>) -> Result<()> {
         None => generate_pin(),
     };
 
-    let path = pair_pin_path()?;
+    let path = state::pair_pin_path()?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
@@ -677,41 +661,31 @@ async fn resolve_peer_address(client: &TailscaleClient, peer_hint: &str) -> Resu
     bail!("peer not found on tailnet: {}", peer_hint)
 }
 
-fn pid_file_path() -> Result<PathBuf> {
-    Ok(state_dir()?.join("server.pid"))
-}
 
-fn pair_pin_path() -> Result<PathBuf> {
-    Ok(state_dir()?.join("pairing.pin"))
-}
-
-fn state_dir() -> Result<PathBuf> {
-    let base = dirs::state_dir()
-        .or_else(dirs::data_local_dir)
-        .context("unable to determine local state directory")?;
-    Ok(base.join("linux-link"))
-}
-
-fn write_pid_file(path: &PathBuf) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
-    }
-    std::fs::write(path, format!("{}\n", std::process::id()))
-        .with_context(|| format!("failed to write {}", path.display()))?;
-    Ok(())
-}
 
 fn is_valid_pin(pin: &str) -> bool {
     pin.len() == 6 && pin.chars().all(|c| c.is_ascii_digit())
 }
 
 fn generate_pin() -> String {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
-        .unwrap_or(0);
-    format!("{:06}", nanos % 1_000_000)
+    use std::io::Read;
+    // Use OS-level CSPRNG for secure PIN generation.
+    // Falls back to nanosecond entropy if /dev/urandom is unavailable.
+    let mut buf = [0u8; 4];
+    let val = if std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut buf))
+        .is_ok()
+    {
+        u32::from_ne_bytes(buf) % 1_000_000
+    } else {
+        // Fallback: timestamp-based entropy (less secure but non-zero)
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0);
+        nanos % 1_000_000
+    };
+    format!("{:06}", val)
 }
 
 /// Handle an `InputPacket` received over the QUIC streaming channel by injecting
