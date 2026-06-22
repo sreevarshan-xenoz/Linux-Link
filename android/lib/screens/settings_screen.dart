@@ -53,8 +53,6 @@ class ResolutionPreset {
   ];
 }
 
-enum InputMode { trackpad, touch, mouse }
-
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
 
@@ -65,7 +63,6 @@ class SettingsScreen extends ConsumerStatefulWidget {
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   bool _tailscaleEnabled = true;
   VideoQuality _videoQuality = VideoQuality.high;
-  InputMode _inputMode = InputMode.trackpad;
   int _connectionTimeout = 30;
   String _version = '1.0.0';
   bool _isTestingConnection = false;
@@ -75,7 +72,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   static const _keyTailscaleEnabled = 'tailscale_enabled';
   static const _keyVideoQuality = 'video_quality';
-  static const _keyInputMode = 'input_mode';
   static const _keyConnectionTimeout = 'connection_timeout';
   static const _keyCustomQuality = 'custom_quality';
   static const _keyClipboardAutoSync = 'clipboard_auto_sync';
@@ -95,9 +91,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       _videoQuality = VideoQuality.values.firstWhere(
           (e) => e.name == prefs.getString(_keyVideoQuality),
           orElse: () => VideoQuality.high);
-      _inputMode = InputMode.values.firstWhere(
-          (e) => e.name == prefs.getString(_keyInputMode),
-          orElse: () => InputMode.trackpad);
       _connectionTimeout = prefs.getInt(_keyConnectionTimeout) ?? 30;
       _clipboardAutoSync = prefs.getBool(_keyClipboardAutoSync) ?? false;
       _notificationMirror = prefs.getBool(_keyNotificationMirror) ?? true;
@@ -257,7 +250,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               style: const TextStyle(fontSize: 13),
             ),
             DropdownButtonFormField<ResolutionPreset>(
-              initialValue: ResolutionPreset.presets.firstWhere(
+              value: ResolutionPreset.presets.firstWhere(
                 (r) =>
                     r.width == _customQuality.width &&
                     r.height == _customQuality.height,
@@ -420,47 +413,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           if (_videoQuality == VideoQuality.custom)
             _buildCustomQualitySection(theme),
           const Divider(),
-          // Input mode
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-            child: Text(
-              'Input Mode',
-              style: theme.textTheme.titleSmall?.copyWith(
-                color: theme.colorScheme.primary,
-              ),
-            ),
-          ),
-          RadioGroup<InputMode>(
-            groupValue: _inputMode,
-            onChanged: (InputMode? value) {
-              if (value != null) {
-                setState(() {
-                  _inputMode = value;
-                });
-                _saveSetting(_keyInputMode, value.name);
-              }
-            },
-            child: const Column(
-              children: [
-                RadioListTile<InputMode>(
-                  title: Text('Trackpad'),
-                  subtitle: Text('Relative movement, like a laptop trackpad'),
-                  value: InputMode.trackpad,
-                ),
-                RadioListTile<InputMode>(
-                  title: Text('Touch'),
-                  subtitle: Text('Direct touch on screen'),
-                  value: InputMode.touch,
-                ),
-                RadioListTile<InputMode>(
-                  title: Text('Mouse'),
-                  subtitle: Text('External mouse via Bluetooth/USB'),
-                  value: InputMode.mouse,
-                ),
-              ],
-            ),
-          ),
-          const Divider(),
+
           // F2: Multi-Monitor selection
           ListTile(
             leading: const Icon(Icons.monitor),
