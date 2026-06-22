@@ -193,7 +193,7 @@ impl StreamingServer {
         let conn_for_transport = connection.clone();
         let conn_for_monitor = connection.clone();
         let conn_for_bitrate = connection.clone();
-        let conn_for_audio = connection.clone();
+        let _conn_for_audio = connection.clone();
 
         // Task 2: Video encoding
         // Clone config for encoder (bitrate will be updated via watch channel)
@@ -462,130 +462,12 @@ impl StreamingServer {
 
         // Task 6: Audio capture + Opus encoding + QUIC send (F1: Audio Streaming)
         let audio_cancel = cancel.clone();
-        let audio_pipeline_cancel = cancel.clone();
-        let audio_span = tracing::info_span!("audio_pipeline");
+        let audio_conn = connection.clone();
         tasks.spawn(async move {
-            info!("Audio task started");
-
-            let audio_config = AudioConfig {
-                sample_rate: 48000,
-                channels: 2,
-                bitrate_bps: 64_000,
-                frame_duration_ms: 20,
-            };
-
-            let mut encoder = match AudioOpusEncoder::new(audio_config) {
-                Ok(e) => e,
-                Err(e) => {
-                    error!(error = %e, "Failed to create Opus encoder");
-                    return;
-                }
-            };
-
-            let frame_samples = encoder.config().samples_per_frame();
-            let channels = encoder.config().channels;
-            let frame_size_ms = encoder.config().frame_duration_ms as u64;
-
-            // Try PipeWire audio loopback capture
-            let (pcm_tx, mut pcm_rx) = mpsc::channel::<audio_capture::PcmBuffer>(8);
-            let pw_cancel = audio_pipeline_cancel.clone();
-            let pw_err = match audio_capture::start_audio_capture(
-                48000, 2, 20, pcm_tx, pw_cancel,
-            )
-            .await
-            {
-                Ok(_session) => {
-                    info!("PipeWire audio loopback active");
-                    None
-                }
-                Err(e) => {
-                    info!(error = %e, "PipeWire audio capture unavailable, falling back to silence");
-                    Some(e)
-                }
-            };
-            let using_pipewire = pw_err.is_none();
-
-            // Silence fallback buffer
-            let silence_buffer = vec![0i16; frame_samples * channels as usize];
-            let mut silence_interval = tokio::time::interval(Duration::from_millis(frame_size_ms));
-            silence_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
-            let mut packet_seq = 0u64;
-            let mut packets_sent = 0u64;
-            let mut connection_closed = false;
-
-            if using_pipewire {
-                loop {
-                    tokio::select! {
-                        biased;
-                        _ = audio_cancel.cancelled() => {
-                            info!(packets = packets_sent, "Audio task cancelled");
-                            break;
-                        }
-                        pcm = pcm_rx.recv() => {
-                            let Some(pcm) = pcm else {
-                                info!("Audio capture source closed");
-                                break;
-                            };
-                            if connection_closed { break; }
-
-                            let packet = match encoder.encode(&pcm.data) {
-                                Ok(Some(p)) => p,
-                                Ok(None) => continue,
-                                Err(e) => { debug!(error = %e, "Opus encode skip"); continue; }
-                            };
-
-                            if let Err(e) = send_audio_packet(
-                                &conn_for_audio, packet, packet_seq, &mut connection_closed,
-                            ).await {
-                                warn!(error = %e, "Audio transport failed");
-                                connection_closed = true;
-                                continue;
-                            }
-
-                            packets_sent += 1;
-                            packet_seq += 1;
-
-                            if packets_sent % 600 == 0 {
-                                debug!(sent = packets_sent, "Audio streaming healthy");
-                            }
-                        }
-                    }
-                }
-            } else {
-                loop {
-                    tokio::select! {
-                        biased;
-                        _ = audio_cancel.cancelled() => {
-                            info!(packets = packets_sent, "Silence audio task cancelled");
-                            break;
-                        }
-                        _ = silence_interval.tick() => {
-                            if connection_closed { break; }
-
-                            let packet = match encoder.encode(&silence_buffer) {
-                                Ok(Some(p)) => p,
-                                Ok(None) => continue,
-                                Err(e) => { debug!(error = %e, "Silence encode skip"); continue; }
-                            };
-
-                            if let Err(e) = send_audio_packet(
-                                &conn_for_audio, packet, packet_seq, &mut connection_closed,
-                            ).await {
-                                warn!(error = %e, "Silence audio transport failed");
-                                connection_closed = true;
-                                continue;
-                            }
-
-                            packets_sent += 1;
-                            packet_seq += 1;
-                        }
-                    }
-                }
+            if let Err(e) = run_audio_pipeline(audio_conn, audio_cancel).await {
+                error!(error = %e, "Audio pipeline failed");
             }
-
-            info!(packets_sent, "Audio task complete");
-        }.instrument(audio_span));
+        }.instrument(tracing::info_span!("audio_pipeline")));
 
         // Wait for all tasks to complete or connection to close
         let result = tasks.join_next().await;
@@ -721,6 +603,127 @@ impl AdaptiveBitrateMonitor {
             }
         }
     }
+}
+
+/// Audio pipeline: capture → Opus encode → QUIC send.
+///
+/// Tries PipeWire loopback capture first; falls back to silence frames if
+/// unavailable. Runs until cancelled or the connection closes.
+async fn run_audio_pipeline(
+    connection: quinn::Connection,
+    cancel: CancellationToken,
+) -> Result<()> {
+    info!("Audio task started");
+
+    let audio_config = AudioConfig {
+        sample_rate: 48000,
+        channels: 2,
+        bitrate_bps: 64_000,
+        frame_duration_ms: 20,
+    };
+
+    let mut encoder = AudioOpusEncoder::new(audio_config)
+        .context("Failed to create Opus encoder")?;
+
+    let frame_samples = encoder.config().samples_per_frame();
+    let channels = encoder.config().channels;
+    let frame_size_ms = encoder.config().frame_duration_ms as u64;
+
+    // Try PipeWire audio loopback capture
+    let (pcm_tx, mut pcm_rx) = mpsc::channel::<audio_capture::PcmBuffer>(8);
+    let pw_cancel = cancel.clone();
+    let using_pipewire = match audio_capture::start_audio_capture(48000, 2, 20, pcm_tx, pw_cancel).await {
+        Ok(_session) => {
+            info!("PipeWire audio loopback active");
+            true
+        }
+        Err(e) => {
+            info!(error = %e, "PipeWire audio capture unavailable, falling back to silence");
+            false
+        }
+    };
+
+    // Silence fallback buffer
+    let silence_buffer = vec![0i16; frame_samples * channels as usize];
+    let mut silence_interval = tokio::time::interval(Duration::from_millis(frame_size_ms));
+    silence_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    let mut packet_seq = 0u64;
+    let mut packets_sent = 0u64;
+    let mut connection_closed = false;
+
+    if using_pipewire {
+        loop {
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => {
+                    info!(packets = packets_sent, "Audio task cancelled");
+                    break;
+                }
+                pcm = pcm_rx.recv() => {
+                    let Some(pcm) = pcm else {
+                        info!("Audio capture source closed");
+                        break;
+                    };
+                    if connection_closed { break; }
+
+                    let packet = match encoder.encode(&pcm.data) {
+                        Ok(Some(p)) => p,
+                        Ok(None) => continue,
+                        Err(e) => { debug!(error = %e, "Opus encode skip"); continue; }
+                    };
+
+                    if let Err(e) = send_audio_packet(
+                        &connection, packet, packet_seq, &mut connection_closed,
+                    ).await {
+                        warn!(error = %e, "Audio transport failed");
+                        connection_closed = true;
+                        continue;
+                    }
+
+                    packets_sent += 1;
+                    packet_seq += 1;
+
+                    if packets_sent % 600 == 0 {
+                        debug!(sent = packets_sent, "Audio streaming healthy");
+                    }
+                }
+            }
+        }
+    } else {
+        loop {
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => {
+                    info!(packets = packets_sent, "Silence audio task cancelled");
+                    break;
+                }
+                _ = silence_interval.tick() => {
+                    if connection_closed { break; }
+
+                    let packet = match encoder.encode(&silence_buffer) {
+                        Ok(Some(p)) => p,
+                        Ok(None) => continue,
+                        Err(e) => { debug!(error = %e, "Silence encode skip"); continue; }
+                    };
+
+                    if let Err(e) = send_audio_packet(
+                        &connection, packet, packet_seq, &mut connection_closed,
+                    ).await {
+                        warn!(error = %e, "Silence audio transport failed");
+                        connection_closed = true;
+                        continue;
+                    }
+
+                    packets_sent += 1;
+                    packet_seq += 1;
+                }
+            }
+        }
+    }
+
+    info!(packets_sent, "Audio task complete");
+    Ok(())
 }
 
 /// Helper: send an encoded audio packet over the QUIC connection.
