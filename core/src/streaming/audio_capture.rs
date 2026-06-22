@@ -203,9 +203,12 @@ fn on_audio_process(stream: &pipewire::stream::Stream, ud: &mut AudioStreamData)
         return;
     }
 
-    // PipeWire gives us interleaved s16 samples
-    let sample_count = size.min(data_slice.len()) / 2;
-    let pcm_data: Vec<i16> = data_slice[..sample_count * 2]
+    // PipeWire gives us interleaved s16 samples.
+    // Cap the read to the actual available data length.
+    let byte_count = size.min(data_slice.len());
+    // Ensure we read an even number of bytes (each sample is 2 bytes).
+    let byte_count = byte_count & !1;
+    let pcm_data: Vec<i16> = data_slice[..byte_count]
         .chunks(2)
         .map(|chunk| i16::from_ne_bytes([chunk[0], chunk[1]]))
         .collect();
