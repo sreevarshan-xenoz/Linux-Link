@@ -210,7 +210,7 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
   void _showConnectDialog() {
     final addressController = TextEditingController();
     final portController = TextEditingController(text: '1716');
-    final nameController = TextEditingController(text: 'Arch Linux Server');
+    final nameController = TextEditingController();
 
     showDialog(
       context: context,
@@ -260,9 +260,9 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
             ),
             const SizedBox(height: 8),
             Text(
-              'Tip: Your Arch Linux server IP is 100.66.52.120',
+              'Enter the IP address shown on your server\'s status output.',
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(context).colorScheme.primary,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
             ),
           ],
@@ -393,6 +393,16 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
   void initState() {
     super.initState();
     _refreshPeers();
+    _loadManualPeers();
+  }
+
+  Future<void> _loadManualPeers() async {
+    final peers = await conn.loadManualPeers();
+    if (mounted && peers.isNotEmpty) {
+      ref.read(conn.manualPeersProvider.notifier).state = peers;
+      debugPrint(
+          'ConnectionScreen: loaded ${peers.length} manual peer(s) from storage');
+    }
   }
 
   @override
