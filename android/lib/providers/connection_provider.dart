@@ -1,4 +1,7 @@
+import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/peer_info.dart';
 
 enum ConnectionState { disconnected, connecting, connected, error }
@@ -49,6 +52,36 @@ class PeersNotifier extends StateNotifier<List<PeerInfo>> {
   }
 }
 
+/// SharedPreferences key for persisting manual peers.
+const _manualPeersPrefKey = 'manual_peers';
+
+/// Load manually-added peers from SharedPreferences.
+Future<List<PeerInfo>> loadManualPeers() async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final json = prefs.getString(_manualPeersPrefKey);
+    if (json == null || json.isEmpty) return [];
+    final list = jsonDecode(json) as List<dynamic>;
+    return list
+        .map((e) => PeerInfo.fromJson(e as Map<String, dynamic>))
+        .toList();
+  } catch (e) {
+    debugPrint('Failed to load manual peers: $e');
+    return [];
+  }
+}
+
+/// Persist manual peers to SharedPreferences.
+Future<void> saveManualPeers(List<PeerInfo> peers) async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final json = jsonEncode(peers.map((p) => p.toJson()).toList());
+    await prefs.setString(_manualPeersPrefKey, json);
+  } catch (e) {
+    debugPrint('Failed to save manual peers: $e');
+  }
+}
+
 class ManualPeersNotifier extends StateNotifier<List<PeerInfo>> {
   ManualPeersNotifier() : super([]);
 
@@ -60,13 +93,23 @@ class ManualPeersNotifier extends StateNotifier<List<PeerInfo>> {
       online: true,
     );
     state = [...state, peer];
+    _persist();
   }
 
   void removePeer(String name) {
     state = state.where((p) => p.name != name).toList();
+    _persist();
   }
 
   void clear() {
     state = [];
+    _persist();
+  }
+
+  /// Asynchronously persist current state to SharedPreferences.
+  /// Fire-and-forget — errors are logged internally.
+  void _persist() {
+    final snapshot = state;
+    saveManualPeers(snapshot);
   }
 }
