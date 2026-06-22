@@ -1966,6 +1966,7 @@ dependencies = [
  "evdev",
  "linux-link-core",
  "quinn",
+ "rustls",
  "serde",
  "serde_json",
  "tokio",
