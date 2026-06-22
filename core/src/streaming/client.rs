@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use super::input_packet::InputPacket;
-use super::transport::{self, CertManager, StreamClient, StreamTransportConfig};
+use super::transport::{self, CertManager, StreamTransportConfig};
 use super::{AudioPacket, EncodedPacket};
 
 /// Default port for the streaming service.
@@ -35,16 +35,9 @@ const MONITOR_CONFIG_MARKER: [u8; 2] = [0xFF, 0x00];
 /// ```
 pub struct StreamingClient {
     connection: Option<quinn::Connection>,
-    #[allow(dead_code)]
-    transport_config: StreamTransportConfig,
-    #[allow(dead_code)]
-    cert_manager: std::sync::Arc<CertManager>,
     frame_tx: mpsc::Sender<EncodedPacket>,
-    #[allow(dead_code)]
     audio_tx: mpsc::Sender<AudioPacket>,
     cancel: CancellationToken,
-    #[allow(dead_code)]
-    channel_capacity: usize,
     /// Unique session ID for tracking this connection
     session_id: String,
 }
@@ -57,19 +50,16 @@ impl StreamingClient {
     /// video. Returns the client and receiver channels for consuming frames and audio.
     pub fn new(
         channel_capacity: usize,
-        cert_manager: std::sync::Arc<CertManager>,
+        _cert_manager: std::sync::Arc<CertManager>,
     ) -> (Self, mpsc::Receiver<EncodedPacket>, mpsc::Receiver<AudioPacket>) {
         let (frame_tx, frame_rx) = mpsc::channel(channel_capacity);
         let (audio_tx, audio_rx) = mpsc::channel(channel_capacity);
         let client = Self {
             connection: None,
-            transport_config: StreamTransportConfig::default(),
-            cert_manager,
             frame_tx,
             audio_tx,
             cancel: CancellationToken::new(),
-            channel_capacity,
-            session_id: "".to_string(), // Will be initialized on connect
+            session_id: String::new(),
         };
         (client, frame_rx, audio_rx)
     }
@@ -110,7 +100,7 @@ impl StreamingClient {
         async move {
             info!("Connecting to streaming server");
 
-            let transport = StreamClient::new(StreamTransportConfig::default(), &cert_manager)
+            let transport = super::transport::StreamClient::new(StreamTransportConfig::default(), &cert_manager)
                 .context("Failed to create QUIC transport")?;
 
             let server_name = addr.ip().to_string();
@@ -148,12 +138,9 @@ impl StreamingClient {
 
             let client = Self {
                 connection: Some(connection),
-                transport_config: StreamTransportConfig::default(),
-                cert_manager,
                 frame_tx,
                 audio_tx,
                 cancel: CancellationToken::new(),
-                channel_capacity,
                 session_id,
             };
 
