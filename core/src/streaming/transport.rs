@@ -149,6 +149,7 @@ impl CertManager {
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(TofuVerifier {
                 known_peers: self.known_peers.clone(),
+                peers_path: self.peers_path.clone(),
             }))
             .with_no_client_auth();
 
@@ -231,6 +232,8 @@ fn generate_identity() -> Result<(Vec<u8>, Vec<u8>)> {
 #[derive(Debug)]
 struct TofuVerifier {
     known_peers: Arc<Mutex<HashMap<String, [u8; 32]>>>,
+    /// Optional path for persisting known peers to disk on first-accept.
+    peers_path: Option<PathBuf>,
 }
 
 impl rustls::client::danger::ServerCertVerifier for TofuVerifier {
@@ -276,6 +279,14 @@ impl rustls::client::danger::ServerCertVerifier for TofuVerifier {
                 // New peer — TOFU: auto-accept and store.
                 info!("TOFU: first connection to {label}, accepting cert");
                 peers.insert(label, hash);
+                // Persist to disk so the trust survives restarts.
+                if let Some(path) = &self.peers_path {
+                    if let Ok(json) = serde_json::to_string_pretty(&*peers) {
+                        if let Err(e) = std::fs::write(path, json) {
+                            warn!("TOFU: failed to persist known peers: {e}");
+                        }
+                    }
+                }
                 Ok(rustls::client::danger::ServerCertVerified::assertion())
             }
         }
