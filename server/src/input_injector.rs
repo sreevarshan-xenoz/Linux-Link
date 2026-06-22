@@ -19,6 +19,42 @@ const EV_REL: u16 = 0x02;
 const EV_SYN: u16 = 0x00;
 const SYN_REPORT: u16 = 0;
 
+/// Canonical mapping between Linux evdev keycodes and enigo Key values.
+/// This is the single source of truth for key translation between backends.
+/// `keycode_to_enigo` and `key_to_evdev` must both derive from this table.
+const KEYCODE_MAP: &[(u16, Key)] = &[
+    // Functional keys
+    (1, Key::Escape),           // KEY_ESC
+    (14, Key::Backspace),       // KEY_BACKSPACE
+    (15, Key::Tab),             // KEY_TAB
+    (28, Key::Return),          // KEY_ENTER
+    (57, Key::Space),           // KEY_SPACE
+    // Navigation
+    (102, Key::Home),           // KEY_HOME
+    (103, Key::UpArrow),        // KEY_UP
+    (104, Key::PageUp),         // KEY_PAGEUP
+    (105, Key::LeftArrow),      // KEY_LEFT
+    (106, Key::RightArrow),     // KEY_RIGHT
+    (107, Key::End),            // KEY_END
+    (108, Key::DownArrow),      // KEY_DOWN
+    (109, Key::PageDown),       // KEY_PAGEDOWN
+    (110, Key::Insert),         // KEY_INSERT
+    (111, Key::Delete),         // KEY_DELETE
+    // Function keys
+    (59, Key::F1),              // KEY_F1
+    (60, Key::F2),              // KEY_F2
+    (61, Key::F3),              // KEY_F3
+    (62, Key::F4),              // KEY_F4
+    (63, Key::F5),              // KEY_F5
+    (64, Key::F6),              // KEY_F6
+    (65, Key::F7),              // KEY_F7
+    (66, Key::F8),              // KEY_F8
+    (67, Key::F9),              // KEY_F9
+    (68, Key::F10),             // KEY_F10
+    (87, Key::F11),             // KEY_F11
+    (88, Key::F12),             // KEY_F12
+];
+
 /// Backend for input injection.
 #[derive(Debug)]
 enum InputBackend {
@@ -285,31 +321,10 @@ impl InputInjector {
                 key,
                 pressed,
             } => {
-                // Key events handled via the binary QUIC channel for ultra-low latency.
-                // Map the evdev keycode back to an enigo key or use directly for uinput.
-                match &mut self.backend {
-                    InputBackend::Enigo(enigo) => {
-                        let e = enigo.get_mut().unwrap();
-                        let key = keycode_to_enigo(*key);
-                        if *pressed {
-                            e.key(key, enigo::Direction::Press)
-                                .context("enigo key press failed (QUIC)")?;
-                        } else {
-                            e.key(key, enigo::Direction::Release)
-                                .context("enigo key release failed (QUIC)")?;
-                        }
-                    }
-                    InputBackend::Uinput(device) => {
-                        let dev = device.get_mut().unwrap();
-                        let value = if *pressed { 1 } else { 0 };
-                        let events = [
-                            InputEvent::new(EV_KEY, *key, value),
-                            InputEvent::new(EV_SYN, SYN_REPORT, 0),
-                        ];
-                        dev.emit(&events).context("uinput key event failed (QUIC)")?;
-                    }
-                }
-                Ok(())
+                // Key events arrive as Linux evdev keycodes over the QUIC channel.
+                // Map to enigo Key and delegate to self.key() which handles both backends.
+                let enigo_key = keycode_to_enigo(*key);
+                self.key(enigo_key, *pressed)
             }
             InputPacket::Text(text) => self.text(text),
             InputPacket::Gamepad { axes, buttons } => {
@@ -411,102 +426,78 @@ pub fn button_id_to_mouse(button: i32) -> MouseKey {
 }
 
 /// Map a Linux evdev keycode to an enigo Key.
+/// Uses KEYCODE_MAP as the single source of truth.
 fn keycode_to_enigo(code: u16) -> Key {
-    match code {
-        36 => Key::Return,
-        14 => Key::Backspace,
-        65 => Key::Space,
-        23 => Key::Tab,
-        1 => Key::Escape,
-        103 => Key::UpArrow,
-        108 => Key::DownArrow,
-        105 => Key::LeftArrow,
-        106 => Key::RightArrow,
-        59..=68 => Key::F1, // F1-F10 approximate mapping
-        _ => Key::Unicode(std::char::from_u32(code as u32).unwrap_or('?')),
-    }
+    KEYCODE_MAP
+        .iter()
+        .find(|&&(k, _)| k == code)
+        .map(|&(_, key)| key)
+        .unwrap_or_else(|| Key::Unicode(std::char::from_u32(code as u32).unwrap_or('?')))
 }
 
 /// Map an enigo Key to an evdev KeyCode for uinput backend.
+/// Uses KEYCODE_MAP as the single source of truth (reverse lookup).
 fn key_to_evdev(key: Key) -> KeyCode {
+    // Check the canonical table first
+    if let Some(&(code, _)) = KEYCODE_MAP.iter().find(|&(_, k)| *k == key) {
+        return KeyCode(code);
+    }
+    // Fall back to character-based mapping for Unicode keys
     match key {
-        Key::Return => KeyCode::KEY_ENTER,
-        Key::Backspace => KeyCode::KEY_BACKSPACE,
-        Key::Space => KeyCode::KEY_SPACE,
-        Key::Tab => KeyCode::KEY_TAB,
-        Key::Escape => KeyCode::KEY_ESC,
-        Key::UpArrow => KeyCode::KEY_UP,
-        Key::DownArrow => KeyCode::KEY_DOWN,
-        Key::LeftArrow => KeyCode::KEY_LEFT,
-        Key::RightArrow => KeyCode::KEY_RIGHT,
-        Key::F1 => KeyCode::KEY_F1,
-        Key::F2 => KeyCode::KEY_F2,
-        Key::F3 => KeyCode::KEY_F3,
-        Key::F4 => KeyCode::KEY_F4,
-        Key::F5 => KeyCode::KEY_F5,
-        Key::F6 => KeyCode::KEY_F6,
-        Key::F7 => KeyCode::KEY_F7,
-        Key::F8 => KeyCode::KEY_F8,
-        Key::F9 => KeyCode::KEY_F9,
-        Key::F10 => KeyCode::KEY_F10,
-        Key::F11 => KeyCode::KEY_F11,
-        Key::F12 => KeyCode::KEY_F12,
-        Key::Delete => KeyCode::KEY_DELETE,
-        Key::Insert => KeyCode::KEY_INSERT,
-        Key::Home => KeyCode::KEY_HOME,
-        Key::End => KeyCode::KEY_END,
-        Key::PageUp => KeyCode::KEY_PAGEUP,
-        Key::PageDown => KeyCode::KEY_PAGEDOWN,
-        Key::Unicode(ch) => char_to_evdev_key(ch).unwrap_or(KeyCode::KEY_UNKNOWN),
+        Key::Unicode(ch) => char_to_keycode(ch).map(KeyCode).unwrap_or(KeyCode::KEY_UNKNOWN),
         _ => KeyCode::KEY_UNKNOWN,
     }
 }
 
 /// Map a character to a Linux evdev keycode.
 /// Only handles basic ASCII. Returns None for unsupported characters.
+/// Uses evdev KeyCode constants for readability and correctness.
 fn char_to_keycode(ch: char) -> Option<u16> {
     match ch {
         // QWERTY layout keycodes (evdev standard)
-        'q' | 'Q' => Some(16),
-        'w' | 'W' => Some(17),
-        'e' | 'E' => Some(18),
-        'r' | 'R' => Some(19),
-        't' | 'T' => Some(20),
-        'y' | 'Y' => Some(21),
-        'u' | 'U' => Some(22),
-        'i' | 'I' => Some(23),
-        'o' | 'O' => Some(24),
-        'p' | 'P' => Some(25),
-        'a' | 'A' => Some(30),
-        's' | 'S' => Some(31),
-        'd' | 'D' => Some(32),
-        'f' | 'F' => Some(33),
-        'g' | 'G' => Some(34),
-        'h' | 'H' => Some(35),
-        'j' | 'J' => Some(36),
-        'k' | 'K' => Some(37),
-        'l' | 'L' => Some(38),
-        'z' | 'Z' => Some(44),
-        'x' | 'X' => Some(45),
-        'c' | 'C' => Some(46),
-        'v' | 'V' => Some(47),
-        'b' | 'B' => Some(48),
-        'n' | 'N' => Some(49),
-        'm' | 'M' => Some(50),
+        'q' | 'Q' => Some(KeyCode::KEY_Q.0),
+        'w' | 'W' => Some(KeyCode::KEY_W.0),
+        'e' | 'E' => Some(KeyCode::KEY_E.0),
+        'r' | 'R' => Some(KeyCode::KEY_R.0),
+        't' | 'T' => Some(KeyCode::KEY_T.0),
+        'y' | 'Y' => Some(KeyCode::KEY_Y.0),
+        'u' | 'U' => Some(KeyCode::KEY_U.0),
+        'i' | 'I' => Some(KeyCode::KEY_I.0),
+        'o' | 'O' => Some(KeyCode::KEY_O.0),
+        'p' | 'P' => Some(KeyCode::KEY_P.0),
+        'a' | 'A' => Some(KeyCode::KEY_A.0),
+        's' | 'S' => Some(KeyCode::KEY_S.0),
+        'd' | 'D' => Some(KeyCode::KEY_D.0),
+        'f' | 'F' => Some(KeyCode::KEY_F.0),
+        'g' | 'G' => Some(KeyCode::KEY_G.0),
+        'h' | 'H' => Some(KeyCode::KEY_H.0),
+        'j' | 'J' => Some(KeyCode::KEY_J.0),
+        'k' | 'K' => Some(KeyCode::KEY_K.0),
+        'l' | 'L' => Some(KeyCode::KEY_L.0),
+        'z' | 'Z' => Some(KeyCode::KEY_Z.0),
+        'x' | 'X' => Some(KeyCode::KEY_X.0),
+        'c' | 'C' => Some(KeyCode::KEY_C.0),
+        'v' | 'V' => Some(KeyCode::KEY_V.0),
+        'b' | 'B' => Some(KeyCode::KEY_B.0),
+        'n' | 'N' => Some(KeyCode::KEY_N.0),
+        'm' | 'M' => Some(KeyCode::KEY_M.0),
         // Numbers
-        '0' => Some(11),
-        '1'..='9' => Some(ch as u16 - '1' as u16 + 2),
+        '0' => Some(KeyCode::KEY_0.0),
+        '1' => Some(KeyCode::KEY_1.0),
+        '2' => Some(KeyCode::KEY_2.0),
+        '3' => Some(KeyCode::KEY_3.0),
+        '4' => Some(KeyCode::KEY_4.0),
+        '5' => Some(KeyCode::KEY_5.0),
+        '6' => Some(KeyCode::KEY_6.0),
+        '7' => Some(KeyCode::KEY_7.0),
+        '8' => Some(KeyCode::KEY_8.0),
+        '9' => Some(KeyCode::KEY_9.0),
         // Special
-        ' ' => Some(57),
-        '\n' => Some(36),
-        '\t' => Some(23),
+        ' ' => Some(KeyCode::KEY_SPACE.0),
+        '\n' => Some(KeyCode::KEY_ENTER.0),
+        '\t' => Some(KeyCode::KEY_TAB.0),
         _ => None,
     }
-}
-
-/// Map a Unicode character to an evdev KeyCode.
-fn char_to_evdev_key(ch: char) -> Option<KeyCode> {
-    char_to_keycode(ch).map(KeyCode)
 }
 
 /// Map key name to enigo Key
@@ -578,26 +569,36 @@ mod tests {
 
     #[test]
     fn test_char_to_keycode_lowercase() {
-        assert_eq!(char_to_keycode('a'), Some(30)); // KEY_A
-        assert_eq!(char_to_keycode('z'), Some(44)); // KEY_Z
+        use evdev::KeyCode;
+        assert_eq!(char_to_keycode('a'), Some(KeyCode::KEY_A.0));
+        assert_eq!(char_to_keycode('z'), Some(KeyCode::KEY_Z.0));
     }
 
     #[test]
     fn test_char_to_keycode_uppercase() {
-        assert_eq!(char_to_keycode('A'), Some(30));
-        assert_eq!(char_to_keycode('Z'), Some(44));
+        use evdev::KeyCode;
+        assert_eq!(char_to_keycode('A'), Some(KeyCode::KEY_A.0));
+        assert_eq!(char_to_keycode('Z'), Some(KeyCode::KEY_Z.0));
     }
 
     #[test]
     fn test_char_to_keycode_numbers() {
-        assert_eq!(char_to_keycode('0'), Some(11));
-        assert_eq!(char_to_keycode('1'), Some(2));
-        assert_eq!(char_to_keycode('9'), Some(10));
+        use evdev::KeyCode;
+        assert_eq!(char_to_keycode('0'), Some(KeyCode::KEY_0.0));
+        assert_eq!(char_to_keycode('1'), Some(KeyCode::KEY_1.0));
+        assert_eq!(char_to_keycode('9'), Some(KeyCode::KEY_9.0));
     }
 
     #[test]
     fn test_char_to_keycode_space() {
-        assert_eq!(char_to_keycode(' '), Some(57));
+        assert_eq!(char_to_keycode(' '), Some(KeyCode::KEY_SPACE.0));
+    }
+
+    #[test]
+    fn test_char_to_keycode_special() {
+        use evdev::KeyCode;
+        assert_eq!(char_to_keycode('\n'), Some(KeyCode::KEY_ENTER.0));
+        assert_eq!(char_to_keycode('\t'), Some(KeyCode::KEY_TAB.0));
     }
 
     #[test]
@@ -607,10 +608,49 @@ mod tests {
     }
 
     #[test]
+    fn test_keycode_to_enigo_function_keys() {
+        // F1-F12 must map individually (previously all mapped to F1)
+        assert_eq!(keycode_to_enigo(59), Key::F1);
+        assert_eq!(keycode_to_enigo(60), Key::F2);
+        assert_eq!(keycode_to_enigo(61), Key::F3);
+        assert_eq!(keycode_to_enigo(62), Key::F4);
+        assert_eq!(keycode_to_enigo(63), Key::F5);
+        assert_eq!(keycode_to_enigo(64), Key::F6);
+        assert_eq!(keycode_to_enigo(65), Key::F7);
+        assert_eq!(keycode_to_enigo(66), Key::F8);
+        assert_eq!(keycode_to_enigo(67), Key::F9);
+        assert_eq!(keycode_to_enigo(68), Key::F10);
+        assert_eq!(keycode_to_enigo(87), Key::F11);
+        assert_eq!(keycode_to_enigo(88), Key::F12);
+    }
+
+    #[test]
     fn test_keycode_to_enigo_common() {
-        assert_eq!(keycode_to_enigo(36), Key::Return);
-        assert_eq!(keycode_to_enigo(14), Key::Backspace);
-        assert_eq!(keycode_to_enigo(65), Key::Space);
+        assert_eq!(keycode_to_enigo(28), Key::Return);  // KEY_ENTER
+        assert_eq!(keycode_to_enigo(14), Key::Backspace); // KEY_BACKSPACE
+        assert_eq!(keycode_to_enigo(57), Key::Space);     // KEY_SPACE
+        assert_eq!(keycode_to_enigo(15), Key::Tab);       // KEY_TAB
+        assert_eq!(keycode_to_enigo(1), Key::Escape);     // KEY_ESC
+    }
+
+    #[test]
+    fn test_keycode_to_enigo_navigation() {
+        assert_eq!(keycode_to_enigo(102), Key::Home);      // KEY_HOME
+        assert_eq!(keycode_to_enigo(103), Key::UpArrow);   // KEY_UP
+        assert_eq!(keycode_to_enigo(104), Key::PageUp);    // KEY_PAGEUP
+        assert_eq!(keycode_to_enigo(105), Key::LeftArrow); // KEY_LEFT
+        assert_eq!(keycode_to_enigo(106), Key::RightArrow);// KEY_RIGHT
+        assert_eq!(keycode_to_enigo(107), Key::End);       // KEY_END
+        assert_eq!(keycode_to_enigo(108), Key::DownArrow); // KEY_DOWN
+        assert_eq!(keycode_to_enigo(109), Key::PageDown);  // KEY_PAGEDOWN
+        assert_eq!(keycode_to_enigo(110), Key::Insert);    // KEY_INSERT
+        assert_eq!(keycode_to_enigo(111), Key::Delete);    // KEY_DELETE
+    }
+
+    #[test]
+    fn test_keycode_to_enigo_fallback() {
+        // Unknown keycodes fall back to Unicode char mapping
+        assert!(matches!(keycode_to_enigo(999), Key::Unicode(_)));
     }
 
     #[test]
@@ -619,6 +659,16 @@ mod tests {
         assert_eq!(key_to_evdev(Key::Backspace), KeyCode::KEY_BACKSPACE);
         assert_eq!(key_to_evdev(Key::Space), KeyCode::KEY_SPACE);
         assert_eq!(key_to_evdev(Key::Escape), KeyCode::KEY_ESC);
+        assert_eq!(key_to_evdev(Key::Tab), KeyCode::KEY_TAB);
+    }
+
+    #[test]
+    fn test_key_to_evdev_function_keys() {
+        assert_eq!(key_to_evdev(Key::F1), KeyCode::KEY_F1);
+        assert_eq!(key_to_evdev(Key::F6), KeyCode::KEY_F6);
+        assert_eq!(key_to_evdev(Key::F10), KeyCode::KEY_F10);
+        assert_eq!(key_to_evdev(Key::F11), KeyCode::KEY_F11);
+        assert_eq!(key_to_evdev(Key::F12), KeyCode::KEY_F12);
     }
 
     #[test]
@@ -634,5 +684,17 @@ mod tests {
         assert_eq!(key_to_evdev(Key::Unicode('a')), KeyCode::KEY_A);
         assert_eq!(key_to_evdev(Key::Unicode('z')), KeyCode::KEY_Z);
         assert_eq!(key_to_evdev(Key::Unicode('1')), KeyCode::KEY_1);
+    }
+
+    #[test]
+    fn test_keycode_roundtrip_common() {
+        // Verify keycode_to_enigo and key_to_evdev are inverses
+        // for all entries in KEYCODE_MAP
+        for &(evdev_code, enigo_key) in KEYCODE_MAP {
+            assert_eq!(keycode_to_enigo(evdev_code), enigo_key,
+                "keycode_to_enigo({}) should be {:?}", evdev_code, enigo_key);
+            assert_eq!(key_to_evdev(enigo_key), KeyCode(evdev_code),
+                "key_to_evdev({:?}) should be KeyCode({})", enigo_key, evdev_code);
+        }
     }
 }
