@@ -159,7 +159,7 @@ pub mod proxy {
                             }
 
                             // Ensure we have a proxy socket for this client to receive return traffic
-                            let fwd_sock = {
+                            let _fwd_sock = {
                                 let c_guard = clients_ref.read().await;
                                 if let Some((s, _)) = c_guard.get(&src_addr) {
                                     s.clone()
