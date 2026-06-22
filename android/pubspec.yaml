@@ -15,6 +15,7 @@ dependencies:
   material_symbols_icons: ^4.2928.1
   file_picker: ^8.0.0
   connectivity_plus: ^6.0.0
+  crypto: ^3.0.0
   shared_preferences: ^2.2.0
   flutter_local_notifications: ^17.0.0
   flutter_background_service: ^5.0.0
