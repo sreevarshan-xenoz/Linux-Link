@@ -462,10 +462,21 @@ fn find_start_code(data: &[u8], from: usize) -> Option<(usize, usize)> {
     None
 }
 
+/// VBV/rate-control bounds for the x264/x265 private params (kilobits/sec).
+///
+/// Buffer sized for ~2 frames so the encoder must smooth spikes instead of
+/// building a burst queue that adds frame delay on top of network latency.
+fn vbv_kbit_bounds(bitrate_bps: u32, fps: u32) -> (u64, u64) {
+    let bitrate = bitrate_bps as u64;
+    let maxrate_kbps = (bitrate / 1000).max(1);
+    let bufsize_kbits = (bitrate * 2 / fps as u64 / 1000).clamp(128, 50_000);
+    (maxrate_kbps, bufsize_kbits)
+}
+
 /// Build the FFmpeg command-line arguments for encoding.
 ///
 /// Input: raw BGRA frames via stdin (pipe:0)
-/// Output: H.264 NAL units via stdout (pipe:1)
+/// Output: H.264/H.265 NAL units via stdout (pipe:1)
 fn build_ffmpeg_args(config: &StreamingConfig, keyframe_interval: u64) -> Vec<String> {
     // Determine codec type
     let is_hevc = matches!(config.codec, VideoCodec::H265);
@@ -519,6 +530,10 @@ fn build_ffmpeg_args(config: &StreamingConfig, keyframe_interval: u64) -> Vec<St
         }
     };
 
+    // ~2 frames of VBV in bits for the global -bufsize (vaapi/nvenc paths)
+    let (vbv_maxrate_kbps, vbv_bufsize_kbits) = vbv_kbit_bounds(config.bitrate_bps, config.fps);
+    let vbv_bufsize_bits = config.bitrate_bps as u64 * 2 / config.fps as u64;
+
     // Select encoder-specific args based on resolved encoder
     let encoder_args: Vec<String> = match resolved {
         HardwareEncoder::Vaapi => {
@@ -529,6 +544,14 @@ fn build_ffmpeg_args(config: &StreamingConfig, keyframe_interval: u64) -> Vec<St
                 codec_name.to_string(),
                 "-b:v".to_string(),
                 config.bitrate_bps.to_string(),
+                "-maxrate".to_string(),
+                config.bitrate_bps.to_string(),
+                "-bufsize".to_string(),
+                vbv_bufsize_bits.to_string(),
+                "-g".to_string(),
+                keyframe_interval.to_string(),
+                "-bf".to_string(),
+                "0".to_string(),
                 "-vf".to_string(),
                 format!(
                     "format=nv12,hwupload,scale_vaapi=w={}:h={}",
@@ -542,10 +565,22 @@ fn build_ffmpeg_args(config: &StreamingConfig, keyframe_interval: u64) -> Vec<St
                 codec_name.to_string(),
                 "-preset".to_string(),
                 nvenc_preset.to_string(),
+                // Low-latency tuning: no B-frames, bounded VBV, ll rate
+                // shaping (Sunshine's llhp profile equivalent).
+                "-tune".to_string(),
+                "ll".to_string(),
                 "-rc".to_string(),
                 "vbr".to_string(),
                 "-b:v".to_string(),
                 config.bitrate_bps.to_string(),
+                "-maxrate".to_string(),
+                config.bitrate_bps.to_string(),
+                "-bufsize".to_string(),
+                vbv_bufsize_bits.to_string(),
+                "-g".to_string(),
+                keyframe_interval.to_string(),
+                "-bf".to_string(),
+                "0".to_string(),
                 "-pix_fmt".to_string(),
                 "yuv420p".to_string(),
             ]
@@ -562,7 +597,10 @@ fn build_ffmpeg_args(config: &StreamingConfig, keyframe_interval: u64) -> Vec<St
                     "-pix_fmt".to_string(),
                     "yuv420p".to_string(),
                     "-x265-params".to_string(),
-                    format!("keyint={}:min-keyint=1", keyframe_interval),
+                    format!(
+                        "keyint={}:min-keyint=1:bframes=0:rc-lookahead=0:vbv-maxrate={}:vbv-bufsize={}",
+                        keyframe_interval, vbv_maxrate_kbps, vbv_bufsize_kbits
+                    ),
                 ]
             } else {
                 vec![
@@ -577,7 +615,10 @@ fn build_ffmpeg_args(config: &StreamingConfig, keyframe_interval: u64) -> Vec<St
                     "-pix_fmt".to_string(),
                     "yuv420p".to_string(),
                     "-x264-params".to_string(),
-                    format!("keyint={}:min-keyint=1", keyframe_interval),
+                    format!(
+                        "keyint={}:min-keyint=1:bframes=0:vbv-maxrate={}:vbv-bufsize={}",
+                        keyframe_interval, vbv_maxrate_kbps, vbv_bufsize_kbits
+                    ),
                     "-tune".to_string(),
                     "zerolatency".to_string(),
                 ]
@@ -720,7 +761,99 @@ mod tests {
         assert!(args.contains(&"ultrafast".to_string()));
         assert!(args.contains(&"5000000".to_string()));
         assert!(args.contains(&"pipe:1".to_string()));
-        assert!(args.contains(&"keyint=60:min-keyint=1".to_string()));
+        assert!(args.contains(&"zerolatency".to_string()));
+
+        // Low-latency x264 params: no B-frames + VBV bounded to ~2 frames
+        let params = args
+            .iter()
+            .find(|a| a.starts_with("keyint=60"))
+            .expect("x264-params should set keyint=60");
+        assert!(params.contains("bframes=0"));
+        assert!(params.contains("vbv-maxrate=5000"));
+        assert!(params.contains("vbv-bufsize=333"));
+    }
+
+    #[test]
+    fn test_build_ffmpeg_args_nvenc_low_latency() {
+        let config = StreamingConfig {
+            width: 1920,
+            height: 1080,
+            fps: 60,
+            bitrate_bps: 8_000_000,
+            codec: VideoCodec::H264,
+            profile: H264Profile::High,
+            preset: EncoderPreset::VeryFast,
+            hardware_encoder: HardwareEncoder::Nvenc,
+            monitor_index: 0,
+        };
+        let args = build_ffmpeg_args(&config, 120);
+
+        assert!(args.contains(&"h264_nvenc".to_string()));
+        assert!(args.contains(&"p3".to_string()));
+        assert!(args.contains(&"ll".to_string()));
+        let g = args.iter().position(|a| a == "-g").unwrap();
+        assert_eq!(args[g + 1], "120");
+        let bf = args.iter().position(|a| a == "-bf").unwrap();
+        assert_eq!(args[bf + 1], "0");
+        let bs = args.iter().position(|a| a == "-bufsize").unwrap();
+        // 8 Mbit/s * 2 frames / 60 fps = 266666 bits
+        assert_eq!(args[bs + 1], "266666");
+    }
+
+    #[test]
+    fn test_build_ffmpeg_args_vaapi_low_latency() {
+        let config = StreamingConfig {
+            width: 1280,
+            height: 720,
+            fps: 30,
+            bitrate_bps: 4_000_000,
+            codec: VideoCodec::H265,
+            profile: H264Profile::Main,
+            preset: EncoderPreset::Fast,
+            hardware_encoder: HardwareEncoder::Vaapi,
+            monitor_index: 0,
+        };
+        let args = build_ffmpeg_args(&config, 60);
+
+        assert!(args.contains(&"hevc_vaapi".to_string()));
+        assert!(args.iter().any(|a| a.contains("hwupload")));
+        let g = args.iter().position(|a| a == "-g").unwrap();
+        assert_eq!(args[g + 1], "60");
+        let bf = args.iter().position(|a| a == "-bf").unwrap();
+        assert_eq!(args[bf + 1], "0");
+    }
+
+    #[test]
+    fn test_build_ffmpeg_args_x265_low_latency() {
+        let config = StreamingConfig {
+            width: 1920,
+            height: 1080,
+            fps: 30,
+            bitrate_bps: 6_000_000,
+            codec: VideoCodec::H265,
+            profile: H264Profile::Main,
+            preset: EncoderPreset::VeryFast,
+            hardware_encoder: HardwareEncoder::Software,
+            monitor_index: 0,
+        };
+        let args = build_ffmpeg_args(&config, 60);
+
+        assert!(args.contains(&"libx265".to_string()));
+        let params = args
+            .iter()
+            .find(|a| a.starts_with("keyint=60"))
+            .expect("x265-params should set keyint=60");
+        assert!(params.contains("bframes=0"));
+        assert!(params.contains("rc-lookahead=0"));
+        assert!(params.contains("vbv-maxrate=6000"));
+    }
+
+    #[test]
+    fn test_vbv_bounds_clamp() {
+        // Normal: 5 Mbit/s @ 30fps -> 5000 kbps cap, ~2 frames of buffer
+        assert_eq!(vbv_kbit_bounds(5_000_000, 30), (5000, 333));
+        // Tiny bitrate floors at the 128 kbit buffer minimum
+        assert_eq!(vbv_kbit_bounds(100_000, 60), (100, 128));
     }
 
     #[test]
