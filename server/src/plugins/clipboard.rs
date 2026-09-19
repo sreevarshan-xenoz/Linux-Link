@@ -64,8 +64,14 @@ impl Plugin for ClipboardPlugin {
 /// Set system clipboard using `wl-copy`.
 async fn set_clipboard(content: &str) -> Result<()> {
     use tokio::io::AsyncWriteExt;
+    // wl-copy forks into the background to retain clipboard ownership, so it
+    // must not inherit our stdio — a daemon holding the parent's stdout pipe
+    // makes test harnesses (and log capture) wait on EOF forever.
     let mut child = tokio::process::Command::new("wl-copy")
         .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
         .spawn()
         .map_err(|e| linux_link_core::error::LinuxLinkError::Io {
             operation: "spawn wl-copy",
