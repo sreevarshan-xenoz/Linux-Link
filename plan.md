@@ -1796,10 +1796,10 @@ By April 2026 the Flutter client was feature-complete in scaffold form: 4 screen
 - `cargo fmt` / `cargo check --workspace`: ✅
 - `cargo clippy -D warnings`: ✅ in both default and `client` feature profiles
 - `cargo test`: ✅ (see AGENTS.md Current Status for count)
-- Kotlin side: ⚠️ Cannot verify locally — no Android SDK/Gradle on this machine; `gradle wrapper` must be generated once before first build
+- Kotlin side: ✅ Verified on host (JDK 21, SDK Platform 37, NDK 29, Gradle 9.7.1 wrapper; `assembleDebug` succeeds, bridge `.so` packaged in the APK)
 
 **Remaining Work:**
-- [ ] Generate Gradle wrapper and verify `./gradlew assembleDebug` on a machine with Android SDK
+- [x] Gradle wrapper generated and `./gradlew assembleDebug` verified on host
 - [ ] Port session lifecycle (connect/discover/trust) into the bridge over `linux-link-core` (`client` feature)
 - [ ] Frame delivery: QUIC client → JNI → MediaCodec SurfaceView
 - [ ] Input events: Compose gestures → JNI → streaming channel
@@ -1824,8 +1824,8 @@ By April 2026 the Flutter client was feature-complete in scaffold form: 4 screen
 - [x] Latency optimization (StreamingStats struct, encoder preset mapping via VideoQualityPreset)
 - [x] config.toml.example with all documented defaults
 
-**Remaining (requires Android SDK or live hardware):**
-- [ ] `./gradlew assembleDebug` verification (requires Android SDK + Gradle wrapper generation)
+**Remaining (requires live hardware):**
+- [x] `./gradlew assembleDebug` verification (done on host, 2026-09-19)
 - [ ] E2E latency measurement on live system (requires Hyprland + PipeWire server running)
 
 ### Phase 6: Release & Packaging (Week 29-30)

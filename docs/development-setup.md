@@ -4,9 +4,8 @@ This guide covers the Rust workspace and the native Android (Kotlin) client.
 
 ## 1. Prerequisites
 
-- Rust toolchain (stable, edition 2024)
+- Rust toolchain (stable, edition 2024) + `cargo-ndk`
 - JDK 17+ and Android SDK/NDK (for the Android client)
-- Gradle (to generate the wrapper once: `cd android && gradle wrapper`)
 - FFmpeg, PipeWire, xdg-desktop-portal (for the server/streaming)
 
 ## 2. Rust Workspace Validation
@@ -36,12 +35,30 @@ Optional config file location:
 
 ## 4. Android Client (Kotlin + Rust JNI bridge)
 
-- `android/app` — Kotlin/Compose app. Build with `cd android && ./gradlew assembleDebug`
-  (requires Android SDK; the Gradle wrapper must be generated first).
+- `android/app` — Kotlin/Compose app.
 - `android/bridge` — Rust cdylib (`liblinux_link_android_bridge.so`) loaded via JNI by
-  `dev.linuxlink.android.bridge.RustCore`. Cross-compile for device with cargo-ndk:
-  `cargo ndk -t arm64-v8a build -p linux-link-android-bridge --release`
-  (then point Gradle at the output, or wire a full NDK build task).
+  `dev.linuxlink.android.bridge.RustCore`.
+
+Full local build (verified working: SDK Platform 36/37, Build-Tools 36/37, NDK 29):
+
+```bash
+# 1. Cross-compile the bridge into the app's jniLibs
+cd android/bridge
+cargo ndk -t arm64-v8a -o ../app/src/main/jniLibs build
+
+# 2. Build the APK (picks the .so up automatically)
+cd android
+./gradlew assembleDebug   # APK: app/build/outputs/apk/debug/app-debug.apk
+```
+
+Notes:
+
+- Gradle finds the SDK via `android/local.properties` (`sdk.dir=...`, gitignored) or
+  `ANDROID_HOME`.
+- The generated `.so` under `jniLibs/` is gitignored (`*.so`) — every Android build
+  must run step 1 first, or the APK will crash at `System.loadLibrary`.
+- Add more ABIs with extra `-t` flags (`x86_64-linux-android` target is installed for
+  emulator testing).
 
 The bridge currently exposes only a version round-trip; the session/streaming/input
 API port from the old Flutter bridge is in progress — see AGENTS.md *Current Status*.
