@@ -119,15 +119,14 @@ dmypy.json
 .cxx
 local.properties
 
-# Flutter Android lib (exclude from generic lib/ pattern)
-!android/lib/
-
-# Flutter build artifacts
-android/.dart_tool/
+# Android Kotlin app build artifacts
+.gradle/
+android/.gradle/
 android/build/
-android/android/local.properties
-android/android/.gradle/
-android/android/app/build/
+android/app/build/
+*.apk
+*.aab
+*.keystore
 
 # General build and temporary files
 target/
@@ -172,4 +171,5 @@ config/secrets.json
 # Configuration files with potential secrets
 config.json
 settings.json
+!.qoder/settings.json
 local_settings.py
