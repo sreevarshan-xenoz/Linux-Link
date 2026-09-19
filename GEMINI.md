@@ -28,8 +28,7 @@ This file provides architectural context for AI agents working on the Linux Link
     "critical_files": [
       "core/src/streaming/streamer.rs",
       "server/src/input_injector.rs",
-      "server/src/plugins/monitors.rs",
-      "android/rust/src/api.rs"
+      "server/src/plugins/monitors.rs"
     ]
   }
 }

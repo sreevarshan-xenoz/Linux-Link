@@ -1,60 +1,47 @@
 # Linux Link Development Setup
 
-This guide covers the current Rust workspace setup and the next commands needed to continue Phase 0.
+This guide covers the Rust workspace and the native Android (Kotlin) client.
 
 ## 1. Prerequisites
 
-- Rust toolchain (stable)
-- Cargo
-- Git
-- Flutter SDK (for Android client steps)
-- Android SDK/NDK (for Flutter Android builds)
+- Rust toolchain (stable, edition 2024)
+- JDK 17+ and Android SDK/NDK (for the Android client)
+- Gradle (to generate the wrapper once: `cd android && gradle wrapper`)
+- FFmpeg, PipeWire, xdg-desktop-portal (for the server/streaming)
 
 ## 2. Rust Workspace Validation
 
 From repository root:
 
 ```bash
-cargo fmt --all
 cargo check --workspace
 cargo test --workspace
-cargo build --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy -p linux-link-core --no-default-features --features client -- -D warnings
 ```
 
-## 3. Server Run (Current Scaffold)
+The second clippy command matters: the Android bridge builds `core` with
+`default-features = false, features = ["client"]`, and that profile has
+code paths the server build never compiles.
 
-Run the server daemon skeleton:
+## 3. Server Run
 
 ```bash
-cargo run -p linux-link-server
+cargo run --bin linux-link -- start
 ```
 
 Optional config file location:
 
-- `~/.config/linux-link/config.toml`
+- `~/.config/linux-link/config.toml` (see `config.toml.example`)
 
-Example:
+## 4. Android Client (Kotlin + Rust JNI bridge)
 
-```toml
-control_port = 1716
-```
+- `android/app` — Kotlin/Compose app. Build with `cd android && ./gradlew assembleDebug`
+  (requires Android SDK; the Gradle wrapper must be generated first).
+- `android/bridge` — Rust cdylib (`liblinux_link_android_bridge.so`) loaded via JNI by
+  `dev.linuxlink.android.bridge.RustCore`. Cross-compile for device with cargo-ndk:
+  `cargo ndk -t arm64-v8a build -p linux-link-android-bridge --release`
+  (then point Gradle at the output, or wire a full NDK build task).
 
-## 4. Flutter + Android Setup (Pending)
-
-The Android Flutter client is not scaffolded yet in this repository. Once Flutter is installed:
-
-```bash
-cd android
-flutter create --org com.linuxlink --project-name linux_link_client .
-flutter pub get
-```
-
-Then integrate `android/rust` through `flutter_rust_bridge` codegen.
-
-## 5. Suggested Next Implementation Target
-
-Phase 1 from plan:
-
-- Implement real Tailscale status/peer discovery in `core/src/tailscale/mod.rs`
-- Add connection/discovery commands in server CLI
-- Wire incoming control-channel protocol handling
+The bridge currently exposes only a version round-trip; the session/streaming/input
+API port from the old Flutter bridge is in progress — see AGENTS.md *Current Status*.

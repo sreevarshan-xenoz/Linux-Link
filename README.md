@@ -37,7 +37,7 @@ Linux Link is a **pure Rust** remote desktop solution built specifically for Lin
 - **FFmpeg H.264 encoding** with persistent sidecar process for low latency
 - **QUIC transport** (datagram mode) with self-signed TLS certificates
 - **Adaptive bitrate** — 3 presets (LAN/internet/low-bandwidth) with RTT-based congestion control
-- **MediaCodec hardware decode** on Android via Flutter platform channels
+- **MediaCodec hardware decode** on the native Android client via JNI
 
 ### KDE Connect Integration
 - **Clipboard sync** — bidirectional clipboard sharing via `wl-clipboard`
@@ -49,12 +49,12 @@ Linux Link is a **pure Rust** remote desktop solution built specifically for Lin
 - **Presenter mode** — play/pause/next/previous from Android
 
 ### Android Client
-- **Flutter UI** with Material 3 dark theme
-- **Rust FFI bridge** via flutter_rust_bridge (2.12)
+- **Native Kotlin app** (Jetpack Compose, Material 3 dark theme)
+- **Rust core** reused via a JNI/UniFFI bridge (no Flutter)
 - **Connection screen** with peer discovery over Tailscale
 - **Remote desktop** with tap/drag/double-tap gesture input
 - **File browser** with local and remote file tabs
-- **Settings** with SharedPreferences persistence
+- **Settings** with DataStore persistence
 
 ### Server
 - **CLI** with start/stop/status/list/watch/connect/pair/capabilities commands
@@ -203,25 +203,24 @@ man linux-link
 
 ## Android Client
 
-The Android client is located in `android/` and uses Flutter + Rust FFI.
+The Android client is a native Kotlin app in `android/`, bridged to the shared Rust core via JNI/UniFFI.
 
 ```bash
 cd android
-flutter pub get
-flutter build apk --debug   # Debug build
-flutter build apk --release # Release build
+./gradlew assembleDebug   # Debug build
+./gradlew assembleRelease # Release build
 ```
 
-Requires Flutter 3.24+ and Android SDK/NDK.
+Requires JDK 17+ and Android SDK/NDK.
 
 ## Architecture
 
 ```
 ┌─────────────────────────┐         Tailscale          ┌─────────────────────────┐
 │   Android Client        │◄──── Encrypted P2P ────────│   Linux Server          │
-│   (Flutter + Rust FFI)  │        (Tailscale IP)      │   (Hyprland)            │
+│   (Kotlin + Rust FFI)   │        (Tailscale IP)      │   (Hyprland)            │
 ├─────────────────────────┤                            ├─────────────────────────┤
-│  UI Layer (Flutter)     │                            │  Rust Daemon (tokio)    │
+│  UI Layer (Compose)     │                            │  Rust Daemon (tokio)    │
 │  ├── Connection Screen  │                            │  ├── Screen Capture     │
 │  ├── Remote Desktop     │                            │  ├── FFmpeg H.264 Enc.  │
 │  ├── File Browser       │                            │  ├── QUIC Transport     │
@@ -239,7 +238,7 @@ Requires Flutter 3.24+ and Android SDK/NDK.
 
 **Data Flow (Streaming):**
 ```
-PipeWire → BGRA Frame → FFmpeg H.264 → QUIC Datagram → MediaCodec → Texture Widget
+PipeWire → BGRA Frame → FFmpeg H.264 → QUIC Datagram → MediaCodec → SurfaceView
 ```
 
 **Data Flow (Input):**
@@ -263,14 +262,9 @@ Linux-Link/
 │       ├── config.rs       # TOML configuration
 │       ├── kde.rs          # Plugin registry + service setup
 │       └── service.rs      # Main server loop
-├── android/                # Android client
-│   ├── lib/                # Flutter app (screens, providers, services)
-│   │   ├── screens/        # Connection, Remote Desktop, File Browser, Settings
-│   │   ├── providers/      # Riverpod state management
-│   │   ├── services/       # Video player, clipboard, background service
-│   │   └── models/         # PeerInfo, RemoteFile
-│   ├── rust/               # Rust FFI library (flutter_rust_bridge)
-│   └── android/            # Android native code (MediaCodec plugin)
+├── android/                # Android client (native Kotlin)
+│   ├── app/                # Kotlin app module (UI, services, MediaCodec decode)
+│   └── bridge/             # Rust cdylib crate (UniFFI/JNI bindings to core)
 ├── aur/                    # AUR packaging (PKGBUILD)
 ├── docs/                   # Design specs and plans
 ├── man/                    # Man pages
@@ -299,7 +293,7 @@ Linux Link is actively developed and looking for contributors!
 ### Prerequisites
 
 - Rust 1.80+ (edition 2024)
-- Flutter 3.24+ (for Android client)
+- JDK 17+ and Android SDK/NDK (for the Kotlin client)
 - Tailscale (for testing)
 - FFmpeg, PipeWire, xdg-desktop-portal (for streaming)
 
@@ -314,7 +308,7 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 
 # Android build
-cd android && flutter build apk --debug
+cd android && ./gradlew assembleDebug
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for full guidelines.
@@ -323,7 +317,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for full guidelines.
 
 All 6 phases are **complete**. Remaining items are environmental:
 
-- [ ] `flutter build apk` verification (requires Flutter SDK on CI machine)
+- [ ] Native Kotlin client: Rust↔JNI bridge + MediaCodec decode
+- [ ] `assembleDebug` verification (requires Android SDK on CI machine)
 - [ ] E2E testing on live Hyprland + PipeWire + Tailscale setup
 - [ ] First release tag (`v0.1.0`) pushed to GitHub
 

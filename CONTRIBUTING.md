@@ -7,7 +7,7 @@ Thank you for your interest in contributing! This document covers the basics.
 ### Prerequisites
 
 - Rust 1.80+ (edition 2024)
-- Flutter 3.24+ (for Android client)
+- JDK 17+ (for Android client)
 - Android SDK & NDK (for Android builds)
 - Tailscale (for testing connectivity)
 - FFmpeg, PipeWire, xdg-desktop-portal (for streaming)
@@ -25,10 +25,9 @@ cargo test --workspace
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 
-# Build Android client (requires Flutter SDK)
+# Build Android client (requires Android SDK/NDK)
 cd android
-flutter pub get
-flutter build apk --debug
+./gradlew assembleDebug
 ```
 
 ### Running
@@ -44,7 +43,7 @@ cargo run --bin linux-link -- --config /path/to/config.toml start
 ## Code Style
 
 - **Rust:** Follow `cargo fmt` and `cargo clippy -D warnings`. No warnings allowed.
-- **Dart:** Follow `flutter analyze`. Use `const` constructors where possible.
+- **Kotlin:** Follow Android Lint; format with `ktfmt`/`ktlint` defaults.
 - **Commits:** Use conventional commit messages (`feat:`, `fix:`, `docs:`, `chore:`, etc.)
 
 ## Pull Request Process
@@ -68,4 +67,4 @@ See `plan.md` for the full architecture and development roadmap.
 Key components:
 - `core/` — Shared protocol, streaming, and utility code
 - `server/` — Linux daemon (CLI + service)
-- `android/` — Flutter Android client + Rust FFI bridge
+- `android/` — Native Kotlin Android client + Rust JNI/UniFFI bridge
