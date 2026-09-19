@@ -1845,6 +1845,79 @@ By April 2026 the Flutter client was feature-complete in scaffold form: 4 screen
 
 ---
 
+## Improvement Roadmap (September 2026 research)
+
+Candidate pool for Phase 7+, ranked by impact-per-effort. These are proposals from a research pass (2026-09-19), not committed scope.
+
+### R1. Connectivity — direct P2P without a Tailscale hard requirement
+
+Today the server requires Tailscale and connects via its IPs. Research conclusion: adopt **iroh 1.x** (1.0 stable June 2026, v1.2.x current) as the default WAN transport.
+
+| Change | Effort | Rationale |
+|--------|--------|-----------|
+| Replace raw quinn WAN path with an iroh endpoint (QUIC end-to-end, built-in hole punching via their quinn fork) | Medium | Bidirectional dial/punch that plain quinn lacks; works on Android through the JNI bridge |
+| Demote Tailscale to an optional *candidate address*, keep mDNS for LAN | Low | Removes the install prerequisite without losing the mesh users |
+| Self-host one `iroh-relay` for symmetric-CGNAT/corporate fallback | Low ops / Med | Punching succeeds on ~80-85% of home-NAT pairs; relay must exist in the design for the rest (RustDesk's hbbs/hbbr model proves this) |
+| PIN/QR pairing: iroh node-id (32-byte key) doubles as identity + address, bound to the existing TOFU cert | Medium | Moonlight has zero remote-access story (manual port forwarding); this beats both Moonlight and plain RustDesk UX |
+| Android: QUIC connection migration keeps Wi-Fi↔LTE a path change, not a reconnect; `connectedDevice`/`specialUse` foreground service, WorkManager backoff resume | Medium | Kills the "app died in Doze" class of bugs |
+
+**Dead ends avoided:** DIY quinn hole punching, `hole-punch-connect` (dead, 2023), `tsnet` rust binding (dead), standalone DERP (needs a tailscaled/headscale coordination plane), libp2p dcutr (QUIC punching still rough, imports whole swarm stack), WebRTC (SCTP head-of-line; throws away the datagram video path) — reconsider WebRTC only if worst-case symmetric NATs must be traversed without hosting a relay.
+
+### R2. Streaming pipeline — latency & quality
+
+Ranked by impact-per-effort against the current pipeline (portal capture → FFmpeg child process → QUIC datagrams → MediaCodec). Target: Sunshine-class sub-50ms end-to-end.
+
+| # | Upgrade | Impact / Effort | Expected gain |
+|---|---------|-----------------|---------------|
+| 1 | **Encoder low-latency flags now** (`tune=zerolatency`, `bf=0`, CBR + tiny VBV, `slices=4`, no lookahead; NVENC `llhp`, VAAPI `vbr_latency`) | High / Low | 5–15 ms, no architecture change |
+| 2 | **Android decode/render tuning**: `KEY_LOW_LATENCY=1` + `KEY_PRIORITY=0` (realtime), decode straight to SurfaceView (never ImageReader), `Surface.setFrameRate` to display mode | High / Low | 5–15 ms touch-to-photon |
+| 3 | **In-process encode via `ffmpeg-next` (9.0.0)**, dropping the FFmpeg child-process stdio pipe; frames stay GPU-resident with `hevc_vaapi`/`h264_nvenc` | High / Med | 3–8 ms + lower jitter |
+| 4 | **Input path**: dedicated QUIC stream/socket with its own congestion control so input never queues behind video; host-side injection via **`/dev/uinput` absolute-coordinate virtual device** (Sunshine's approach; the `uinput` crate is dead — write thin bindings with `nix`) | High / Med | 10–30 ms perceived under load |
+| 5 | **Transport hardening**: quinn 0.11 pluggable CC (BBR present but experimental — A/B vs CUBIC/NewReno), keep one frame ≈ one datagram set, send-only-newest + request IDR on gap. Skip FEC: QUIC datagrams already discard, Rust FEC crates are unproven (low ROI) | Med / Low-Med | jitter/tail-latency |
+| 6 | **VFR capture pacing**: drive from compositor vsync/damage events; encode a static screen at 5–15 fps instead of fixed 60 | Med / Med | big CPU/GPU/queue relief when idle |
+| 7 | **Zero-copy capture — bypass the portal on Hyprland**: ScreenCast portal delivers shm buffers after conversion (dmabuf-through-portal open since portal-wlr #9); the 2026 path is `ext-image-copy-capture-v1` (standardized, Hyprland-supported) with direct dmabuf `vaImport`. Tradeoff: portal-permission UX vs no-permission capture is a *product decision*. Watch `lamco-wayland` crates (active, tiny adoption); `ashpd` 0.13 and `pipewire` 0.10 are healthy | High / High | 4–10 ms at 1440p+ |
+
+**Codec call:** keep HEVC default. Android AV1 hw decode is flagship-mainstream by 2026 but patchy mid-range, and SVT-AV1 software encode is latency-hostile; add `av1_nvenc` only as an RTX-40+ preset. Dirty-region encoding: dead end on Wayland (full frames only). Cursor prediction: skip (host cursor is already in the video).
+
+**Caveat on #3/intra-refresh:** it removes periodic IDRs — keep a forced recovery point (CRI) or Android mid-stream join/recovery breaks.
+
+### R3. Android client features
+
+**Tier 1 — quick wins (the "1.0 remote desktop" batch):**
+1. Latency/FPS/bitrate stats HUD overlay (MediaCodec callbacks + QUIC RTT → Compose overlay)
+2. Touch input modes: direct-touch / trackpad (relative mouse) / mouse-direct — the most-loved RustDesk/Moonlight affordance
+3. Shortcut key bar: Super, Ctrl+Alt+Del equivalent, Alt+Tab, **Super+1..9 Hyprland workspace switch**, screenshot
+4. Clipboard UX: sync toggle, phone-side history sheet, share-URI → file plugin (KDE Connect pattern)
+5. Auto-connect to last host + connect/disconnect/lock actions in the foreground-service notification — decide the Android 14 FGS type early (`specialUse` justification vs `mediaProjection` consent dialog)
+6. Pinch-zoom + display scaling for HiDPI desktops
+
+**Tier 2 — differentiators:**
+7. **Hyprland window/workspace picker + single-window streaming** (server queries `$HYPRLAND_INSTANCE_SIGNATURE` IPC: `j/clients`, `j/activewindow`, `.socket2.sock` events; feed window geometry as encoder crop) — a moat feature: Sunshine has no per-window Linux capture
+8. Workspace state HUD (push `activewindow` events over the control stream; click-to-switch)
+9. Gamepad passthrough: Android InputDevice (USB/BT controller) → serialize → server `uinput`/`evdev` virtual Xbox360/DS4 (Moonlight's killer feature; rank by audience)
+10. Per-monitor selection (portal already provides monitor streams). HDR: skip
+11. KDE Connect parity: notification reply from phone, find-my-phone siren, battery in client HUD, PIN pairing dialog
+12. Wake-on-LAN from WAN via an always-on LAN relay peer (broadcast can't cross the wire; Tailscale's own WoL guidance is the same pattern)
+
+**Tier 3 — epics:**
+13. Seamless roaming hardening (QUIC migration + keepalive/Doze strategy)
+14. PiP remote-desktop window + DeX/docked mode
+15. Privacy modes: lock local screen + block local input while remote (both directions)
+16. Audio device routing + volume sync via Hyprland IPC (`dispatch setvolume`)
+17. Compose polish: predictive back, Material 3 expressive, per-app language (2026 Play table stakes)
+
+**Suggested order:** R2#1-2 (encoder flags + MediaCodec tuning — days, pure config) → Tier 1 batch → R1 connectivity (iroh spike) → window picker (R3#7-8) → then gamepad vs KDE-parity/WoL depending on target audience.
+
+### Sources (R1/R2/R3)
+
+- iroh: [crates.io/iroh](https://crates.io/crates/iroh), [iroh-relay](https://crates.io/crates/iroh-relay), [why we forked Quinn](https://www.iroh.computer/blog/why-we-forked-quinn), [iroh vs libp2p](https://www.iroh.computer/blog/comparing-iroh-and-libp2p)
+- NAT/QUIC punching: [Implementing NAT Hole Punching with QUIC](https://arxiv.org/abs/2408.01791), [2025 decentralized NAT traversal measurement](https://arxiv.org/html/2510.27500v1)
+- Prior art: [RustDesk self-host docs](https://rustdesk.com/docs/en/self-host/), [Moonlight setup/port-forwarding](https://natchecker.com/blog/moonlight-port-forwarding), [Tailscale DERP reference](https://tailscale.com/docs/reference/derp-servers), [Tailscale WoL relay](https://tailscale.com/blog/wake-on-lan-tailscale-upsnap)
+- Client features: [Hyprland IPC wiki](https://wiki.hyprland.org/0.41.2/IPC/), [Moonlight Android](https://github.com/moonlight-stream/moonlight-android), [RustDesk remote control on Android](https://rustdesk.com/blog/rustdesk-remote-control-android-ios), [Android 14 foreground service types](https://developer.android.com/about/versions/14/changes/fgs-types-required)
+- Streaming: [Sunshine advanced-usage/optimization docs](https://docs.lizardbyte.dev/projects/sunshine/v0.23.1/about/advanced_usage.html), [AOSP low-latency decoding](https://source.android.com/docs/core/media/low-latency-media), [LiveVideo10ms](https://github.com/Consti10/LiveVideo10ms), [xdg-desktop-portal-wlr dmabuf #9](https://github.com/emersion/xdg-desktop-portal-wlr/issues/9), [Sunshine Hyprland portal issues #4662](https://github.com/LizardByte/Sunshine/issues/4662), [quinn congestion-control API](https://docs.rs/quinn-proto/latest/quinn_proto/congestion/index.html), [Cloudflare UDP GSO for QUIC](https://blog.cloudflare.com/accelerating-udp-packet-transmission-for-quic/)
+
+---
+
 ## Technical Deep Dives
 
 ### A. Tailscale Integration Details
