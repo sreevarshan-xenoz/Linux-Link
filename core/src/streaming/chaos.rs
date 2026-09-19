@@ -1,11 +1,11 @@
 pub mod proxy {
+    use rand::Rng;
     use std::net::SocketAddr;
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::net::UdpSocket;
     use tokio::sync::RwLock;
     use tracing::{debug, info};
-    use rand::Rng;
 
     #[derive(Debug, Clone)]
     pub struct ChaosConfig {
@@ -61,7 +61,7 @@ pub mod proxy {
             if self.drop_rate <= 0.0 {
                 return false;
             }
-            
+
             let mut rng = rand::thread_rng();
             rng.gen_bool(self.drop_rate)
         }
@@ -70,7 +70,7 @@ pub mod proxy {
             if self.base_latency_ms == 0 && self.jitter_ms == 0 {
                 return Duration::from_millis(0);
             }
-            
+
             let mut delay = self.base_latency_ms;
             if self.jitter_ms > 0 {
                 let mut rng = rand::thread_rng();
@@ -90,7 +90,11 @@ pub mod proxy {
     }
 
     impl ChaosProxy {
-        pub async fn new(listen_addr: &str, target_addr: &str, config: ChaosConfig) -> anyhow::Result<Self> {
+        pub async fn new(
+            listen_addr: &str,
+            target_addr: &str,
+            config: ChaosConfig,
+        ) -> anyhow::Result<Self> {
             let listen_addr: SocketAddr = listen_addr.parse()?;
             let target_addr: SocketAddr = target_addr.parse()?;
             Ok(Self {
@@ -116,12 +120,19 @@ pub mod proxy {
         pub async fn run(&self) -> anyhow::Result<()> {
             let socket = UdpSocket::bind(self.listen_addr).await?;
             let socket = Arc::new(socket);
-            
+
             // Map of client addresses to their dedicated forwarder sockets
-            let clients: Arc<RwLock<std::collections::HashMap<SocketAddr, (Arc<UdpSocket>, tokio::sync::mpsc::UnboundedSender<(tokio::time::Instant, Vec<u8>)>)>>> = 
+            type ClientForwarder = (
+                Arc<UdpSocket>,
+                tokio::sync::mpsc::UnboundedSender<(tokio::time::Instant, Vec<u8>)>,
+            );
+            let clients: Arc<RwLock<std::collections::HashMap<SocketAddr, ClientForwarder>>> =
                 Arc::new(RwLock::new(std::collections::HashMap::new()));
 
-            info!("ChaosProxy listening on {} -> forwarding to {}", self.listen_addr, self.target_addr);
+            info!(
+                "ChaosProxy listening on {} -> forwarding to {}",
+                self.listen_addr, self.target_addr
+            );
 
             let mut buf = vec![0u8; 65535];
             let cancel = self.cancel.clone();
@@ -173,18 +184,18 @@ pub mod proxy {
                                         let s = Arc::new(UdpSocket::bind("0.0.0.0:0").await.unwrap());
                                         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(tokio::time::Instant, Vec<u8>)>();
                                         c_guard.insert(src_addr, (s.clone(), tx));
-                                        
+
                                         // Spawn a task to listen for return traffic from the server
                                         let s_clone = s.clone();
                                         let mut ret_buf = vec![0u8; 65535];
                                         let server_sock_clone = server_sock.clone();
                                         tokio::spawn(async move {
-                                            loop {
-                                                if let Ok((n, _)) = s_clone.recv_from(&mut ret_buf).await {
-                                                    let _ = server_sock_clone.send_to(&ret_buf[..n], src_addr).await;
-                                                } else {
-                                                    break;
-                                                }
+                                            while let Ok((n, _)) =
+                                                s_clone.recv_from(&mut ret_buf).await
+                                            {
+                                                let _ = server_sock_clone
+                                                    .send_to(&ret_buf[..n], src_addr)
+                                                    .await;
                                             }
                                         });
 
@@ -193,7 +204,7 @@ pub mod proxy {
                                         let target_clone = target;
                                         tokio::spawn(async move {
                                             while let Some((deliver_at, data)) = rx.recv().await {
-                                                tokio::time::sleep_until(deliver_at.into()).await;
+                                                tokio::time::sleep_until(deliver_at).await;
                                                 let _ = s_clone2.send_to(&data, target_clone).await;
                                             }
                                         });
@@ -202,7 +213,7 @@ pub mod proxy {
                                     }
                                 }
                             };
-                            
+
                             // Queue packet for ordered delivery
                             let c_guard = clients_ref.read().await;
                             if let Some((_, tx)) = c_guard.get(&src_addr) {

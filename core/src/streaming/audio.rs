@@ -6,6 +6,7 @@
 //! - [`AudioEncoder`] — Opus encoder wrapping the `opus` crate (server-only)
 //! - Simple PCM buffer types for feeding captured audio
 
+#[cfg(feature = "opus")]
 use anyhow::{Context, Result};
 
 /// Audio configuration for capture and encoding.

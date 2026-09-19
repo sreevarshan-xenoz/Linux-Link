@@ -10,7 +10,7 @@ use std::fmt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ErrorCode {
     Generic = 1000,
-    
+
     // Transport (2xxx)
     ConnectionRefused = 2001,
     HandshakeFailed = 2002,
@@ -18,23 +18,23 @@ pub enum ErrorCode {
     TlsVerificationFailed = 2004,
     QuicProtocolError = 2005,
     ConnectionReset = 2006,
-    
+
     // Auth & Trust (3xxx)
     PeerNotTrusted = 3001,
     AuthChallengeFailed = 3002,
     PairingRejected = 3003,
-    
+
     // Discovery (4xxx)
     MdnsDaemonFailed = 4001,
     TailscaleCliNotFound = 4002,
     TailscaleAuthExpired = 4003,
-    
+
     // Streaming & Codec (5xxx)
     EncoderInitializationFailed = 5001,
     PipeWireCaptureDenied = 5002,
     X11CaptureFailed = 5003,
     BitrateStall = 5004,
-    
+
     // Lifecycle (6xxx)
     ShutdownInProgress = 6001,
     TaskCancelled = 6002,
@@ -121,13 +121,13 @@ impl LinuxLinkError {
 
     /// Whether the operation should be retried automatically.
     pub fn is_retryable(&self) -> bool {
-        match self.code() {
+        matches!(
+            self.code(),
             ErrorCode::ConnectionRefused
-            | ErrorCode::HandshakeTimeout
-            | ErrorCode::BitrateStall
-            | ErrorCode::MdnsDaemonFailed => true,
-            _ => false,
-        }
+                | ErrorCode::HandshakeTimeout
+                | ErrorCode::BitrateStall
+                | ErrorCode::MdnsDaemonFailed
+        )
     }
 }
 

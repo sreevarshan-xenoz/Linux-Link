@@ -129,12 +129,14 @@ impl CertManager {
             .with_no_client_auth()
             .with_single_cert(vec![cert], key)
             .context("Failed to configure TLS server")?;
-        
+
         if !alpns.is_empty() {
             crypto.alpn_protocols = alpns;
         }
 
-        let mut server_config = quinn::ServerConfig::with_crypto(Arc::new(quinn::crypto::rustls::QuicServerConfig::try_from(crypto)?));
+        let mut server_config = quinn::ServerConfig::with_crypto(Arc::new(
+            quinn::crypto::rustls::QuicServerConfig::try_from(crypto)?,
+        ));
         server_config.transport_config(Arc::new(transport));
 
         Ok(server_config)
@@ -280,12 +282,11 @@ impl rustls::client::danger::ServerCertVerifier for TofuVerifier {
                 info!("TOFU: first connection to {label}, accepting cert");
                 peers.insert(label, hash);
                 // Persist to disk so the trust survives restarts.
-                if let Some(path) = &self.peers_path {
-                    if let Ok(json) = serde_json::to_string_pretty(&*peers) {
-                        if let Err(e) = std::fs::write(path, json) {
-                            warn!("TOFU: failed to persist known peers: {e}");
-                        }
-                    }
+                if let Some(path) = &self.peers_path
+                    && let Ok(json) = serde_json::to_string_pretty(&*peers)
+                    && let Err(e) = std::fs::write(path, json)
+                {
+                    warn!("TOFU: failed to persist known peers: {e}");
                 }
                 Ok(rustls::client::danger::ServerCertVerified::assertion())
             }
@@ -330,7 +331,9 @@ impl StreamServer {
     pub async fn new(config: StreamTransportConfig, cert_manager: &CertManager) -> Result<Self> {
         info!(
             "Creating streaming server on {} (datagrams={}, alpn={:?})",
-            config.address, config.use_datagrams, String::from_utf8_lossy(&config.alpn)
+            config.address,
+            config.use_datagrams,
+            String::from_utf8_lossy(&config.alpn)
         );
 
         let mut server_config = cert_manager.server_config(vec![config.alpn.clone()])?;
