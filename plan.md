@@ -4,7 +4,7 @@
 
 **Target Platforms:** Arch Linux + Hyprland (server), Android (client)
 
-**Project Status:** Active Development (Phase 3 streaming foundation complete; Phase 4 Android client pending)
+**Project Status:** Active Development (server/core through Phase 6 complete; Android client migrated from Flutter to native Kotlin — scaffold + JNI bridge in place, API port in progress)
 
 **Estimated Timeline:** 4-6 months for MVP
 
@@ -22,6 +22,11 @@
   - ✅ A3 — Structured error types (`LinuxLinkError` enum with 15 variants, `From` impls)
   - ✅ A4 — E2E encryption with TOFU certificate management (`CertManager`, `TofuVerifier`, persistent identity + known peers)
 - Quality gates pass (`cargo fmt`, `cargo check`, `cargo clippy -D warnings`, `cargo test` — 66 tests)
+
+**Client Migration (September 2026):**
+- Android client switched from Flutter to native Kotlin (2026-09-19): the entire Flutter app (`android/lib`, `android/rust`, pubspec) was deleted and replaced with a Compose-based Kotlin scaffold (`android/app`).
+- Rust side of the bridge is now `android/bridge` — a `cdylib` JNI crate exposing `dev.linuxlink.android.bridge.RustCore` (currently a version-echo proof of wiring; session/streaming/input API is being ported on top of it).
+- Sections below that describe Flutter, `flutter_rust_bridge`, `android/rust`, or Dart are historical records from the April 2026 plan; live status is in AGENTS.md.
 
 ---
 
@@ -80,15 +85,15 @@ Linux Link is a pioneering pure-Rust remote desktop solution that fills a critic
 │                                                                          │
 │  ┌──────────────────────┐         Tailscale P2P          ┌─────────────┐│
 │  │   Android Client     │◄───────Encrypted──────────────►│   Server    ││
-│  │   (Flutter + Rust)   │        (Tailscale IP)          │(Hyprland)   ││
+│  │  (Kotlin + Rust JNI)  │        (Tailscale IP)          │(Hyprland)   ││
 │  ├──────────────────────┤                                ├─────────────┤│
-│  │  UI Layer (Flutter)  │                                │ Rust Daemon ││
+│  │  UI Layer (Compose)  │                                │ Rust Daemon ││
 │  │  ├── Connection Mgr  │                                │   (tokio)   ││
 │  │  ├── Video Player    │                                ├─────────────┤│
 │  │  ├── File Browser    │                                │  Core Lib   ││
 │  │  └── Settings        │                                │  (shared)   ││
 │  ├──────────────────────┤                                ├─────────────┤│
-│  │  Rust Backend (FFI)  │                                │  Modules:   ││
+│  │  Rust Backend (JNI)  │                                │  Modules:   ││
 │  │  ├── Protocol Handler│                                │  ├── Screen ││
 │  │  ├── Video Decoder   │                                │  ├── Input  ││
 │  │  ├── File Transfer   │                                │  ├── Files  ││
@@ -116,10 +121,10 @@ Linux Link is a pioneering pure-Rust remote desktop solution that fills a critic
 
 | Component | Responsibility | Technology |
 |-----------|---------------|------------|
-| **UI Framework** | User interface | Flutter (Dart) |
-| **Rust Bridge** | FFI communication | `flutter_rust_bridge` |
-| **Video Decoding** | H.264 hardware decoding | MediaCodec + SurfaceTexture |
-| **Input Handling** | Touch gestures, virtual trackpad | Flutter gestures |
+| **UI Framework** | User interface | Kotlin + Jetpack Compose |
+| **Rust Bridge** | FFI communication | JNI (`jni` crate, `android/bridge` cdylib) |
+| **Video Decoding** | H.264 hardware decoding | MediaCodec + SurfaceView |
+| **Input Handling** | Touch gestures, virtual trackpad | Compose pointer/gesture API |
 | **File Access** | File picker, transfer | Storage Access Framework |
 | **Background Service** | Notifications when closed | Android Foreground Service |
 
@@ -160,9 +165,9 @@ Linux Link is a pioneering pure-Rust remote desktop solution that fills a critic
                                                                   │
                                                                   ▼
 ┌─────────────┐    ┌──────────────┐    ┌─────────────┐    ┌──────────────┐
-│   Flutter   │◄───│  Texture ID  │◄───│  Surface     │◄───│   Frame      │
-│   Texture   │    │   Render     │    │  Texture     │    │   Buffer     │
-│   Widget    │    │              │    │              │    │              │
+│  Compose    │◄───│  SurfaceView │◄───│  Surface     │◄───│   Frame      │
+│  AndroidView│    │  (MediaCodec)│    │  Texture     │    │   Buffer     │
+│             │    │              │    │              │    │              │
 └─────────────┘    └──────────────┘    └─────────────┘    └──────────────┘
 ```
 
@@ -170,8 +175,8 @@ Linux Link is a pioneering pure-Rust remote desktop solution that fills a critic
 
 ```
 ┌─────────────┐    ┌──────────────┐    ┌─────────────┐    ┌──────────────┐
-│   Flutter   │───►│  Rust FFI    │───►│  QUIC/TCP   │───►│  Input       │
-│   Gesture   │    │  (FRB)       │    │  Stream     │    │  Handler     │
+│  Compose    │───►│  Rust via    │───►│  QUIC/TCP   │───►│  Input       │
+│  Gestures   │    │  JNI         │    │  Stream     │    │  Handler     │
 └─────────────┘    └──────────────┘    └─────────────┘    └──────────────┘
                                                                   │
                                                                   ▼
@@ -195,7 +200,7 @@ version = "0.1.0"
 edition = "2024"
 
 [workspace]
-members = ["core", "server", "android/rust"]
+members = ["core", "server", "android/bridge"]
 
 [workspace.dependencies]
 # Core async runtime
@@ -253,79 +258,48 @@ argon2 = "0.5"
 rand = "0.8"
 ```
 
-### Client Dependencies (Flutter pubspec.yaml)
+### Client Dependencies (Android — Gradle Kotlin DSL)
 
-```yaml
-name: linux_link_client
-description: Linux Link Android Client
-version: 1.0.0+1
+```kotlin
+// android/app/build.gradle.kts (abridged)
+android {
+    namespace = "dev.linuxlink.android"
+    compileSdk = 36
+    defaultConfig {
+        applicationId = "dev.linuxlink.android"
+        minSdk = 26
+    }
+}
 
-environment:
-  sdk: '>=3.5.0 <4.0.0'
-
-dependencies:
-  flutter:
-    sdk: flutter
-  
-  # Rust FFI
-  flutter_rust_bridge: ^2.12.0
-  
-  # State management
-  flutter_riverpod: ^2.4.0
-  
-  # Navigation
-  go_router: ^14.0.0
-  
-  # UI components
-  material_symbols_icons: ^8.0.0
-  
-  # File handling
-  file_picker: ^8.0.0
-  
-  # Network
-  connectivity_plus: ^6.0.0
-  
-  # Preferences
-  shared_preferences: ^2.2.0
-  
-  # Notifications
-  flutter_local_notifications: ^17.0.0
-  
-  # Background service
-  flutter_background_service: ^5.0.0
-
-dev_dependencies:
-  flutter_test:
-    sdk: flutter
-  flutter_lints: ^4.0.0
-  build_runner: ^2.4.0
-  ffigen: ^11.0.0
+dependencies {
+    val composeBom = platform("androidx.compose:compose-bom:2026.08.00")
+    implementation(composeBom)
+    implementation("androidx.activity:activity-compose:1.11.0")
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.material3:material3")
+    // state / navigation / background service — added as the API port lands
+}
 ```
 
-### Client Dependencies (Rust - android/rust/Cargo.toml)
+### Client Dependencies (Rust — android/bridge/Cargo.toml)
 
 ```toml
 [package]
-name = "linux-link-android"
-version = "0.1.0"
-edition = "2024"
+name = "linux-link-android-bridge"
 
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
-flutter_rust_bridge = "2.12.0"
-tokio = { version = "1", features = ["full"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-anyhow = "1"
-tracing = "0.1"
+# Shared with server, client feature only
+linux-link-core = { path = "../../core", default-features = false, features = ["client"] }
+jni = "0.21"
+anyhow.workspace = true
+tokio.workspace = true
+tracing.workspace = true
 
-# Shared with server
-linux-link-core = { path = "../../core" }
-
-# Video decoding (feed frames to MediaCodec via JNI)
-# Note: Actual decoding done in Android; Rust handles protocol
+# Video decoding is done on the Android side (MediaCodec);
+# the Rust bridge handles protocol/transport and feeds frames.
 ```
 
 ---
@@ -382,7 +356,7 @@ Month 1          Month 2          Month 3          Month 4          Month 5     
 
 | Phase | Duration | Key Deliverables | Success Criteria |
 |-------|----------|------------------|------------------|
-| **Phase 0** | 1-2 weeks | Project structure, build system, CI/CD | `cargo build` succeeds, Flutter app runs |
+| **Phase 0** | 1-2 weeks | Project structure, build system, CI/CD | `cargo build` succeeds, Android app runs |
 | **Phase 1** | 3-4 weeks | Tailscale daemon, peer discovery, basic CLI | Two devices connect over Tailscale |
 | **Phase 2** | 5-6 weeks | KDE Connect features, Android basic UI | File transfer, clipboard, notifications work |
 | **Phase 3** | 8-10 weeks | Screen capture, encoding, streaming, input | <150ms latency, 30+ FPS streaming |
@@ -393,6 +367,8 @@ Month 1          Month 2          Month 3          Month 4          Month 5     
 ---
 
 ## Detailed Execution Steps
+
+> **Historical record (April 2026).** The step-by-step commands, code samples and checklists below reflect the original Flutter-based client plan. On 2026-09-19 the client was migrated to native Kotlin + a JNI bridge (`android/app`, `android/bridge`); Flutter-specific steps (`flutter create`, `flutter_rust_bridge_codegen`, `android/rust`, Dart samples) are kept as history and are no longer the way to build the client. See AGENTS.md "Current Status" for the live picture.
 
 ### Phase 0: Project Setup (Week 1-2)
 
@@ -1708,8 +1684,8 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
 - [x] Notification plugin runtime (desktop notifications via `notify-send`)
 - [x] Share plugin runtime (file transfer over TCP, URL sharing)
 - [x] Input plugin runtime (mouse/keyboard via `xdotool`, presenter remote)
-- [ ] Android connection screen with peer list (Flutter)
-- [ ] File transfer UI in Flutter
+- [ ] Android connection screen with peer list (Kotlin client — pending bridge API port)
+- [ ] File transfer UI in Kotlin client (pending bridge API port)
 - [x] End-to-end KDE Connect packet exchange validated between two devices
 
 ---
@@ -1778,7 +1754,7 @@ The streaming pipeline is fully implemented with all core components integrated 
 - [ ] Latency measurement and optimization (<150ms target)
 - [ ] FPS benchmarking (30+ FPS target)
 - [ ] Android video decoder (MediaCodec) — Phase 4
-- [ ] Texture rendering in Flutter — Phase 4
+- [ ] Video surface rendering on Android (MediaCodec + SurfaceView via Kotlin bridge) — Phase 4
 
 #### 📚 Implementation Reference
 
@@ -1797,60 +1773,38 @@ Full code documentation with Rustdoc comments is available in the source files.
 
 ### Phase 4: Android Client Polish (Week 19-26)
 
-**Status: FOUNDATION COMPLETE (April 10, 2026)**
+**Status: IN PROGRESS — client migrated from Flutter to native Kotlin (September 2026)**
 
-#### ✅ Completed: Android Client Scaffold
+#### Historical: Flutter-era completion (April 2026)
 
-The Phase 4 Android client foundation is fully scaffolded with all structural components in place.
+By April 2026 the Flutter client was feature-complete in scaffold form: 4 screens (Connection/Remote Desktop/Files/Settings) with GoRouter + Riverpod, an FRB-based Rust API in `android/rust` (clipboard, file transfer, mouse/keyboard input, streaming stubs), a MediaCodec decoding plugin, and a foreground service. All of this was deleted on 2026-09-19 in favor of a native Kotlin client (recoverable from git at `4bf3c73`). The Flutter-era feature list remains the design reference for the Kotlin port.
 
-**What's Implemented:**
+#### Current: Kotlin scaffold + JNI bridge
 
 | Component | Location | Status | Notes |
 |-----------|----------|--------|-------|
-| **Flutter App Entry** | `android/lib/main.dart` | ✅ Complete | GoRouter (`/`, `/remote`, `/files`, `/settings`), Material 3 dark theme, ProviderScope |
-| **Peer Model** | `android/lib/models/peer_info.dart` | ✅ Complete | PeerInfo with `toJson`/`fromJson` |
-| **Connection Provider** | `android/lib/providers/connection_provider.dart` | ✅ Complete | Riverpod: connectionStateProvider, peersProvider, selectedPeerProvider |
-| **Streaming Provider** | `android/lib/providers/streaming_provider.dart` | ✅ Complete | isStreamingProvider, latencyProvider |
-| **Connection Screen** | `android/lib/screens/connection_screen.dart` | ✅ Complete | Peer list, refresh, empty state, connect flow |
-| **Remote Desktop Screen** | `android/lib/screens/remote_desktop_screen.dart` | ✅ Complete | Texture widget placeholder, GestureDetector (tap/drag/double-tap), overlay controls |
-| **File Browser Screen** | `android/lib/screens/file_browser_screen.dart` | ✅ Complete | Local/Remote tabs, file selection, send button, progress indicator |
-| **Settings Screen** | `android/lib/screens/settings_screen.dart` | ✅ Complete | Tailscale toggle, video quality, input mode, timeout, about section |
-| **Peer List Tile** | `android/lib/widgets/peer_list_tile.dart` | ✅ Complete | Name, IP, green/red online indicator |
-| **Clipboard Service** | `android/lib/services/clipboard_service.dart` | ✅ Complete | Platform clipboard wrapper |
-| **Rust FFI — Clipboard** | `android/rust/src/lib.rs` | ✅ Complete | `send_clipboard` / `get_clipboard` via KDE Connect protocol |
-| **Rust FFI — File Transfer** | `android/rust/src/lib.rs` | ✅ Complete | `send_file` via KDE Share protocol, 64KB chunked streaming |
-| **Rust FFI — Mouse Input** | `android/rust/src/lib.rs` | ✅ Complete | `send_mouse_event` with dx/dy/button/isPressed |
-| **Rust FFI — Keyboard Input** | `android/rust/src/lib.rs` | ✅ Complete | `send_keyboard_event` with text typing + keycode mapping |
-| **Rust FFI — Streaming** | `android/rust/src/lib.rs` | ✅ Stub | `start_streaming` / `stop_streaming` / `is_streaming_active` (state tracking) |
-| **Android Native Shell** | `android/android/` | ✅ Complete | Gradle, manifest, MainActivity, styles, gradle wrapper |
-| **Flutter Config** | `android/pubspec.yaml` | ✅ Complete | All dependencies (Riverpod, go_router, file_picker, etc.) |
+| **App Scaffold** | `android/app/` | ✅ Complete | Gradle Kotlin DSL (AGP 9.4.0, Kotlin 2.3.20), Compose Material 3, `MainActivity`, manifest, `minSdk 26` |
+| **Rust Bridge** | `android/bridge/` | ✅ Wired | `cdylib` JNI crate; `dev.linuxlink.android.bridge.RustCore.nativeVersion()` proves Rust→JNI→Kotlin path |
+| **Connection Screen (peer list)** | — | ⬜ Pending | Port alongside bridge session API |
+| **Remote Desktop Screen** | — | ⬜ Pending | Compose gestures → JNI → QUIC input stream; MediaCodec via SurfaceView |
+| **File Browser Screen** | — | ⬜ Pending | SAF picker + KDE Share protocol via bridge |
+| **Settings Screen** | — | ⬜ Pending | Tailscale toggle, quality, input mode |
+| **Background Service** | — | ⬜ Pending | Android foreground service + notification |
+| **Bridge API (clipboard/files/input/streaming)** | `android/bridge/src/` | ⬜ Pending | Replaces Flutter-era `android/rust` FRB surface |
 
-**Dependencies Added to `android/rust/Cargo.toml`:**
-- `flutter_rust_bridge` 2.12.0
-- `tokio` (full) — async runtime for TCP operations
-- `serde_json` 1 — JSON serialization for KDE packets
-- `tracing-subscriber` 0.3 with env-filter — Android logging
-
-**Quality Gates:**
-- `cargo fmt`: ✅ Pass
-- `cargo clippy -D warnings`: ✅ Pass (0 warnings across workspace)
-- `cargo test`: ✅ 52 tests pass (49 core + 3 server)
-- `cargo check --workspace`: ✅ Clean compilation
-- Flutter/Dart: ⚠️ Cannot verify (Flutter SDK not installed on build machine; code structurally correct)
+**Quality Gates (Rust side):**
+- `cargo fmt` / `cargo check --workspace`: ✅
+- `cargo clippy -D warnings`: ✅ in both default and `client` feature profiles
+- `cargo test`: ✅ (see AGENTS.md Current Status for count)
+- Kotlin side: ⚠️ Cannot verify locally — no Android SDK/Gradle on this machine; `gradle wrapper` must be generated once before first build
 
 **Remaining Work:**
-- [x] FRB code generation (`flutter_rust_bridge_codegen generate`)
-- [x] Wire Flutter screens to Rust FFI functions (actual invocation of `RustApi.*`)
-- [x] Frame delivery pipeline: `receive_frames` → `VideoPlayerService.feedFrame()`
-- [x] RTT latency polling wired to `latencyProvider`
-- [x] Background service with notifications (foreground service)
-- [x] File browser cleanup (removed hardcoded data)
-- [x] MediaCodec integration for H.264 video decoding (native Android platform channel — already complete via `VideoPlayerPlugin.kt`)
-- [x] QUIC stream client for receiving video frames from server (`core/src/streaming/client.rs`)
-- [x] `receive_frames` FFI function to drain packet channel
-- [x] Lock-free RTT atomic (`AtomicU64`) for main-thread-safe latency queries
-- [ ] `flutter build apk` verification (requires Flutter SDK + Android NDK on build machine)
-- [ ] Full end-to-end testing on Android device (requires Hyprland + PipeWire server running)
+- [ ] Generate Gradle wrapper and verify `./gradlew assembleDebug` on a machine with Android SDK
+- [ ] Port session lifecycle (connect/discover/trust) into the bridge over `linux-link-core` (`client` feature)
+- [ ] Frame delivery: QUIC client → JNI → MediaCodec SurfaceView
+- [ ] Input events: Compose gestures → JNI → streaming channel
+- [ ] Clipboard, file transfer, notification plugins end-to-end from Android
+- [ ] Full E2E testing on Android device against a live Hyprland + PipeWire server
 
 ### Phase 5: Polish & Extras (Week 25-28)
 
@@ -1866,12 +1820,12 @@ The Phase 4 Android client foundation is fully scaffolded with all structural co
 - [x] Code review fixes (I1: timeout-based recv, I2: mounted guards, I4: error logging, I5: stop confirmation, S6: remove redundant atomic)
 - [x] Configuration extension (streaming_port, log_level, video_quality with VideoQualityPreset)
 - [x] systemd service with installation documentation
-- [x] Remote file browsing (server plugin with path sanitization + FFI + Flutter UI with navigation)
+- [x] Remote file browsing (server plugin with path sanitization + FFI + UI; Flutter UI removed in Kotlin migration — Android side pending)
 - [x] Latency optimization (StreamingStats struct, encoder preset mapping via VideoQualityPreset)
 - [x] config.toml.example with all documented defaults
 
-**Remaining (requires Flutter SDK or live hardware):**
-- [ ] `flutter build apk` verification (requires Flutter SDK + Android NDK on build machine)
+**Remaining (requires Android SDK or live hardware):**
+- [ ] `./gradlew assembleDebug` verification (requires Android SDK + Gradle wrapper generation)
 - [ ] E2E latency measurement on live system (requires Hyprland + PipeWire server running)
 
 ### Phase 6: Release & Packaging (Week 29-30)
@@ -1881,7 +1835,7 @@ The Phase 4 Android client foundation is fully scaffolded with all structural co
 - [x] CHANGELOG.md with Unreleased section
 - [x] GitHub Release workflow (binary builds + checksums + draft release)
 - [x] AUR packaging (PKGBUILD + install script)
-- [x] CI expansion (cargo audit, Flutter analyze)
+- [x] CI expansion (cargo audit, Flutter analyze — Flutter lint job removed in Kotlin migration)
 - [x] Man page (linux-link.1)
 - [x] Install script (scripts/install.sh)
 - [x] CONTRIBUTING.md
@@ -1968,6 +1922,6 @@ The Phase 4 Android client foundation is fully scaffolded with all structural co
 
 ---
 
-*Document Version: 1.0*
-*Last Updated: March 31, 2026*
+*Document Version: 1.1*
+*Last Updated: September 19, 2026 (Kotlin client migration)*
 *Author: Linux Link Development Team*
