@@ -1515,21 +1515,148 @@ pub async fn send_gamepad_event(axes: Vec<i16>, buttons: u32) -> Result<(), Stri
     Ok(())
 }
 
-/// Roughly map Android keycodes to Linux evdev keycodes for QUIC input.
+/// Map Android `KeyEvent.KEYCODE_*` to Linux evdev `KEY_*` codes.
+///
+/// Values verified against `android.view.KeyEvent` (SDK 37) and
+/// `linux/input-event-codes.h`. Unknown codes map to 0 (KEY_RESERVED), which
+/// the server ignores — safer than passing an Android number through as a
+/// different evdev key.
 fn android_to_evdev_keycode(android_keycode: i32) -> u16 {
     match android_keycode {
-        66 => 28,                    // Enter
-        67 => 14,                    // Backspace
-        19 => 103,                   // Up
-        20 => 108,                   // Down
-        21 => 105,                   // Left
-        22 => 106,                   // Right
-        62 => 57,                    // Space
-        4 => 1,                      // Escape
-        61 => 15,                    // Tab
-        112 => 14,                   // Delete
-        85 => 111,                   // Volume Up
-        86 => 114,                   // Volume Down
-        _ => android_keycode as u16, // Passthrough for keycodes that might match
+        // Navigation / system
+        3 => 102,   // HOME -> KEY_HOME
+        4 => 1,     // BACK -> KEY_ESC
+        19 => 103,  // DPAD_UP
+        20 => 108,  // DPAD_DOWN
+        21 => 105,  // DPAD_LEFT
+        22 => 106,  // DPAD_RIGHT
+        23 => 28,   // DPAD_CENTER -> KEY_ENTER
+        24 => 115,  // VOLUME_UP
+        25 => 114,  // VOLUME_DOWN
+        82 => 139,  // MENU -> KEY_COMPOSE
+        85 => 164,  // MEDIA_PLAY_PAUSE
+        87 => 163,  // MEDIA_NEXT
+        88 => 165,  // MEDIA_PREVIOUS
+        92 => 104,  // PAGE_UP
+        93 => 109,  // PAGE_DOWN
+        111 => 1,   // ESCAPE
+        120 => 99,  // SYSRQ
+        123 => 107, // END
+        323 => 99,  // PRINT -> KEY_SYSRQ
+        // Editing
+        61 => 15,   // TAB
+        62 => 57,   // SPACE
+        66 => 28,   // ENTER
+        67 => 14,   // DEL (backspace) -> KEY_BACKSPACE
+        112 => 111, // FORWARD_DEL -> KEY_DELETE
+        115 => 58,  // CAPS_LOCK
+        // Modifiers
+        57 => 56,   // ALT_LEFT
+        58 => 100,  // ALT_RIGHT
+        59 => 42,   // SHIFT_LEFT
+        60 => 54,   // SHIFT_RIGHT
+        113 => 29,  // CTRL_LEFT
+        114 => 97,  // CTRL_RIGHT
+        117 => 125, // META_LEFT (Super)
+        118 => 126, // META_RIGHT (Super)
+        // Digits (Android 0..9 = 7..16 -> evdev 11, 2..10)
+        7 => 11,
+        8 => 2,
+        9 => 3,
+        10 => 4,
+        11 => 5,
+        12 => 6,
+        13 => 7,
+        14 => 8,
+        15 => 9,
+        16 => 10,
+        // Punctuation
+        17 => 55, // STAR -> KEY_KPASTERISK
+        55 => 51, // COMMA
+        56 => 52, // PERIOD
+        68 => 41, // GRAVE
+        69 => 12, // MINUS
+        70 => 13, // EQUALS
+        71 => 26, // LEFT_BRACKET
+        72 => 27, // RIGHT_BRACKET
+        74 => 39, // SEMICOLON
+        75 => 40, // APOSTROPHE
+        76 => 53, // SLASH
+        78 => 69, // NUM -> KEY_NUMLOCK
+        81 => 78, // PLUS -> KEY_KPPLUS
+        // Letters A..Z (Android 29..54, evdev non-contiguous)
+        29 => 30, // A
+        30 => 48, // B
+        31 => 46, // C
+        32 => 32, // D
+        33 => 18, // E
+        34 => 33, // F
+        35 => 34, // G
+        36 => 35, // H
+        37 => 23, // I
+        38 => 36, // J
+        39 => 37, // K
+        40 => 38, // L
+        41 => 50, // M
+        42 => 49, // N
+        43 => 24, // O
+        44 => 25, // P
+        45 => 16, // Q
+        46 => 19, // R
+        47 => 31, // S
+        48 => 20, // T
+        49 => 22, // U
+        50 => 47, // V
+        51 => 17, // W
+        52 => 45, // X
+        53 => 21, // Y
+        54 => 44, // Z
+        // F1..F12 (Android 131..142 -> evdev 59..70)
+        131..=142 => (android_keycode - 72) as u16,
+        _ => 0,
+    }
+}
+
+#[cfg(test)]
+mod keymap_tests {
+    use super::android_to_evdev_keycode as k;
+
+    #[test]
+    fn letters_map_to_qwerty_evdev() {
+        assert_eq!(k(29), 30); // A -> KEY_A
+        assert_eq!(k(30), 48); // B -> KEY_B
+        assert_eq!(k(54), 44); // Z -> KEY_Z
+    }
+
+    #[test]
+    fn digits_map_to_evdev() {
+        assert_eq!(k(8), 2); // 1
+        assert_eq!(k(16), 10); // 9
+        assert_eq!(k(7), 11); // 0
+    }
+
+    #[test]
+    fn modifiers_map_to_evdev() {
+        assert_eq!(k(117), 125); // META_LEFT -> KEY_LEFTMETA
+        assert_eq!(k(57), 56); // ALT_LEFT -> KEY_LEFTALT
+        assert_eq!(k(113), 29); // CTRL_LEFT -> KEY_LEFTCTRL
+    }
+
+    #[test]
+    fn function_keys_are_contiguous() {
+        assert_eq!(k(131), 59); // F1
+        assert_eq!(k(142), 70); // F12
+    }
+
+    #[test]
+    fn delete_vs_backspace() {
+        assert_eq!(k(67), 14); // DEL -> KEY_BACKSPACE
+        assert_eq!(k(112), 111); // FORWARD_DEL -> KEY_DELETE
+        assert_eq!(k(24), 115); // VOLUME_UP -> KEY_VOLUMEUP
+    }
+
+    #[test]
+    fn unknown_codes_are_reserved() {
+        assert_eq!(k(9999), 0);
     }
 }
