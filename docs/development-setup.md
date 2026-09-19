@@ -60,5 +60,10 @@ Notes:
 - Add more ABIs with extra `-t` flags (`x86_64-linux-android` target is installed for
   emulator testing).
 
-The bridge currently exposes only a version round-trip; the session/streaming/input
-API port from the old Flutter bridge is in progress — see AGENTS.md *Current Status*.
+The bridge now exposes the full client session/streaming/input API (ported from
+the Flutter-era `android/rust/src/api.rs`) via 34 `native*` JNI functions under
+`dev.linuxlink.android.bridge.RustCore`, with a typed Kotlin facade in
+`android/app/.../bridge/RustCore.kt`. Fallible calls return a `{"ok":...}` /
+`{"error":...}` JSON envelope; H.264 frames and Opus audio cross the boundary as
+big-endian binary blobs. MediaCodec decode (feeding frames to a `Surface`) and
+the Compose screens are the next step — see AGENTS.md *Current Status*.

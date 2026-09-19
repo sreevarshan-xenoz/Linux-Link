@@ -11,5 +11,11 @@ crate-type = ["cdylib"]
 linux-link-core = { path = "../../core", default-features = false, features = ["client"] }
 jni = "0.21"
 anyhow.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["fs"] }
 tracing.workspace = true
+tracing-subscriber.workspace = true
+serde.workspace = true
+serde_json = "1"
+quinn.workspace = true
+tokio-util.workspace = true
+uuid.workspace = true

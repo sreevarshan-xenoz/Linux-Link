@@ -1710,8 +1710,14 @@ dependencies = [
  "anyhow",
  "jni",
  "linux-link-core",
+ "quinn",
+ "serde",
+ "serde_json",
  "tokio",
+ "tokio-util",
  "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
