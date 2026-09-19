@@ -15,7 +15,7 @@ This file provides guidance to the AI agent when working with code in this repos
   - `cargo clippy --workspace --all-targets -- -D warnings`
   - `cargo clippy -p linux-link-core --no-default-features --features client -- -D warnings`
 - Tests: `cargo test --workspace`.
-- Kotlin app: `cd android && ./gradlew assembleDebug`. NOT buildable on the primary dev box (no Android SDK; Gradle wrapper jar not generated yet — run `gradle wrapper` once after installing Gradle). Treat Kotlin/Gradle files as unverified until an SDK machine or CI builds them.
+- Kotlin app: `cd android && ./gradlew assembleDebug`. Android SDK (Platform 37, Build-Tools 37, NDK 29) and Gradle wrapper are configured and buildable on host.
 
 ## Gotchas
 
@@ -27,6 +27,6 @@ This file provides guidance to the AI agent when working with code in this repos
 
 ## Current Status (keep this up to date)
 
-- 2026-09-19: Flutter client fully removed (last Flutter state is git commit `4bf3c73`). Replaced by a native Kotlin scaffold (`android/app`, AGP 9.4 / Kotlin 2.3 / Compose — version pins unverified) and a Rust JNI bridge crate (`android/bridge`) that so far only proves the version round-trip. The session/streaming/input API is NOT ported yet.
+- 2026-09-19: Native Kotlin scaffold (`android/app`, AGP 9.4 / Compose with `compileSdk = 37`) and Rust JNI bridge crate (`android/bridge`) are verified and buildable locally on host using OpenJDK 21 LTS, Android SDK 37, NDK 29, and `cargo-ndk`. Gradle wrapper generated and tested (`assembleDebug` succeeds).
 - Next: port the client API surface from the deleted `android/rust/src/api.rs` (recoverable from git history) onto `android/bridge` using `core`'s `client` feature; MediaCodec decode via JNI Surface; Compose screens (connection, remote desktop, file browser, settings).
 - `FIX_PLAN.md`, `ARCHITECTURE.html`, and `CHANGELOG.md` describe the Flutter-era design — historical reference, not current truth. (`plan.md` was updated 2026-09-19 to reflect the Kotlin client; its Flutter snippets remain under an explicit historical banner.)
