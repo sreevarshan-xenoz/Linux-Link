@@ -1884,9 +1884,9 @@ Ranked by impact-per-effort against the current pipeline (portal capture → FFm
 ### R3. Android client features
 
 **Tier 1 — quick wins (the "1.0 remote desktop" batch):**
-1. Latency/FPS/bitrate stats HUD overlay (MediaCodec callbacks + QUIC RTT → Compose overlay)
-2. Touch input modes: direct-touch / trackpad (relative mouse) / mouse-direct — the most-loved RustDesk/Moonlight affordance
-3. Shortcut key bar: Super, Ctrl+Alt+Del equivalent, Alt+Tab, **Super+1..9 Hyprland workspace switch**, screenshot
+1. ✅ Latency/FPS/bitrate stats HUD overlay (`stream/StatsHud.kt` + `RustCore.streamingStats()`, 2026-09-20)
+2. ⏸ Touch input modes: direct-touch / trackpad (relative mouse) / mouse-direct — **blocked on R2#4**: the QUIC wire protocol only carries relative `MouseMove{dx,dy}`; absolute direct-touch needs an absolute-position packet (pairs with `/dev/uinput` absolute injection server-side). Trackpad mode can ship once a gesture handler exists.
+3. ✅ Shortcut key bar (`stream/ShortcutBar.kt`, 2026-09-20): Super, Alt+Tab, Ctrl+Alt+Del, PrtSc, Esc, Super+1..9 Hyprland workspace switch — required the fixed Android→evdev keycode table (commit ba26e6c)
 4. Clipboard UX: sync toggle, phone-side history sheet, share-URI → file plugin (KDE Connect pattern)
 5. Auto-connect to last host + connect/disconnect/lock actions in the foreground-service notification — decide the Android 14 FGS type early (`specialUse` justification vs `mediaProjection` consent dialog)
 6. Pinch-zoom + display scaling for HiDPI desktops

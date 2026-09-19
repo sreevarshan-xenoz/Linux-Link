@@ -130,7 +130,27 @@ object RustCore {
     val streamingRttUs: Int
         get() = nativeGetStreamingRtt()
 
-    fun streamingStatsJson(): String = nativeGetStreamingStats()
+    /** Parsed streaming stats snapshot including the live QUIC RTT. */
+    fun streamingStats(): StreamingStats {
+        val obj = JSONObject(nativeGetStreamingStats())
+        return StreamingStats(
+            fps = obj.optDouble("fps", 0.0),
+            bitrateKbps = obj.optLong("bitrate_kbps", 0L),
+            e2eLatencyMs = obj.optLong("e2e_latency_ms", 0L),
+            frameDrops = obj.optLong("frame_drops", 0L),
+            rttUs = nativeGetStreamingRtt().toLong(),
+        )
+    }
+
+    data class StreamingStats(
+        val fps: Double,
+        val bitrateKbps: Long,
+        val e2eLatencyMs: Long,
+        val frameDrops: Long,
+        val rttUs: Long,
+    ) {
+        val rttMs: Long get() = rttUs / 1000
+    }
 
     /** `monitorIndex = -1` selects the server default. */
     fun connectStreaming(address: String, port: Int, monitorIndex: Int = -1): Result<Unit> =
@@ -203,6 +223,39 @@ object RustCore {
     fun sendKeyboardEvent(address: String, port: Int, keyCode: Int, text: String): Result<Unit> =
         envelope(nativeSendKeyboardEvent(address, port, keyCode, text)).map { }
 
+    /**
+     * Tap a key (server sends press+release, one round trip). [keyCode] is an
+     * `android.view.KeyEvent.KEYCODE_*`; the bridge maps it to evdev.
+     */
+    fun tapKey(address: String, port: Int, keyCode: Int): Result<Unit> =
+        sendKeyboardEvent(address, port, keyCode, "")
+
+    /** Hold a modifier down / release it (combo building on the server side). */
+    fun holdKey(address: String, port: Int, keyCode: Int): Result<Unit> =
+        sendKeyboardEvent(address, port, keyCode + MOD_PRESS_OFFSET, "")
+
+    fun releaseKey(address: String, port: Int, keyCode: Int): Result<Unit> =
+        sendKeyboardEvent(address, port, keyCode + MOD_RELEASE_OFFSET, "")
+
+    /**
+     * Send `modifiers + key` as a combo: press modifiers in order, tap the
+     * key, release modifiers in reverse. Modifiers use `KEYCODE_*` constants.
+     */
+    fun hotkey(address: String, port: Int, key: Int, vararg modifiers: Int): Result<Unit> {
+        for (mod in modifiers) {
+            holdKey(address, port, mod).onFailure { return Result.failure(it) }
+        }
+        val tapped = tapKey(address, port, key)
+        for (mod in modifiers.reversed()) {
+            releaseKey(address, port, mod)
+        }
+        return tapped
+    }
+
+    /** IME/text input path (server injects as Unicode text). */
+    fun sendText(address: String, port: Int, text: String): Result<Unit> =
+        sendKeyboardEvent(address, port, 0, text)
+
     fun sendGamepadEvent(axes: IntArray, buttons: Int): Result<Unit> =
         envelope(nativeSendGamepadEvent(axes, buttons)).map { }
 
@@ -230,6 +283,11 @@ object RustCore {
         envelope(nativeSendWol(macAddress, broadcastAddr)).map { }
 
     // ---- internals ----
+
+    // Modifier encoding understood by the bridge's send_keyboard_event:
+    // keyCode + 50000 = modifier press, keyCode + 100000 = modifier release.
+    private const val MOD_PRESS_OFFSET = 50_000
+    private const val MOD_RELEASE_OFFSET = 100_000
 
     /** One Annex-B H.264 access unit plus its keyframe flag and sequence number. */
     data class EncodedFrame(
