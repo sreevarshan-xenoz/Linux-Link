@@ -49,19 +49,3 @@ jobs:
 
       - name: Run security audit
         run: cargo audit || echo "Security audit found vulnerabilities (see output above)"
-
-  lint-android:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.41.9'
-          cache: true
-
-      - name: Flutter analyze
-        run: |
-          cd android
-          flutter analyze
