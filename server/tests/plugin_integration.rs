@@ -3,13 +3,11 @@
 //! Tests that each registered plugin correctly handles its expected
 //! packet types and produces appropriate responses.
 
+use linux_link_core::error::Result;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use linux_link_core::error::Result;
 
-use linux_link_core::protocol::kdeconnect::{
-    DeviceSender, NetworkPacket,
-};
+use linux_link_core::protocol::kdeconnect::{DeviceSender, NetworkPacket};
 
 /// A mock sender that captures packets sent by plugins for verification.
 #[derive(Clone)]
@@ -51,13 +49,13 @@ async fn test_battery_plugin() {
     let registry = build_test_registry();
     let sender = MockSender::new();
     let request = NetworkPacket::new("kdeconnect.battery.request");
-    registry
-        .dispatch_packet(&request, &sender)
-        .await
-        .unwrap();
+    registry.dispatch_packet(&request, &sender).await.unwrap();
     let sent = sender.sent.lock().await;
     let battery_resp = sent.iter().find(|p| p.packet_type == "kdeconnect.battery");
-    assert!(battery_resp.is_some(), "Battery plugin should respond with kdeconnect.battery");
+    assert!(
+        battery_resp.is_some(),
+        "Battery plugin should respond with kdeconnect.battery"
+    );
 }
 
 #[tokio::test]
@@ -66,10 +64,7 @@ async fn test_clipboard_plugin_set() {
     let sender = MockSender::new();
     let request = NetworkPacket::new("kdeconnect.clipboard")
         .with_body(serde_json::json!({ "content": "hello world" }));
-    registry
-        .dispatch_packet(&request, &sender)
-        .await
-        .unwrap();
+    registry.dispatch_packet(&request, &sender).await.unwrap();
     // Clipboard set should succeed without error (no response expected)
 }
 
@@ -79,13 +74,12 @@ async fn test_input_plugin_mouse() {
     let sender = MockSender::new();
     let request = NetworkPacket::new("kdeconnect.mousepad.request")
         .with_body(serde_json::json!({ "dx": 100, "dy": 50 }));
-    registry
-        .dispatch_packet(&request, &sender)
-        .await
-        .unwrap();
+    registry.dispatch_packet(&request, &sender).await.unwrap();
     // Input plugin echoes back on mouse events
     let sent = sender.sent.lock().await;
-    let echo = sent.iter().find(|p| p.packet_type == "kdeconnect.mousepad.echo");
+    let echo = sent
+        .iter()
+        .find(|p| p.packet_type == "kdeconnect.mousepad.echo");
     assert!(echo.is_some(), "Input plugin should echo mousepad events");
 }
 
@@ -95,12 +89,11 @@ async fn test_share_plugin_url() {
     let sender = MockSender::new();
     let request = NetworkPacket::new("kdeconnect.share.request")
         .with_body(serde_json::json!({ "url": "https://example.com" }));
-    registry
-        .dispatch_packet(&request, &sender)
-        .await
-        .unwrap();
+    registry.dispatch_packet(&request, &sender).await.unwrap();
     let sent = sender.sent.lock().await;
-    let notification = sent.iter().find(|p| p.packet_type == "kdeconnect.notification");
+    let notification = sent
+        .iter()
+        .find(|p| p.packet_type == "kdeconnect.notification");
     assert!(
         notification.is_some(),
         "Share plugin should send notification for URL shares"
@@ -113,12 +106,11 @@ async fn test_file_browse_plugin() {
     let sender = MockSender::new();
     let request = NetworkPacket::new("kdeconnect.filebrowse.request")
         .with_body(serde_json::json!({ "path": "/tmp" }));
-    registry
-        .dispatch_packet(&request, &sender)
-        .await
-        .unwrap();
+    registry.dispatch_packet(&request, &sender).await.unwrap();
     let sent = sender.sent.lock().await;
-    let response = sent.iter().find(|p| p.packet_type == "kdeconnect.filebrowse.response");
+    let response = sent
+        .iter()
+        .find(|p| p.packet_type == "kdeconnect.filebrowse.response");
     assert!(
         response.is_some(),
         "File browse plugin should respond with filebrowse.response"
@@ -152,10 +144,7 @@ async fn test_clipboard_connect_request() {
     let registry = build_test_registry();
     let sender = MockSender::new();
     let request = NetworkPacket::new("kdeconnect.clipboard.connect");
-    registry
-        .dispatch_packet(&request, &sender)
-        .await
-        .unwrap();
+    registry.dispatch_packet(&request, &sender).await.unwrap();
     // Should trigger a clipboard get — no specific response expected in mock
 }
 
@@ -168,7 +157,9 @@ async fn test_exec_plugin() {
     let result = registry.dispatch_packet(&request, &sender).await;
     assert!(result.is_ok(), "Exec plugin should handle simple commands");
     let sent = sender.sent.lock().await;
-    let response = sent.iter().find(|p| p.packet_type == "kdeconnect.linuxlink.exec");
+    let response = sent
+        .iter()
+        .find(|p| p.packet_type == "kdeconnect.linuxlink.exec");
     assert!(
         response.is_some(),
         "Exec plugin should respond with exec response"
@@ -213,4 +204,43 @@ fn test_plugin_capabilities() {
         incoming.contains(&"kdeconnect.linuxlink.exec".to_string()),
         "Exec plugin should register linuxlink.exec"
     );
+    assert!(
+        incoming.contains(&"kdeconnect.linuxlink.windows".to_string()),
+        "Windows plugin should register linuxlink.windows"
+    );
+}
+
+/// R3#7: the windows plugin answers with the picker payload — an
+/// `available` flag plus a `windows` array; on a Hyprland session every
+/// entry must carry the fields the picker and crop math need.
+#[tokio::test]
+async fn test_windows_plugin_payload() {
+    let registry = build_test_registry();
+    let sender = MockSender::new();
+    let request = NetworkPacket::new("kdeconnect.linuxlink.windows");
+    registry.dispatch_packet(&request, &sender).await.unwrap();
+    let sent = sender.sent.lock().await;
+    let resp = sent
+        .iter()
+        .find(|p| p.packet_type == "kdeconnect.linuxlink.windows")
+        .expect("Windows plugin should respond");
+
+    assert!(
+        resp.body
+            .get("available")
+            .and_then(|v| v.as_bool())
+            .is_some()
+    );
+    let windows = resp
+        .body
+        .get("windows")
+        .and_then(|v| v.as_array())
+        .expect("windows must be an array");
+    if resp.body["available"].as_bool().unwrap() {
+        for w in windows {
+            for field in ["address", "title", "class", "at", "size", "workspace"] {
+                assert!(w.get(field).is_some(), "window entry missing {field}: {w}");
+            }
+        }
+    }
 }

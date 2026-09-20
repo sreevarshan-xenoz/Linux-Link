@@ -33,7 +33,7 @@ pub struct HyprlandIpc {
 }
 
 /// A single window as reported by `j/clients` / `j/activewindow`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
 pub struct HyprWindow {
     pub address: String,
     #[serde(default)]
@@ -61,7 +61,7 @@ pub struct HyprWindow {
     pub workspace: HyprWorkspaceRef,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, serde::Serialize)]
 pub struct HyprWorkspaceRef {
     #[serde(default)]
     pub id: i32,
