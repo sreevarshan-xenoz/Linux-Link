@@ -58,6 +58,37 @@ impl Drop for CaptureSession {
     }
 }
 
+/// Capture rect for `index` in the xcap enumeration — the *same* ordering the
+/// server's monitors plugin reports to clients, so a phone-side picker index
+/// and the server capture target agree. `None` when enumeration fails or the
+/// index is out of range; callers then keep the legacy whole-screen behaviour.
+fn monitor_rect(index: u32) -> Option<(i32, i32, u32, u32)> {
+    let monitors = xcap::Monitor::all().ok()?;
+    let monitor = monitors.get(index as usize)?;
+    Some((
+        monitor.x().ok()?,
+        monitor.y().ok()?,
+        monitor.width().ok()?,
+        monitor.height().ok()?,
+    ))
+}
+
+/// Choose the PipeWire stream for the requested monitor from
+/// `(node_id, position)` pairs: exact position match against the target
+/// rect's origin, else the first stream (single-share dialogs and backends
+/// that don't report positions).
+fn pick_stream_node(
+    streams: &[(u32, Option<(i32, i32)>)],
+    want: Option<(i32, i32)>,
+) -> Option<u32> {
+    if let Some(pos) = want
+        && let Some((node_id, _)) = streams.iter().find(|(_, p)| *p == Some(pos))
+    {
+        return Some(*node_id);
+    }
+    streams.first().map(|(node_id, _)| *node_id)
+}
+
 /// Start PipeWire screen capture.
 ///
 /// This function:
@@ -130,21 +161,39 @@ pub async fn start_capture(
         .response()
         .context("No response from capture start")?;
 
-    // Step 4: Find the first available stream and extract its node ID
-    let mut node_id = None;
-    for stream in streams.streams().iter() {
-        let nid = stream.pipe_wire_node_id();
-        let size = stream.size().unwrap_or((0, 0));
-        info!(
-            "Capturing stream: node_id={}, size={}x{}",
-            nid, size.0, size.1
-        );
-        if node_id.is_none() {
-            node_id = Some(nid);
-        }
+    // Step 4: Pick the stream for the requested monitor. The portal grants one
+    // stream per monitor the desktop user shared; the position match against
+    // the xcap enumeration is what makes `monitor_index` mean the same thing
+    // on both sides of the wire.
+    let stream_infos: Vec<_> = streams
+        .streams()
+        .iter()
+        .map(|s| {
+            let size = s.size().unwrap_or((0, 0));
+            info!(
+                "Available stream: node_id={}, size={}x{}, position={:?}",
+                s.pipe_wire_node_id(),
+                size.0,
+                size.1,
+                s.position()
+            );
+            (s.pipe_wire_node_id(), s.position())
+        })
+        .collect();
+    let want = monitor_rect(config.monitor_index).map(|(x, y, _, _)| (x, y));
+    if want.is_some()
+        && !stream_infos
+            .iter()
+            .any(|(_, p)| want.is_some_and(|w| *p == Some(w)))
+    {
+        warn!("Monitor {want:?} not among the shared streams, falling back to the first one");
     }
-
-    let node_id = node_id.context("No PipeWire stream available from screencast session")?;
+    let node_id = pick_stream_node(&stream_infos, want)
+        .context("No PipeWire stream available from screencast session")?;
+    info!(
+        "Selected node_id={} for monitor_index={}",
+        node_id, config.monitor_index
+    );
 
     // Clone config for the capture thread
     let thread_config = config.clone();
@@ -522,24 +571,62 @@ async fn start_x11_capture(
     let screen_height = screen.height_in_pixels as u32;
     info!("X11 screen: {}x{}", screen_width, screen_height);
 
-    // Determine capture width/height (use config if <= screen, otherwise screen)
-    let cap_width = config.width.min(screen_width);
-    let cap_height = config.height.min(screen_height);
+    // Per-monitor capture (F2: multi-monitor): grab the xcap-enumerated rect
+    // for `config.monitor_index`; frames then reach the encoder through the
+    // same size-rebuild path as window crops. Out-of-range or a failed
+    // enumeration keeps the legacy whole-root grab clamped to the config size.
+    let whole_screen = || CaptureRegion {
+        x: 0,
+        y: 0,
+        width: config.width.min(screen_width),
+        height: config.height.min(screen_height),
+    };
+    let region = match monitor_rect(config.monitor_index) {
+        Some((x, y, width, height)) => match (i16::try_from(x), i16::try_from(y)) {
+            (Ok(x), Ok(y)) => {
+                info!(
+                    "X11 capture target: monitor {} at ({x},{y}) {width}x{height}",
+                    config.monitor_index
+                );
+                CaptureRegion {
+                    x,
+                    y,
+                    width,
+                    height,
+                }
+            }
+            _ => {
+                warn!("Monitor offset {x},{y} outside i16 GetImage range, capturing whole screen");
+                whole_screen()
+            }
+        },
+        None => whole_screen(),
+    };
 
     // Spawn the capture loop on a blocking thread
     let cap_cancel = cancel.clone();
     std::thread::Builder::new()
         .name("x11-capture".into())
         .spawn(move || {
-            if let Err(e) = run_x11_capture_loop(
-                conn, root, cap_width, cap_height, config.fps, frame_tx, cap_cancel,
-            ) {
+            if let Err(e) =
+                run_x11_capture_loop(conn, root, region, config.fps, frame_tx, cap_cancel)
+            {
                 error!("X11 capture thread exited with error: {e}");
             }
         })
         .context("Failed to spawn X11 capture thread")?;
 
     Ok(CaptureSession::new(config, cancel))
+}
+
+/// Rectangle of the virtual screen to grab each frame (monitor-local on
+/// multi-monitor setups, whole-root as the legacy fallback).
+#[derive(Clone, Copy)]
+struct CaptureRegion {
+    x: i16,
+    y: i16,
+    width: u32,
+    height: u32,
 }
 
 /// Run the X11 capture loop, sending frames through the channel.
@@ -552,8 +639,7 @@ async fn start_x11_capture(
 fn run_x11_capture_loop(
     conn: x11rb::rust_connection::RustConnection,
     root: u32,
-    width: u32,
-    height: u32,
+    region: CaptureRegion,
     fps: u32,
     frame_tx: mpsc::Sender<VideoFrame>,
     cancel: CancellationToken,
@@ -581,10 +667,10 @@ fn run_x11_capture_loop(
         let result = conn.get_image(
             ImageFormat::Z_PIXMAP,
             root,
-            0, // x offset
-            0, // y offset
-            width as u16,
-            height as u16,
+            region.x, // monitor x in the virtual screen
+            region.y, // monitor y in the virtual screen
+            region.width as u16,
+            region.height as u16,
             !0, // plane mask (all planes)
         );
 
@@ -592,7 +678,7 @@ fn run_x11_capture_loop(
             Ok(cookie) => match cookie.reply() {
                 Ok(reply) => {
                     let frame_data = reply.data.to_vec();
-                    let stride = width * 4;
+                    let stride = region.width * 4;
 
                     // Change detection: only forward (and stay at full fps) when
                     // pixels actually moved. A cheap byte compare vs. encoding a
@@ -604,13 +690,16 @@ fn run_x11_capture_loop(
                         }
                         frame_count += 1;
                         if frame_count.is_multiple_of(30) {
-                            debug!("X11 capture: frame #{}, {}x{}", frame_count, width, height);
+                            debug!(
+                                "X11 capture: frame #{}, {}x{}",
+                                frame_count, region.width, region.height
+                            );
                         }
 
                         let frame = VideoFrame {
                             data: frame_data.clone(),
-                            width,
-                            height,
+                            width: region.width,
+                            height: region.height,
                             stride,
                             timestamp: Instant::now(),
                         };
@@ -673,6 +762,26 @@ pub fn create_test_frame(width: u32, height: u32) -> VideoFrame {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pick_stream_matches_position() {
+        let streams = [(10u32, Some((0, 0))), (20, Some((1920, 0)))];
+        assert_eq!(pick_stream_node(&streams, Some((1920, 0))), Some(20));
+        assert_eq!(pick_stream_node(&streams, Some((0, 0))), Some(10));
+    }
+
+    #[test]
+    fn pick_stream_falls_back_to_first() {
+        let streams = [(10u32, Some((0, 0))), (20, Some((1920, 0)))];
+        // Unknown target position → first stream.
+        assert_eq!(pick_stream_node(&streams, Some((3840, 0))), Some(10));
+        // No target (enumeration failed / index out of range) → first stream.
+        assert_eq!(pick_stream_node(&streams, None), Some(10));
+        // Backend that reports no positions → first stream.
+        let unpositioned = [(7u32, None), (8, None)];
+        assert_eq!(pick_stream_node(&unpositioned, Some((0, 0))), Some(7));
+        assert_eq!(pick_stream_node(&[], Some((0, 0))), None);
+    }
 
     #[test]
     fn test_create_test_frame() {
