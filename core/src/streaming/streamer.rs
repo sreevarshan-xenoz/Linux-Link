@@ -16,6 +16,7 @@ use super::audio::{AudioConfig, AudioEncoder as AudioOpusEncoder};
 use super::audio_capture;
 use super::bitrate::AdaptiveBitrate;
 use super::capture;
+use super::connection::{Connection, QuinnConnection, SharedConnection};
 use super::encoder::VideoEncoder;
 use super::input_packet::InputPacket;
 use super::transport::{self, CertManager, StreamServer, StreamTransportConfig};
@@ -90,9 +91,11 @@ impl StreamingServer {
         self.bitrate_tx.subscribe()
     }
 
-    /// Run the streaming pipeline on an existing QUIC connection.
-    /// This is useful when the connection was already accepted by a unified multiplexer.
-    pub async fn run_on_connection(&mut self, connection: quinn::Connection) -> Result<()> {
+    /// Run the streaming pipeline on an existing connection.
+    /// This is useful when the connection was already accepted by a unified
+    /// multiplexer; `connection` is transport-agnostic (quinn today, iroh
+    /// once R1 lands its endpoint impl).
+    pub async fn run_on_connection(&mut self, connection: SharedConnection) -> Result<()> {
         let conn_id = Uuid::new_v4().to_string();
         let span = tracing::info_span!(
             "stream_session",
@@ -156,6 +159,7 @@ impl StreamingServer {
             };
 
             let connection = incoming.await.context("Failed to accept QUIC connection")?;
+            let connection = QuinnConnection::shared(connection);
 
             let peer = connection.remote_address();
             tracing::Span::current().record("peer", &peer.to_string());
@@ -169,7 +173,7 @@ impl StreamingServer {
     }
 
     /// Run the full streaming pipeline for a single connection
-    async fn run_pipeline(&mut self, connection: quinn::Connection) -> Result<()> {
+    async fn run_pipeline(&mut self, connection: SharedConnection) -> Result<()> {
         // Read optional client config stream before starting the pipeline.
         read_client_config(&connection, &mut self.config).await;
 
@@ -561,7 +565,7 @@ impl StreamingServer {
                                     }
                                 }
                             }
-                            Err(quinn::ConnectionError::ApplicationClosed(_)) => {
+                            Err(super::connection::ConnectionError::Closed) => {
                                 info!("Client disconnected via application close");
                                 break;
                             }
@@ -583,7 +587,7 @@ impl StreamingServer {
                 async move {
                     info!("Adaptive bitrate monitor started");
                     let monitor = AdaptiveBitrateMonitor::new(adaptive_bitrate);
-                    monitor.run(&conn_for_bitrate, bitrate_cancel).await;
+                    monitor.run(&*conn_for_bitrate, bitrate_cancel).await;
                 }
                 .instrument(bitrate_span),
             );
@@ -661,7 +665,7 @@ fn trace_packet_stats(packet: &EncodedPacket) {
 /// establishing the connection to request a specific monitor index.
 /// This is read with a short timeout so the pipeline is not blocked if
 /// no config is sent.
-async fn read_client_config(connection: &quinn::Connection, config: &mut StreamingConfig) {
+async fn read_client_config(connection: &SharedConnection, config: &mut StreamingConfig) {
     tokio::select! {
         biased;
         result = connection.accept_uni() => {
@@ -720,7 +724,7 @@ impl AdaptiveBitrateMonitor {
         }
     }
 
-    async fn run(mut self, connection: &quinn::Connection, cancel: CancellationToken) {
+    async fn run(mut self, connection: &dyn Connection, cancel: CancellationToken) {
         loop {
             tokio::select! {
                 _ = cancel.cancelled() => {
@@ -729,10 +733,10 @@ impl AdaptiveBitrateMonitor {
                 }
 
                 _ = self.check_interval.tick() => {
-                    // Get QUIC connection stats
+                    // Get connection transport stats
                     let stats = connection.stats();
-                    let rtt_ms = stats.path.rtt.as_millis();
-                    debug!("QUIC RTT: {}ms", rtt_ms);
+                    let rtt_ms = stats.rtt.as_millis();
+                    debug!("RTT: {}ms", rtt_ms);
                     self.controller.update_rtt(rtt_ms);
                 }
             }
@@ -744,10 +748,7 @@ impl AdaptiveBitrateMonitor {
 ///
 /// Tries PipeWire loopback capture first; falls back to silence frames if
 /// unavailable. Runs until cancelled or the connection closes.
-async fn run_audio_pipeline(
-    connection: quinn::Connection,
-    cancel: CancellationToken,
-) -> Result<()> {
+async fn run_audio_pipeline(connection: SharedConnection, cancel: CancellationToken) -> Result<()> {
     info!("Audio task started");
 
     let audio_config = AudioConfig {
@@ -810,7 +811,7 @@ async fn run_audio_pipeline(
                     };
 
                     if let Err(e) = send_audio_packet(
-                        &connection, packet, packet_seq, &mut connection_closed,
+                        &*connection, packet, packet_seq, &mut connection_closed,
                     ).await {
                         warn!(error = %e, "Audio transport failed");
                         connection_closed = true;
@@ -844,7 +845,7 @@ async fn run_audio_pipeline(
                     };
 
                     if let Err(e) = send_audio_packet(
-                        &connection, packet, packet_seq, &mut connection_closed,
+                        &*connection, packet, packet_seq, &mut connection_closed,
                     ).await {
                         warn!(error = %e, "Silence audio transport failed");
                         connection_closed = true;
@@ -862,9 +863,9 @@ async fn run_audio_pipeline(
     Ok(())
 }
 
-/// Helper: send an encoded audio packet over the QUIC connection.
+/// Helper: send an encoded audio packet over the connection.
 async fn send_audio_packet(
-    conn: &quinn::Connection,
+    conn: &dyn Connection,
     packet: super::AudioPacket,
     sequence: u64,
     connection_closed: &mut bool,

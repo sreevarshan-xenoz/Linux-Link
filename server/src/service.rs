@@ -3,19 +3,19 @@ use crate::input_injector::InputInjector;
 use crate::kde;
 use crate::notification_monitor::start_notification_monitor;
 use crate::state;
-use uuid;
+use crate::v2_multiplexer::handle_v2_session;
 use anyhow::{Context, Result, bail};
 use linux_link_core::protocol::connection::ConnectionManager;
 use linux_link_core::protocol::kdeconnect::{
     DeviceIdentity, DeviceSender, NetworkPacket, PluginRegistry, TcpDeviceSender,
 };
-use linux_link_core::protocol::{HANDSHAKE_HELLO, HANDSHAKE_OK};
 use linux_link_core::protocol::v2::{ALPN_V2, IdentityPacketV2};
+use linux_link_core::protocol::{HANDSHAKE_HELLO, HANDSHAKE_OK};
+use linux_link_core::streaming::QuinnConnection;
 use linux_link_core::streaming::StreamingServer;
 use linux_link_core::streaming::input_packet::InputPacket;
 use linux_link_core::streaming::transport::{CertManager, StreamTransportConfig};
 use linux_link_core::tailscale::{DiscoveryEvent, DiscoveryService, TailscaleClient};
-use crate::v2_multiplexer::handle_v2_session;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -23,6 +23,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::time::timeout;
+use uuid;
 
 pub async fn run(config: Config) -> Result<()> {
     let pid_file = state::pid_file_path()?;
@@ -85,7 +86,11 @@ pub async fn run(config: Config) -> Result<()> {
     let cert_manager = Arc::new(CertManager::new().context("Failed to create CertManager")?);
     let registry = Arc::new(kde_service.registry.clone_for_dispatch());
     let local_v2_identity = IdentityPacketV2 {
-        device_id: kde_service.identity.as_ref().map(|i| i.device_id.clone()).unwrap_or_default(),
+        device_id: kde_service
+            .identity
+            .as_ref()
+            .map(|i| i.device_id.clone())
+            .unwrap_or_default(),
         device_name: host_name.clone(),
         min_version: 2,
         max_version: 2,
@@ -101,14 +106,15 @@ pub async fn run(config: Config) -> Result<()> {
 
     // QUIC Multiplexer (v2) and Streaming (v1) listener
     let streaming_port = config.streaming_port;
-    let quic_addr = format!("0.0.0.0:{}", streaming_port).parse::<std::net::SocketAddr>()
+    let quic_addr = format!("0.0.0.0:{}", streaming_port)
+        .parse::<std::net::SocketAddr>()
         .with_context(|| format!("invalid QUIC listen address for port {streaming_port}"))?;
-    let alpns = vec![
-        ALPN_V2.to_vec(),
-        b"linux-link-stream".to_vec(),
-    ];
-    let server_config = cert_manager.server_config(alpns).context("Failed to create QUIC server config")?;
-    let quic_endpoint = quinn::Endpoint::server(server_config, quic_addr).context("Failed to bind QUIC endpoint")?;
+    let alpns = vec![ALPN_V2.to_vec(), b"linux-link-stream".to_vec()];
+    let server_config = cert_manager
+        .server_config(alpns)
+        .context("Failed to create QUIC server config")?;
+    let quic_endpoint = quinn::Endpoint::server(server_config, quic_addr)
+        .context("Failed to bind QUIC endpoint")?;
     tracing::info!("Unified QUIC listener ready on {}", quic_addr);
 
     // F19: Start notification monitor for forwarding PC notifications to Android clients
@@ -131,7 +137,9 @@ pub async fn run(config: Config) -> Result<()> {
                                 let mut dead_clients = Vec::new();
                                 for sender in clients.iter() {
                                     if let Err(e) = sender.send_packet(&packet).await {
-                                        tracing::debug!("Detected dead client during broadcast: {e}");
+                                        tracing::debug!(
+                                            "Detected dead client during broadcast: {e}"
+                                        );
                                         dead_clients.push(sender.connection_id().to_string());
                                     }
                                 }
@@ -142,7 +150,10 @@ pub async fn run(config: Config) -> Result<()> {
                                 }
 
                                 if !clients.is_empty() {
-                                    tracing::debug!("Forwarded notification to {} client(s)", clients.len());
+                                    tracing::debug!(
+                                        "Forwarded notification to {} client(s)",
+                                        clients.len()
+                                    );
                                 }
                             }
                             Err(e) => tracing::warn!("Failed to parse notification packet: {e}"),
@@ -253,7 +264,10 @@ pub async fn run(config: Config) -> Result<()> {
                                     cert_manager_clone
                                 );
                                 streaming_server.set_input_channel(input_tx);
-                                if let Err(e) = streaming_server.run_on_connection(conn).await {
+                                if let Err(e) = streaming_server
+                                    .run_on_connection(QuinnConnection::shared(conn))
+                                    .await
+                                {
                                     tracing::error!("v1 streaming session error: {}", e);
                                 }
                             }
@@ -437,7 +451,7 @@ async fn handle_connection_with_kde(
     let peer_addr = stream.peer_addr().ok();
     let conn_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string(); // In v1, session == connection for now
-    
+
     let conn_span = tracing::info_span!(
         "conn",
         id = %conn_id,
@@ -502,8 +516,9 @@ async fn handle_connection_with_kde(
         let device_id = peer_addr
             .map(|a| a.ip().to_string())
             .unwrap_or_else(|| "unknown".to_string());
-        
-        let sender: Arc<dyn DeviceSender> = Arc::new(TcpDeviceSender::from_arc(writer, device_id.clone()));
+
+        let sender: Arc<dyn DeviceSender> =
+            Arc::new(TcpDeviceSender::from_arc(writer, device_id.clone()));
         let sender_ref = &*sender;
 
         // Update span with device_id
@@ -534,10 +549,13 @@ async fn handle_connection_with_kde(
                             let packet_span = tracing::debug_span!("packet", type = %packet_type);
                             async {
                                 tracing::debug!("Processing packet");
-                                if let Err(e) = registry.dispatch_packet(&packet, sender_ref).await {
+                                if let Err(e) = registry.dispatch_packet(&packet, sender_ref).await
+                                {
                                     tracing::warn!("Packet dispatch failed: {}", e);
                                 }
-                            }.instrument(packet_span).await;
+                            }
+                            .instrument(packet_span)
+                            .await;
                         }
                         Err(e) => {
                             tracing::warn!("Malformed packet received: {}", e);
@@ -660,8 +678,6 @@ async fn resolve_peer_address(client: &TailscaleClient, peer_hint: &str) -> Resu
 
     bail!("peer not found on tailnet: {}", peer_hint)
 }
-
-
 
 fn is_valid_pin(pin: &str) -> bool {
     pin.len() == 6 && pin.chars().all(|c| c.is_ascii_digit())

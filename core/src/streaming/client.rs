@@ -11,6 +11,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
+use super::connection::{ConnectionError, QuinnConnection, SharedConnection};
 use super::input_packet::InputPacket;
 use super::transport::{self, CertManager, StreamTransportConfig};
 use super::{AudioPacket, EncodedPacket};
@@ -34,7 +35,7 @@ const MONITOR_CONFIG_MARKER: [u8; 2] = [0xFF, 0x00];
 /// client.start().await; // runs until cancelled
 /// ```
 pub struct StreamingClient {
-    connection: Option<quinn::Connection>,
+    connection: Option<SharedConnection>,
     frame_tx: mpsc::Sender<EncodedPacket>,
     audio_tx: mpsc::Sender<AudioPacket>,
     cancel: CancellationToken,
@@ -111,13 +112,14 @@ impl StreamingClient {
             .context("Failed to create QUIC transport")?;
 
             let server_name = addr.ip().to_string();
-            let connection = tokio::time::timeout(
+            let quic_connection = tokio::time::timeout(
                 std::time::Duration::from_secs(10),
                 transport.connect(addr, &server_name),
             )
             .await
             .context("Connection to streaming server timed out")?
             .context("Failed to connect to streaming server")?;
+            let connection = QuinnConnection::shared(quic_connection);
 
             info!("Streaming connection established");
 
@@ -236,13 +238,13 @@ impl StreamingClient {
     /// Get the current QUIC RTT measurement.
     pub fn current_rtt(&self) -> Duration {
         match &self.connection {
-            Some(conn) => conn.stats().path.rtt,
+            Some(conn) => conn.stats().rtt,
             None => Duration::ZERO,
         }
     }
 
-    /// Get the raw QUIC connection (for advanced use cases).
-    pub fn connection(&self) -> Option<&quinn::Connection> {
+    /// Get the transport-agnostic connection handle (for input sends / stats).
+    pub fn connection(&self) -> Option<&SharedConnection> {
         self.connection.as_ref()
     }
 
@@ -289,7 +291,7 @@ impl StreamingClient {
 /// - `stream_kind == 0` → video frames on `frame_tx`
 /// - `stream_kind == 1` → audio packets on `audio_tx`
 async fn recv_with_cancel(
-    connection: &quinn::Connection,
+    connection: &SharedConnection,
     frame_tx: mpsc::Sender<EncodedPacket>,
     audio_tx: mpsc::Sender<AudioPacket>,
     cancel: CancellationToken,
@@ -396,7 +398,7 @@ async fn recv_with_cancel(
                             }
                         }
                     }
-                    Err(quinn::ConnectionError::ApplicationClosed(_)) => {
+                    Err(ConnectionError::Closed) => {
                         debug!("Connection closed by peer");
                         break;
                     }
@@ -413,7 +415,7 @@ async fn recv_with_cancel(
 }
 
 /// Best-effort IDR request to the server after a detected video gap.
-async fn send_keyframe_request(connection: &quinn::Connection) {
+async fn send_keyframe_request(connection: &SharedConnection) {
     let data = InputPacket::RequestKeyframe.encode();
     match connection.open_uni().await {
         Ok(mut stream) => {
@@ -432,7 +434,7 @@ async fn send_keyframe_request(connection: &quinn::Connection) {
 /// Periodically send connection stats (RTT) back to the server on a feedback stream.
 ///
 /// The server can use this information for adaptive bitrate control.
-async fn send_stats_loop(connection: &quinn::Connection, cancel: CancellationToken) {
+async fn send_stats_loop(connection: &SharedConnection, cancel: CancellationToken) {
     let mut interval = tokio::time::interval(Duration::from_secs(1));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -445,8 +447,8 @@ async fn send_stats_loop(connection: &quinn::Connection, cancel: CancellationTok
 
             _ = interval.tick() => {
                 let stats = connection.stats();
-                let rtt_us = stats.path.rtt.as_micros() as u64;
-                let lost = stats.path.lost_packets;
+                let rtt_us = stats.rtt.as_micros() as u64;
+                let lost = stats.lost_packets;
 
                 // Simple binary feedback message:
                 // [0..8]  RTT in microseconds (u64 LE)

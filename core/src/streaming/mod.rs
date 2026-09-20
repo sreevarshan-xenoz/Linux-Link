@@ -7,6 +7,7 @@ pub mod audio;
 pub mod bitrate;
 pub mod chaos;
 pub mod client;
+pub mod connection;
 pub mod encoder_detect;
 pub mod input_packet;
 pub mod session;
@@ -36,6 +37,10 @@ pub use capture::start_capture_auto;
 pub use capture_x11::{check_x11_availability, start_x11_capture};
 pub use client::DEFAULT_STREAMING_PORT;
 pub use client::StreamingClient;
+pub use connection::{
+    Connection, ConnectionError, ConnectionStats, InStream, OutStream, QuinnConnection,
+    SharedConnection,
+};
 pub use encoder_detect::{AvailableEncoders, HardwareEncoder, probe_encoders, resolve_encoder};
 pub use input_packet::InputPacket;
 pub use session::{SessionType, detect_session_type};

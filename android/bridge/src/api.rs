@@ -4,6 +4,7 @@
 use linux_link_core::protocol::connection::ConnectionManager;
 use linux_link_core::protocol::kdeconnect::{DeviceSender, NetworkPacket, TcpDeviceSender};
 use linux_link_core::protocol::v2::{ALPN_V2, IdentityPacketV2, perform_v2_handshake};
+use linux_link_core::streaming::QuinnConnection;
 use linux_link_core::streaming::StreamingClient;
 use linux_link_core::tailscale::TailscaleClient;
 use std::path::PathBuf;
@@ -691,7 +692,7 @@ pub async fn connect_streaming(
                     break;
                 }
                 _ = interval.tick() => {
-                    let rtt_us = rtt_connection.stats().path.rtt.as_micros() as u64;
+                    let rtt_us = rtt_connection.stats().rtt.as_micros() as u64;
                     update_streaming_rtt(rtt_us);
 
                     // Update session status based on RTT (detect staleness)
@@ -1360,7 +1361,9 @@ pub async fn send_mouse_event(
             Some(h.connection.clone())
         } else {
             let v2_guard = (*crate::V2_HANDLE).lock().await;
-            v2_guard.as_ref().map(|h| h.connection.clone())
+            v2_guard
+                .as_ref()
+                .map(|h| QuinnConnection::shared(h.connection.clone()))
         }
     };
 
@@ -1435,7 +1438,9 @@ pub async fn send_mouse_abs(x_norm: u16, y_norm: u16) -> Result<(), String> {
             Some(h.connection.clone())
         } else {
             let v2_guard = (*crate::V2_HANDLE).lock().await;
-            v2_guard.as_ref().map(|h| h.connection.clone())
+            v2_guard
+                .as_ref()
+                .map(|h| QuinnConnection::shared(h.connection.clone()))
         }
     };
 
@@ -1470,7 +1475,9 @@ pub async fn send_mouse_click(button: u8, pressed: bool) -> Result<(), String> {
             Some(h.connection.clone())
         } else {
             let v2_guard = (*crate::V2_HANDLE).lock().await;
-            v2_guard.as_ref().map(|h| h.connection.clone())
+            v2_guard
+                .as_ref()
+                .map(|h| QuinnConnection::shared(h.connection.clone()))
         }
     };
 
@@ -1505,7 +1512,9 @@ pub async fn send_window_crop(x: u32, y: u32, width: u32, height: u32) -> Result
             Some(h.connection.clone())
         } else {
             let v2_guard = (*crate::V2_HANDLE).lock().await;
-            v2_guard.as_ref().map(|h| h.connection.clone())
+            v2_guard
+                .as_ref()
+                .map(|h| QuinnConnection::shared(h.connection.clone()))
         }
     };
 
@@ -1558,7 +1567,9 @@ pub async fn send_keyboard_event(
             Some(h.connection.clone())
         } else {
             let v2_guard = (*crate::V2_HANDLE).lock().await;
-            v2_guard.as_ref().map(|h| h.connection.clone())
+            v2_guard
+                .as_ref()
+                .map(|h| QuinnConnection::shared(h.connection.clone()))
         }
     };
 
@@ -1707,7 +1718,9 @@ pub async fn send_gamepad_event(axes: Vec<i16>, buttons: u32) -> Result<(), Stri
             Some(h.connection.clone())
         } else {
             let v2_guard = (*crate::V2_HANDLE).lock().await;
-            v2_guard.as_ref().map(|h| h.connection.clone())
+            v2_guard
+                .as_ref()
+                .map(|h| QuinnConnection::shared(h.connection.clone()))
         }
     };
 

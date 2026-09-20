@@ -108,8 +108,9 @@ pub(crate) struct StreamingHandle {
     /// Receiver for decoded audio packets (F1: Audio Streaming).
     #[allow(dead_code)]
     pub(crate) audio_rx: tokio::sync::mpsc::Receiver<linux_link_core::streaming::AudioPacket>,
-    /// The QUIC connection, kept alive for sending input events.
-    pub(crate) connection: quinn::Connection,
+    /// The streaming connection (transport-agnostic handle), kept alive for
+    /// sending input events.
+    pub(crate) connection: linux_link_core::streaming::SharedConnection,
 }
 
 /// Holds the unified v2 connection and its persistent control streams.
