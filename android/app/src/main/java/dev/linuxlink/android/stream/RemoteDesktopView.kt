@@ -131,6 +131,7 @@ fun RemoteDesktopView(
     mapping: DesktopMapping? = null,
     monitorIndex: Int = -1,
     onStatus: (StreamStatus) -> Unit = {},
+    onVideoSizeChanged: (Int, Int) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
 ) {
     val decoderHost = remember { DecoderHost() }
@@ -195,7 +196,10 @@ fun RemoteDesktopView(
                                         HostStore.wanIdentity(context, address),
                                         monitorIndex,
                                         onStatus,
-                                    ) { w, h -> videoSize = IntSize(w, h) }
+                                    ) { w, h ->
+                                        videoSize = IntSize(w, h)
+                                        onVideoSizeChanged(w, h)
+                                    }
                                 }
 
                                 override fun surfaceChanged(

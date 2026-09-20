@@ -52,6 +52,7 @@ fun RemoteScreen(
     address: String,
     port: Int,
     controlPort: Int,
+    inPictureInPicture: Boolean = false,
     onExit: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -82,6 +83,8 @@ fun RemoteScreen(
     var pairedServerId by remember(address) { mutableStateOf(HostStore.pairedDesktopId(context, address)) }
     var showPairing by remember { mutableStateOf(false) }
     var pairingMessage by remember { mutableStateOf<String?>(null) }
+    // Tier-3 #14: decoded video frame size, used to pick the PiP aspect ratio.
+    var videoSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
 
     LaunchedEffect(address) {
         val serverId = withContext(Dispatchers.IO) { RustCore.checkPairResult(1L) }
@@ -168,125 +171,143 @@ fun RemoteScreen(
                 mapping = cropWindow?.desktopMapping(cropScreen),
                 monitorIndex = monitorIndex,
                 onStatus = { streamStatus = it },
+                onVideoSizeChanged = { w, h -> videoSize = androidx.compose.ui.unit.IntSize(w, h) },
                 modifier = Modifier.fillMaxSize(),
             )
         }
 
-        // Connect-status chip: shown until the video link is up (and again
-        // if it fails, with the LAN/WAN reasons + a retry). A live WAN link
-        // keeps a small badge so the user knows the video is off-LAN.
-        val status = streamStatus
-        if (status is StreamStatus.Up && status.kind == StreamTransportKind.Wan) {
-            Text(
-                "WAN link (iroh)",
-                color = Color.White,
-                style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 4.dp),
-            )
-        }
-        if (status !is StreamStatus.Up) {
-            Column(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(horizontal = 32.dp, vertical = 64.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                val label = when (status) {
-                    is StreamStatus.Connecting -> "Connecting…"
-                    is StreamStatus.Down -> status.reason
-                    else -> ""
-                }
+        // Every chrome element is hidden while the activity is in picture-in-picture:
+        // the window is thumb-sized and touch input there goes to the system, not us.
+        if (!inPictureInPicture) {
+            // Connect-status chip: shown until the video link is up (and again
+            // if it fails, with the LAN/WAN reasons + a retry). A live WAN link
+            // keeps a small badge so the user knows the video is off-LAN.
+            val status = streamStatus
+            if (status is StreamStatus.Up && status.kind == StreamTransportKind.Wan) {
                 Text(
-                    label,
+                    "WAN link (iroh)",
                     color = Color.White,
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier
-                        .background(
-                            androidx.compose.ui.graphics.Color(0xCC000000),
-                            androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
-                        )
-                        .padding(10.dp),
+                        .align(Alignment.TopCenter)
+                        .padding(top = 4.dp),
                 )
-                if (status is StreamStatus.Down) {
-                    TextButton(onClick = ::retryStream) {
-                        Text("Retry", color = Color.White)
+            }
+            if (status !is StreamStatus.Up) {
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(horizontal = 32.dp, vertical = 64.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    val label = when (status) {
+                        is StreamStatus.Connecting -> "Connecting…"
+                        is StreamStatus.Down -> status.reason
+                        else -> ""
+                    }
+                    Text(
+                        label,
+                        color = Color.White,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier
+                            .background(
+                                androidx.compose.ui.graphics.Color(0xCC000000),
+                                androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                            )
+                            .padding(10.dp),
+                    )
+                    if (status is StreamStatus.Down) {
+                        TextButton(onClick = ::retryStream) {
+                            Text("Retry", color = Color.White)
+                        }
                     }
                 }
             }
-        }
 
-        Column(
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(8.dp),
-        ) {
-            StatsHud(address = address, controlPort = controlPort)
-            WorkspaceHud(
-                address = address,
-                port = port,
-                modifier = Modifier.padding(top = 6.dp),
-            )
-        }
-
-        TextButton(
-            onClick = onExit,
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(4.dp),
-        ) {
-            Text("Exit", color = Color.White)
-        }
-
-        Column(modifier = Modifier.align(Alignment.BottomCenter)) {
-            Row(modifier = Modifier.padding(bottom = 4.dp)) {
-                TextButton(
-                    onClick = {
-                        mode =
-                            if (mode == InputMode.DirectTouch) InputMode.Trackpad else InputMode.DirectTouch
-                    },
-                ) {
-                    val label =
-                        if (mode == InputMode.DirectTouch) "Mode: direct touch" else "Mode: trackpad"
-                    Text(label, color = Color.White)
-                }
-                TextButton(onClick = { clipboardSync = !clipboardSync }) {
-                    val label = if (clipboardSync) "Clip: on" else "Clip: off"
-                    Text(label, color = Color.White)
-                }
-                TextButton(onClick = { showHistory = true }) {
-                    Text("History", color = Color.White)
-                }
-                TextButton(onClick = { showPicker = true }) {
-                    val label =
-                        if (cropWindow == null) "Window: all" else "Window: ${(cropWindow?.title ?: "").take(18)}"
-                    Text(label, color = Color.White)
-                }
-                TextButton(onClick = { showMonitorPicker = true }) {
-                    val label =
-                        if (monitorIndex == -1) "Monitor: auto" else "Monitor: #$monitorIndex"
-                    Text(label, color = Color.White)
-                }
-                TextButton(
-                    onClick = {
-                        scope.launch(Dispatchers.IO) {
-                            RustCore.sendFindMyDevice(address, controlPort)
-                        }
-                    },
-                ) {
-                    Text("Ring PC", color = Color.White)
-                }
-                TextButton(onClick = { pairingMessage = null; showPairing = true }) {
-                    val label = if (pairedServerId == null) "Pair…" else "Paired ✓"
-                    Text(label, color = Color.White)
-                }
+            Column(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(8.dp),
+            ) {
+                StatsHud(address = address, controlPort = controlPort)
+                WorkspaceHud(
+                    address = address,
+                    port = port,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
             }
-            ShortcutBar(
-                address = address,
-                port = port,
-                modifier = Modifier.fillMaxWidth(),
-            )
+
+            TextButton(
+                onClick = onExit,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(4.dp),
+            ) {
+                Text("Exit", color = Color.White)
+            }
+        }
+
+        if (!inPictureInPicture) {
+            Column(modifier = Modifier.align(Alignment.BottomCenter)) {
+                Row(modifier = Modifier.padding(bottom = 4.dp)) {
+                    TextButton(
+                        onClick = {
+                            mode =
+                                if (mode == InputMode.DirectTouch) InputMode.Trackpad else InputMode.DirectTouch
+                        },
+                    ) {
+                        val label =
+                            if (mode == InputMode.DirectTouch) "Mode: direct touch" else "Mode: trackpad"
+                        Text(label, color = Color.White)
+                    }
+                    TextButton(onClick = { clipboardSync = !clipboardSync }) {
+                        val label = if (clipboardSync) "Clip: on" else "Clip: off"
+                        Text(label, color = Color.White)
+                    }
+                    TextButton(onClick = { showHistory = true }) {
+                        Text("History", color = Color.White)
+                    }
+                    TextButton(onClick = { showPicker = true }) {
+                        val label =
+                            if (cropWindow == null) "Window: all" else "Window: ${(cropWindow?.title ?: "").take(18)}"
+                        Text(label, color = Color.White)
+                    }
+                    TextButton(onClick = { showMonitorPicker = true }) {
+                        val label =
+                            if (monitorIndex == -1) "Monitor: auto" else "Monitor: #$monitorIndex"
+                        Text(label, color = Color.White)
+                    }
+                    TextButton(
+                        onClick = {
+                            scope.launch(Dispatchers.IO) {
+                                RustCore.sendFindMyDevice(address, controlPort)
+                            }
+                        },
+                    ) {
+                        Text("Ring PC", color = Color.White)
+                    }
+                    TextButton(onClick = { pairingMessage = null; showPairing = true }) {
+                        val label = if (pairedServerId == null) "Pair…" else "Paired ✓"
+                        Text(label, color = Color.White)
+                    }
+                    TextButton(
+                        onClick = {
+                            (context.findActivity() as? dev.linuxlink.android.MainActivity)
+                                ?.enterSessionPictureInPicture(
+                                    videoSize.width,
+                                    videoSize.height,
+                                )
+                        },
+                    ) {
+                        Text("PiP", color = Color.White)
+                    }
+                }
+                ShortcutBar(
+                    address = address,
+                    port = port,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
         }
     }
 

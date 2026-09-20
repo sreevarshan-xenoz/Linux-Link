@@ -30,10 +30,39 @@ class MainActivity : ComponentActivity() {
 
     private val disconnectSignal = mutableIntStateOf(0)
 
+    /** PiP state (Tier-3 #14), read by the composition to hide chrome. */
+    private val inPictureInPicture = mutableStateOf(false)
+
     private val requestNotificationPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) {
             // Denied is non-fatal: the service still runs, just without a visible notification.
         }
+
+    /** Float the live session over other apps; aspect follows the video. */
+    fun enterSessionPictureInPicture(videoWidth: Int, videoHeight: Int) {
+        if (videoWidth <= 0 || videoHeight <= 0) {
+            enterPictureInPictureMode(
+                android.app.PictureInPictureParams.Builder().build(),
+            )
+            return
+        }
+        // Android rejects ratios outside [1:2.39, 2.39:1] — clamp both ways.
+        val raw = videoWidth.toFloat() / videoHeight.toFloat()
+        val ratio = raw.coerceIn(1f / 2.39f, 2.39f)
+        enterPictureInPictureMode(
+            android.app.PictureInPictureParams.Builder()
+                .setAspectRatio(android.util.Rational((ratio * 100).toInt(), 100))
+                .build(),
+        )
+    }
+
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: android.content.res.Configuration,
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        inPictureInPicture.value = isInPictureInPictureMode
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -77,6 +106,7 @@ class MainActivity : ComponentActivity() {
                             address = session.first,
                             port = session.second,
                             controlPort = session.third,
+                            inPictureInPicture = inPictureInPicture.value,
                             onExit = { sessionKey = null },
                         )
                     }
