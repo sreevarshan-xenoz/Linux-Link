@@ -406,6 +406,22 @@ pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeSendMous
     to_jstring(&mut env, json)
 }
 
+/// Send a mouse button press/release. `button` is the wire encoding:
+/// 0=Left, 1=Middle, 2=Right, 3=Back, 4=Forward.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeSendMouseClick(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    button: jint,
+    pressed: jboolean,
+) -> jstring {
+    let json = envelope_unit(RUNTIME.block_on(api::send_mouse_click(
+        button.clamp(0, 255) as u8,
+        pressed != 0,
+    )));
+    to_jstring(&mut env, json)
+}
+
 /// Send a keyboard event. `key_code` is an Android KeyCode; the bridge maps
 /// it to evdev internally. `text` carries the char for UTF-8 input paths.
 #[unsafe(no_mangle)]

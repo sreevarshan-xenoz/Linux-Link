@@ -1885,7 +1885,7 @@ Ranked by impact-per-effort against the current pipeline (portal capture → FFm
 
 **Tier 1 — quick wins (the "1.0 remote desktop" batch):**
 1. ✅ Latency/FPS/bitrate stats HUD overlay (`stream/StatsHud.kt` + `RustCore.streamingStats()`, 2026-09-20)
-2. Touch input modes: direct-touch / trackpad (relative mouse) / mouse-direct — **unblocked 2026-09-20**: the wire now carries `MouseMoveAbs` (R2#4) and `RustCore.tapAbsolute`/`sendMouseAbs`/`normalizedCoord` exist; remaining work is the Compose gesture handler (down/move/up → motion + left-click pairs) and mode switching UI. Trackpad mode can ship once a gesture handler exists.
+2. ✅ Touch input modes: direct-touch / trackpad (2026-09-20) — `stream/RemoteDesktopView.kt` `InputMode` + gesture overlay: DirectTouch maps taps/drags to `MouseMoveAbs` (left-release lifts the server finger), Trackpad does indirect drag + tap-click + two-finger scroll. New bridge path `sendMouseClick` (the legacy `sendMouseEvent` reserves button 0 for movement, so a wire left click was unaddressable). Mouse-direct (BT/USB mouse passthrough) and mode-switch UI remain; `RemoteDesktopView` isn't composed into a session screen yet (Tier 1 #5).
 3. ✅ Shortcut key bar (`stream/ShortcutBar.kt`, 2026-09-20): Super, Alt+Tab, Ctrl+Alt+Del, PrtSc, Esc, Super+1..9 Hyprland workspace switch — required the fixed Android→evdev keycode table (commit ba26e6c)
 4. Clipboard UX: sync toggle, phone-side history sheet, share-URI → file plugin (KDE Connect pattern)
 5. Auto-connect to last host + connect/disconnect/lock actions in the foreground-service notification — decide the Android 14 FGS type early (`specialUse` justification vs `mediaProjection` consent dialog)

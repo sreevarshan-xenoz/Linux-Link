@@ -59,6 +59,7 @@ object RustCore {
     ): String
 
     private external fun nativeSendMouseAbs(xNorm: Int, yNorm: Int): String
+    private external fun nativeSendMouseClick(button: Int, pressed: Boolean): String
 
     private external fun nativeSendKeyboardEvent(
         address: String,
@@ -231,25 +232,29 @@ object RustCore {
     fun sendMouseAbs(xNorm: Int, yNorm: Int): Result<Unit> =
         envelope(nativeSendMouseAbs(xNorm, yNorm)).map { }
 
+    /**
+     * Mouse button press/release. [button] is the wire encoding:
+     * 0=Left, 1=Middle, 2=Right, 3=Back, 4=Forward. Unlike [sendMouseEvent]
+     * this can address the left button (its `button=0` means "movement").
+     * In direct-touch mode a left release lifts the virtual finger.
+     */
+    fun sendMouseClick(button: Int, isPressed: Boolean): Result<Unit> =
+        envelope(nativeSendMouseClick(button, isPressed)).map { }
+
     /** Map a view-local pixel offset to the 0..=65535 normalized axis range. */
     fun normalizedCoord(offset: Float, size: Int): Int =
         (offset / size.coerceAtLeast(1) * NORM_COORD_MAX).roundToInt().coerceIn(0, NORM_COORD_MAX)
 
     /**
-     * Direct-touch tap: absolute move to the normalized point, then a
-     * press/release pair the server interprets as finger down + lift.
+     * Direct-touch tap: absolute move to the normalized point (server puts
+     * the virtual finger down), then press + left release (which lifts it).
      */
-    fun tapAbsolute(
-        address: String,
-        port: Int,
-        xNorm: Int,
-        yNorm: Int,
-    ): Result<Unit> {
+    fun tapAbsolute(xNorm: Int, yNorm: Int): Result<Unit> {
         val moved = sendMouseAbs(xNorm, yNorm)
         if (moved.isFailure) return moved
-        val down = sendMouseEvent(address, port, 0f, 0f, 0, true)
+        val down = sendMouseClick(0, true)
         if (down.isFailure) return down
-        return sendMouseEvent(address, port, 0f, 0f, 0, false)
+        return sendMouseClick(0, false)
     }
 
     fun sendKeyboardEvent(address: String, port: Int, keyCode: Int, text: String): Result<Unit> =

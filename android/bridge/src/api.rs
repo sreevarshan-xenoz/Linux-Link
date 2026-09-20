@@ -1348,6 +1348,41 @@ pub async fn send_mouse_abs(x_norm: u16, y_norm: u16) -> Result<(), String> {
     Ok(())
 }
 
+/// Send a mouse button press/release over QUIC.
+///
+/// `button` is the wire encoding: 0=Left, 1=Middle, 2=Right, 3=Back, 4=Forward.
+/// This exists because `send_mouse_event`'s legacy `button` parameter reserves
+/// 0 for "movement", which makes a left click unaddressable through it.
+/// QUIC-only, like `send_mouse_abs`.
+pub async fn send_mouse_click(button: u8, pressed: bool) -> Result<(), String> {
+    let quic_conn = {
+        let guard = (*STREAMING_HANDLE).lock().await;
+        if let Some(h) = guard.as_ref() {
+            Some(h.connection.clone())
+        } else {
+            let v2_guard = (*crate::V2_HANDLE).lock().await;
+            v2_guard.as_ref().map(|h| h.connection.clone())
+        }
+    };
+
+    let conn = quic_conn
+        .ok_or_else(|| "Mouse click requires an active QUIC streaming connection".to_string())?;
+
+    let data = InputPacket::MouseClick { button, pressed }.encode();
+    let mut send_stream = conn
+        .open_uni()
+        .await
+        .map_err(|e| format!("QUIC open stream: {e}"))?;
+    send_stream
+        .write_all(&data)
+        .await
+        .map_err(|e| format!("QUIC write: {e}"))?;
+    send_stream
+        .finish()
+        .map_err(|e| format!("QUIC finish: {e}"))?;
+    Ok(())
+}
+
 /// Send keyboard event to remote, preferring the low-latency QUIC streaming channel.
 ///
 /// Falls back to KDE Connect TCP protocol if streaming is not active.
