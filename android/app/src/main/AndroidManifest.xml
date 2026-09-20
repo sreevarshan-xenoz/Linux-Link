@@ -8,7 +8,9 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <application
+        android:enableOnBackInvokedCallback="true"
         android:label="Linux Link"
+        android:localeConfig="@xml/locales_config"
         android:supportsRtl="true"
         android:theme="@style/Theme.LinuxLink">
 

@@ -71,6 +71,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         RustCore.start(filesDir)
         setContent {
+            // Tier-3 #17: `MaterialExpressiveTheme` exists in material3
+            // 1.4.0 but is internal — the expressive swap waits for the
+            // public API; predictive-back + locale plumbing landed instead.
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     var sessionKey by rememberSaveable { mutableStateOf<String?>(null) }

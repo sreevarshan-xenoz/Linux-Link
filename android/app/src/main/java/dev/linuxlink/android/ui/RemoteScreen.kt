@@ -116,6 +116,16 @@ fun RemoteScreen(
         }
     }
 
+    // Tier-3 #17: system back / predictive back gesture ends the session
+    // cleanly (same path as "Exit" → recompose to ConnectScreen → disposal
+    // stops streaming) instead of killing the whole activity. Sheets sit
+    // above this in the back stack and consume back themselves; in PiP the
+    // system gesture closes the float window, so the handler stands down.
+    androidx.activity.compose.BackHandler(
+        enabled = !inPictureInPicture,
+        onBack = onExit,
+    )
+
     LaunchedEffect(address) {
         val serverId = withContext(Dispatchers.IO) { RustCore.checkPairResult(1L) }
         if (serverId != null) {
