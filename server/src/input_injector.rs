@@ -136,6 +136,11 @@ impl InputInjector {
         for keycode in 0..256u16 {
             keys.insert(KeyCode(keycode));
         }
+        // Mouse buttons BTN_LEFT..BTN_EXTRA (272..=276): undeclared codes are
+        // rejected by the kernel, so mouse clicks need explicit registration.
+        for keycode in 272..=276u16 {
+            keys.insert(KeyCode(keycode));
+        }
 
         let mut rel = AttributeSet::<RelativeAxisCode>::new();
         rel.insert(RelativeAxisCode::REL_X);
