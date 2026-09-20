@@ -38,6 +38,7 @@ Linux Link is a **pure Rust** remote desktop solution built specifically for Lin
 - **QUIC transport** (datagram mode) with self-signed TLS certificates
 - **Adaptive bitrate** — 3 presets (LAN/internet/low-bandwidth) with RTT-based congestion control
 - **MediaCodec hardware decode** on the native Android client via JNI
+- **Single-window streaming** (Hyprland) — pick any window on the phone and the server crops + re-encodes to just that window
 
 ### KDE Connect Integration
 - **Clipboard sync** — bidirectional clipboard sharing via `wl-clipboard`
