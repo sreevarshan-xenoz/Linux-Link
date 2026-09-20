@@ -131,6 +131,27 @@ fun RemoteScreen(
             withContext(Dispatchers.IO) { RustCore.setViewOnly(true) }
         }
     }
+    // R4 A3: while the video link rides an iroh relay the server clamps the
+    // encoder bitrate to a bandwidth-friendly cap; this override opts out.
+    // Server-side latch, per-session — re-armed on stream (re)connect like
+    // view-only. Meaningless on LAN/direct (the clamp isn't engaged there).
+    var fullQuality by remember { mutableStateOf(false) }
+    var fullQualityError by remember { mutableStateOf<String?>(null) }
+    val fullQualityErrorMessage =
+        fullQualityError?.let { stringResource(R.string.full_quality_error, it) }
+    LaunchedEffect(fullQualityErrorMessage) {
+        if (fullQualityErrorMessage != null) {
+            android.widget.Toast
+                .makeText(context, fullQualityErrorMessage, android.widget.Toast.LENGTH_SHORT)
+                .show()
+            fullQualityError = null
+        }
+    }
+    LaunchedEffect(status) {
+        if (fullQuality && status is StreamStatus.Up) {
+            withContext(Dispatchers.IO) { RustCore.setFullQuality(true) }
+        }
+    }
     // Tier-3 #14: decoded video frame size, used to pick the PiP aspect ratio.
     var videoSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
     // Tier-3 #15: desktop privacy mode. The server's input grab carries a
@@ -367,14 +388,44 @@ fun RemoteScreen(
                     "wan_relayed" -> stringResource(R.string.wan_link_relayed)
                     else -> stringResource(R.string.wan_link_punching)
                 }
-                Text(
-                    label,
-                    color = Color.White,
-                    style = MaterialTheme.typography.labelSmall,
+                Column(
                     modifier = Modifier
                         .align(Alignment.TopCenter)
                         .padding(top = 4.dp),
-                )
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(
+                        label,
+                        color = Color.White,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                    // One-tap escape hatch from the server's relay bitrate floor
+                    // (R4 A3): relaying is shared bandwidth, but the user may
+                    // still want every bit of it.
+                    if (linkState == "wan_relayed") {
+                        TextButton(
+                            onClick = {
+                                val next = !fullQuality
+                                fullQuality = next
+                                scope.launch(Dispatchers.IO) {
+                                    RustCore.setFullQuality(next)
+                                        .onFailure { fullQualityError = it.message }
+                                }
+                            },
+                        ) {
+                            val fqLabel = if (fullQuality) {
+                                stringResource(R.string.full_quality_on)
+                            } else {
+                                stringResource(R.string.full_quality_off)
+                            }
+                            Text(
+                                fqLabel,
+                                color = if (fullQuality) Color(0xFFFFC080) else Color.White,
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
+                    }
+                }
             }
             if (status !is StreamStatus.Up) {
                 Column(

@@ -20,7 +20,7 @@
     <string name="wan_link">WAN இணைப்பு (iroh)</string>
     <string name="wan_link_direct">WAN · நேரடி</string>
     <string name="wan_link_punching">WAN · துளையிடிறது…</string>
-    <string name="wan_link_relayed">WAN · ரிலே வழி — நேரடியாக முயற்சிக்கிறது…</string>
+    <string name="wan_link_relayed">WAN · ரிலே வழி — சேமிவுத் தரம் (கீழே மாற்றவும்)</string>
     <string name="connecting">இணைக்கிறது…</string>
     <string name="retry">மீண்டும் முயற்சி</string>
     <string name="exit">வெளியேறு</string>
@@ -43,6 +43,9 @@
     <string name="view_only_on">பார்வை மட்டும்: இயக்கம்</string>
     <string name="view_only_off">பார்வை மட்டும்: முடக்கம்</string>
     <string name="view_only_error">பார்வை மட்டும்: %1$s</string>
+    <string name="full_quality_on">முழு தரம்: இயக்கம்</string>
+    <string name="full_quality_off">முழு தரம்: முடக்கம்</string>
+    <string name="full_quality_error">முழு தரம்: %1$s</string>
     <string name="lock_pc">PC பூட்டு</string>
     <string name="blackout">கருப்புத் திரை</string>
     <string name="pip">PiP</string>

@@ -127,10 +127,16 @@ From **scrcpy** (code-level OK, Apache-2.0):
   JNI exports. Accept: after mixed use, log lines distinguish the three
   outcomes. (Sizes our expectations against the §3 ~50/70% reality; honest
   instrumented numbers instead of folklore.)
-- **A3 · Relay-quality floor.** When relayed, auto-drop to a conservative
-  bitrate/fps preset (relay bandwidth is not ours) and surface a one-tap
-  "quality mode" hint. Accept: relayed session starts at preset, user can
-  override; direct upgrade re-raises it.
+- **A3 · Relay-quality floor.** ✅ **Landed 2026-09-20** (device behavior
+  unverified). A relay-guard task (spawns only on the iroh transport family)
+  samples `stats().relayed` every 5 s and, while relayed, clamps the encoder
+  to `min(configured, 2 Mbit/s)` through the existing bitrate watch channel —
+  a mid-session punch-through restores the configured rate automatically.
+  `InputPacket::FullQuality` (tag 10) latches a per-session user override;
+  the phone shows a one-tap toggle under the "WAN · relaying" badge (rides
+  A1's link-state reporting). Accept criteria met: relayed sessions reach the
+  preset within the first sample, one-tap override, direct re-raise. E5's
+  bitrate axis is covered; fps/resolution/codec presets remain open.
 
 ### Phase B — Hyprland-native capture (M) — *testable live on this box*
 - **B1 · `zwlr_screencopy` backend.** ✅ **Landed 2026-09-20** (verified live
@@ -225,6 +231,8 @@ these anywhere — that's the moat)
 - **E5 · Adaptive profile presets per link state** (builds on A1–A3):
   "LAN 60fps", "WAN direct", "WAN relayed" presets adjusting
   resolution/fps/bitrate/codec in one shot, switchable from the HUD.
+  *Partial (A3): the WAN-relayed bitrate floor + one-tap override landed;
+  fps/resolution/codec preset axes and a preset picker still open.*
 - **E6 · Foldable/tablet dual-pane** — stream on one half, native trackpad +
   shortcut dock on the other (we own both endpoints; RustDesk's tablet UI is
   a stretched phone layout). (M, device-gated polish.)

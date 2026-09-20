@@ -20,7 +20,7 @@
     <string name="wan_link">WAN link (iroh)</string>
     <string name="wan_link_direct">WAN · directa</string>
     <string name="wan_link_punching">WAN · perforando…</string>
-    <string name="wan_link_relayed">WAN · retransmitida — intentando directa…</string>
+    <string name="wan_link_relayed">WAN · retransmitida — calidad de bajo ancho de banda (anulación abajo)</string>
     <string name="connecting">Conectando…</string>
     <string name="retry">Reintentar</string>
     <string name="exit">Salir</string>
@@ -43,6 +43,9 @@
     <string name="view_only_on">Solo lectura: activado</string>
     <string name="view_only_off">Solo lectura: desactivado</string>
     <string name="view_only_error">Solo lectura: %1$s</string>
+    <string name="full_quality_on">Calidad máxima: activado</string>
+    <string name="full_quality_off">Calidad máxima: desactivado</string>
+    <string name="full_quality_error">Calidad máxima: %1$s</string>
     <string name="lock_pc">Bloquear PC</string>
     <string name="blackout">Pantalla negra</string>
     <string name="pip">PiP</string>

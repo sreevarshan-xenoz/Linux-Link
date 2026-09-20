@@ -422,6 +422,9 @@ impl InputInjector {
             // View-only toggles are enforced in the streaming server's input
             // relay (which simply stops forwarding); nothing to inject.
             InputPacket::ViewOnly { .. } => Ok(()),
+            // Likewise: the relay bitrate floor is server-side quality
+            // control, never an input event.
+            InputPacket::FullQuality { .. } => Ok(()),
             InputPacket::Gamepad { axes, buttons } => {
                 // Map gamepad axes/buttons to keyboard/mouse for broad compatibility.
                 // Left stick -> mouse movement

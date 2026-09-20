@@ -17,6 +17,7 @@ const TAG_MOUSE_MOVE_ABS: u8 = 6;
 const TAG_REQUEST_KEYFRAME: u8 = 7;
 const TAG_WINDOW_CROP: u8 = 8;
 const TAG_VIEW_ONLY: u8 = 9;
+const TAG_FULL_QUALITY: u8 = 10;
 
 /// A compact binary input event for real-time remote control.
 ///
@@ -64,6 +65,11 @@ pub enum InputPacket {
     /// text). Control packets (keyframe requests, crops, further view-only
     /// toggles) keep flowing, and video is unaffected.
     ViewOnly { enabled: bool },
+    /// R4 A3: opt OUT of the server's relay bitrate floor — stream at the
+    /// configured bitrate even while the path is a relay (user override,
+    /// default false). `true` disables the clamp for this session; video
+    /// quality then depends on relay capacity. Control-plane, never injected.
+    FullQuality { enabled: bool },
     /// Gamepad state: 6 analog axes + 16-bit button bitmask.
     Gamepad {
         /// Left stick X, Left stick Y, Right stick X, Right stick Y, L2, R2.
@@ -129,6 +135,9 @@ impl InputPacket {
             InputPacket::RequestKeyframe => vec![TAG_REQUEST_KEYFRAME],
             InputPacket::ViewOnly { enabled } => {
                 vec![TAG_VIEW_ONLY, if *enabled { 1 } else { 0 }]
+            }
+            InputPacket::FullQuality { enabled } => {
+                vec![TAG_FULL_QUALITY, if *enabled { 1 } else { 0 }]
             }
             InputPacket::WindowCrop {
                 x,
@@ -229,6 +238,12 @@ impl InputPacket {
             TAG_VIEW_ONLY => {
                 anyhow::ensure!(data.len() == 2, "ViewOnly packet must be 2 bytes");
                 Ok(InputPacket::ViewOnly {
+                    enabled: data[1] != 0,
+                })
+            }
+            TAG_FULL_QUALITY => {
+                anyhow::ensure!(data.len() == 2, "FullQuality packet must be 2 bytes");
+                Ok(InputPacket::FullQuality {
                     enabled: data[1] != 0,
                 })
             }
@@ -499,6 +514,18 @@ mod tests {
         // Framing is strict like RequestKeyframe: payload size must be exact.
         assert!(InputPacket::decode(&[9]).is_err());
         assert!(InputPacket::decode(&[9, 1, 0]).is_err());
+    }
+
+    #[test]
+    fn test_full_quality_roundtrip() {
+        for enabled in [true, false] {
+            let data = InputPacket::FullQuality { enabled }.encode();
+            assert_eq!(data, vec![10, u8::from(enabled)]);
+            let decoded = InputPacket::decode(&data).unwrap();
+            assert!(matches!(decoded, InputPacket::FullQuality { enabled: e } if e == enabled));
+        }
+        assert!(InputPacket::decode(&[10]).is_err());
+        assert!(InputPacket::decode(&[10, 1, 1]).is_err());
     }
 
     #[test]

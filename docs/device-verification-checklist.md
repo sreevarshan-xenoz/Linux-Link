@@ -127,6 +127,10 @@ place.
 - [ ] Hole punching through a real NAT (relay-free if possible): check `directAddrs` paths get used.
 - [ ] After both a LAN and a WAN session: `linux-link sessions` shows one line per session with distinct `outcome=` (`lan_direct` vs `wan_punched`/`wan_relayed`), plausible `rtt_ms`/`kbps`, and `dev=` = the paired deviceId.
 - [ ] Relayed → direct upgrade while streaming: badge flips to "WAN · direct" on its own (iroh keeps punching) and the bridge logs "upgraded from relay to direct path" (logcat). Relayed session must stay usable the whole time, not stall on the transition.
+- [ ] Relayed session (R4 A3): within ~5 s of the badge reading "relayed", the desktop log shows "Relayed path: clamping encoder bitrate" at cap ≤ 2 Mbit/s, and picture is visibly softer than LAN/direct.
+- [ ] Full-quality override (R4 A3): while relaying, the badge area offers "Full quality: off" — tap → log shows "Relay quality override changed enabled=true", bitrate climbs back to configured (`linux-link sessions` kbps over the next session line). Tap again to re-clamp; toggle survives a stream retry (re-arms).
+- [ ] Clamp release on punch-through: start relayed (override off), wait for the direct upgrade → log shows "Direct path: restoring configured encoder bitrate" without touching anything.
+- [ ] LAN session: the relay-guard never engages (no clamp lines in the log; `stats().relayed` is always false on quinn).
 
 ## 12. Roaming (Tier-3 #13 remainder)
 

@@ -112,6 +112,7 @@ object RustCore {
         height: Int,
     ): String
     private external fun nativeSetViewOnly(enabled: Boolean): String
+    private external fun nativeSetFullQuality(enabled: Boolean): String
     private external fun nativeSendPowerCommand(address: String, port: Int, action: String): String
     private external fun nativeExecuteRemoteCommand(
         address: String,
@@ -516,6 +517,16 @@ object RustCore {
      */
     fun setViewOnly(enabled: Boolean): Result<Unit> =
         envelope(nativeSetViewOnly(enabled)).map { }
+
+    /**
+     * R4 A3: opt out of the server's relayed-path bitrate floor. While the
+     * video link rides an iroh relay the server clamps the encoder bitrate
+     * to a bandwidth-friendly cap; enabling this restores the full
+     * configured bitrate on the relay (user accepts the congestion risk).
+     * Server-enforced latch, per-session; a no-op on LAN/direct paths.
+     */
+    fun setFullQuality(enabled: Boolean): Result<Unit> =
+        envelope(nativeSetFullQuality(enabled)).map { }
 
     fun sendPowerCommand(address: String, port: Int, action: String): Result<Unit> =
         envelope(nativeSendPowerCommand(address, port, action)).map { }

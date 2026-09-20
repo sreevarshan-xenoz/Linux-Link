@@ -489,6 +489,18 @@ pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeSetViewO
     to_jstring(&mut env, json)
 }
 
+/// Toggle the R4 A3 full-quality override: opt out of the server's
+/// relayed-path bitrate clamp (one-tap "give me everything" on WAN).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeSetFullQuality(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    enabled: jboolean,
+) -> jstring {
+    let json = envelope_unit(RUNTIME.block_on(api::send_full_quality(enabled != 0)));
+    to_jstring(&mut env, json)
+}
+
 /// Send a keyboard event. `key_code` is an Android KeyCode; the bridge maps
 /// it to evdev internally. `text` carries the char for UTF-8 input paths.
 #[unsafe(no_mangle)]

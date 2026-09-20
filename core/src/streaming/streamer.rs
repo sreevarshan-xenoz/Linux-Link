@@ -17,12 +17,17 @@ use super::audio::{AudioConfig, AudioEncoder as AudioOpusEncoder};
 use super::audio_capture;
 use super::bitrate::AdaptiveBitrate;
 use super::capture;
-use super::connection::{Connection, QuinnConnection, SharedConnection};
+use super::connection::{Connection, QuinnConnection, SharedConnection, TransportFamily};
 use super::encoder::VideoEncoder;
 use super::input_packet::InputPacket;
 use super::session_telemetry::{SessionOutcome, SessionRecorder};
 use super::transport::{self, CertManager, StreamServer, StreamTransportConfig};
 use super::{EncodedPacket, StreamingConfig, VideoFrame};
+
+/// R4 A3: bitrate ceiling applied while an iroh session rides a relay —
+/// relay bandwidth is shared and not ours to saturate. Conservative on
+/// purpose: a punched-direct path restores the configured rate.
+const RELAY_BITRATE_CAP_BPS: u32 = 2_000_000;
 
 /// Controls the streaming server lifecycle
 pub struct StreamingServer {
@@ -49,6 +54,9 @@ pub struct StreamingServer {
     /// built per connection). Set by `InputPacket::ViewOnly`; while true the
     /// monitor task forwards no injectable input, only control packets.
     view_only: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// R4 A3 user override of the relay bitrate floor: set by
+    /// `InputPacket::FullQuality`, read by the relay-guard task.
+    full_quality: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl StreamingServer {
@@ -71,6 +79,7 @@ impl StreamingServer {
             pairing_gate: None,
             telemetry: false,
             view_only: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            full_quality: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -569,6 +578,7 @@ impl StreamingServer {
         let keyframe_req_tx = keyframe_tx.clone();
         let monitor_crop_tx = crop_tx;
         let monitor_view_only = self.view_only.clone();
+        let monitor_full_quality = self.full_quality.clone();
         let monitor_span = tracing::info_span!("connection_monitor");
         tasks.spawn(async move {
             info!("Connection monitor started");
@@ -624,6 +634,16 @@ impl StreamingServer {
                                                     monitor_view_only
                                                         .store(enabled, Ordering::Relaxed);
                                                     info!(enabled, "View-only mode changed");
+                                                    continue;
+                                                }
+                                                // Quality override is control-plane too
+                                                // (R4 A3): steer the relay guard, never
+                                                // injected, and survives view-only.
+                                                if let InputPacket::FullQuality { enabled } = packet
+                                                {
+                                                    monitor_full_quality
+                                                        .store(enabled, Ordering::Relaxed);
+                                                    info!(enabled, "Relay quality override changed");
                                                     continue;
                                                 }
                                                 if monitor_view_only
@@ -706,6 +726,49 @@ impl StreamingServer {
                         _ = tokio::time::sleep(Duration::from_secs(5)) => {}
                     }
                     recorder.sample(&poll_conn);
+                }
+            });
+        }
+
+        // Task 7b: relay quality floor (R4 A3). An iroh session riding a
+        // relay shares third-party bandwidth that is not ours to saturate,
+        // so while the selected path is a relay the encoder is clamped to
+        // a conservative bitrate; a mid-session punch-through (or a
+        // relaying upgrade) restores the configured rate. Quinn (LAN /
+        // Tailscale) has no relay concept — the task never spawns there.
+        if connection.transport_family() == TransportFamily::Iroh {
+            let relay_conn = connection.clone();
+            let relay_bitrate_tx = self.bitrate_tx.clone();
+            let configured_bitrate = self.config.bitrate_bps;
+            let relay_cancel = cancel.clone();
+            let relay_full_quality = self.full_quality.clone();
+            tasks.spawn(async move {
+                let mut clamped = false;
+                loop {
+                    tokio::select! {
+                        _ = relay_cancel.cancelled() => break,
+                        _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+                    }
+                    // A user override (or a punch-through) un-clamps.
+                    let relayed =
+                        relay_conn.stats().relayed && !relay_full_quality.load(Ordering::Relaxed);
+                    if relayed && !clamped {
+                        let cap = configured_bitrate.min(RELAY_BITRATE_CAP_BPS);
+                        info!(
+                            cap_bps = cap,
+                            configured_bps = configured_bitrate,
+                            "Relayed path: clamping encoder bitrate (shared relay bandwidth)"
+                        );
+                        let _ = relay_bitrate_tx.send(cap);
+                        clamped = true;
+                    } else if !relayed && clamped {
+                        info!(
+                            configured_bps = configured_bitrate,
+                            "Direct path: restoring configured encoder bitrate"
+                        );
+                        let _ = relay_bitrate_tx.send(configured_bitrate);
+                        clamped = false;
+                    }
                 }
             });
         }
