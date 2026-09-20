@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, warn, Instrument};
+use tracing::{Instrument, debug, error, info, warn};
 use uuid::Uuid;
 
 use super::audio::{AudioConfig, AudioEncoder as AudioOpusEncoder};
@@ -106,7 +106,10 @@ impl StreamingServer {
         async {
             let peer = connection.remote_address();
             tracing::Span::current().record("peer", &peer.to_string());
-            info!("Streaming client connected (v1 over v2-capable endpoint): {}", peer);
+            info!(
+                "Streaming client connected (v1 over v2-capable endpoint): {}",
+                peer
+            );
 
             // 3. Run the capture → encode → send pipeline
             self.run_pipeline(connection).await
@@ -166,16 +169,17 @@ impl StreamingServer {
     }
 
     /// Run the full streaming pipeline for a single connection
-    async fn run_pipeline(
-        &mut self,
-        connection: quinn::Connection,
-    ) -> Result<()> {
+    async fn run_pipeline(&mut self, connection: quinn::Connection) -> Result<()> {
         // Read optional client config stream before starting the pipeline.
         read_client_config(&connection, &mut self.config).await;
 
         let cancel = self.cancel.clone();
         let (frame_tx, mut frame_rx) = mpsc::channel::<VideoFrame>(2);
         let (packet_tx, mut packet_rx) = mpsc::channel::<EncodedPacket>(8);
+
+        // IDR requests: raised by the monitor task when the client reports a
+        // sequence gap. The encode task consumes it and forces a keyframe.
+        let (keyframe_tx, mut keyframe_rx) = watch::channel(0u64);
 
         let mut tasks = JoinSet::new();
 
@@ -223,6 +227,12 @@ impl StreamingServer {
                     _ = encode_cancel.cancelled() => {
                         info!("Encoding task cancelled");
                         break;
+                    }
+
+                    // Immediate-IDR requests (transport fell behind / client gap)
+                    Ok(()) = keyframe_rx.changed() => {
+                        info!("Forcing IDR on encoder");
+                        encoder.request_keyframe();
                     }
 
                     // Check for bitrate updates
@@ -285,7 +295,7 @@ impl StreamingServer {
             );
         }.instrument(encode_span));
 
-        // Task 3: Packet transport — sends packets over QUIC
+        // Task 3: Packet transport — sends packets over QUIC (newest-only)
         let transport_cancel = cancel.clone();
         let transport_span = tracing::info_span!("video_transport");
         tasks.spawn(async move {
@@ -304,63 +314,98 @@ impl StreamingServer {
                         break;
                     }
 
-                    // Send next packet
-                    Some(packet) = packet_rx.recv() => {
-                        if connection_closed {
-                            packets_dropped += 1;
-                            continue;
+                    // Send the newest frames. When the encoder/queue runs
+                    // ahead of what we can push out, drop anything older than
+                    // the most recent keyframe so the client renders live
+                    // frames instead of a stale backlog.
+                    Some(first) = packet_rx.recv() => {
+                        let mut batch = vec![first];
+                        while let Ok(next) = packet_rx.try_recv() {
+                            batch.push(next);
                         }
 
-                        // Open a unidirectional stream for this packet
-                        match conn_for_transport.open_uni().await {
-                            Ok(mut send_stream) => {
-                                // Build and send header
-                                let header = transport::PacketHeader {
-                                    sequence: packet.sequence,
-                                    stream_kind: transport::STREAM_KIND_VIDEO,
-                                    is_keyframe: packet.is_keyframe,
-                                    timestamp_us: packet.timestamp.elapsed().as_micros() as u64,
-                                };
+                        // Resume point: the newest keyframe in the backlog, so
+                        // the frames we send form a self-contained decodable
+                        // group. If there is no keyframe we can only keep the
+                        // whole delta chain (correct) or, if we're badly backed
+                        // up, drop it and ask the encoder for an IDR.
+                        let start = batch
+                            .iter()
+                            .rposition(|p| p.is_keyframe)
+                            .unwrap_or(0);
 
-                                if let Err(e) = send_stream.write_all(&header.as_bytes()).await {
-                                    error!(error = %e, seq = packet.sequence, "Failed to send packet header");
-                                    connection_closed = true;
-                                    packets_dropped += 1;
-                                    continue;
-                                }
+                        if start > 0 {
+                            // We're trimming to a keyframe boundary — fine.
+                            packets_dropped += start as u64;
+                            debug!(
+                                dropped = start,
+                                backlog = batch.len(),
+                                "Transport trimmed stale backlog before keyframe"
+                            );
+                        } else if batch.len() > 1 {
+                            // Backed up with no keyframe to cut at: dropping any
+                            // delta would break the chain, so send them all.
+                            // (Gap-driven IDR requests handle genuine loss.)
+                            debug!(backlog = batch.len(), "Transport backlog has no keyframe; sending full delta chain");
+                        }
 
-                                let data_len = packet.data.len();
-                                if let Err(e) = send_stream.write_all(&packet.data).await {
-                                    error!(error = %e, seq = packet.sequence, "Failed to send packet data");
-                                    connection_closed = true;
-                                    packets_dropped += 1;
-                                    continue;
-                                }
-
-                                if let Err(e) = send_stream.finish() {
-                                    error!(error = %e, seq = packet.sequence, "Failed to finish stream");
-                                    connection_closed = true;
-                                    packets_dropped += 1;
-                                    continue;
-                                }
-
-                                packets_sent += 1;
-                                bytes_sent += data_len as u64;
-
-                                if packets_sent % 60 == 0 {
-                                    debug!(
-                                        sent = packets_sent,
-                                        bytes = bytes_sent,
-                                        dropped = packets_dropped,
-                                        mbps = %format!("{:.1}", (bytes_sent as f64 * 8.0) / 1_000_000.0),
-                                        "Transport stats"
-                                    );
-                                }
-                            }
-                            Err(e) => {
-                                error!(error = %e, "Failed to open QUIC stream");
-                                connection_closed = true;
+                        for packet in &batch[start..] {
+                            if connection_closed {
                                 packets_dropped += 1;
+                                continue;
+                            }
+
+                            // Open a unidirectional stream for this packet
+                            match conn_for_transport.open_uni().await {
+                                Ok(mut send_stream) => {
+                                    // Build and send header
+                                    let header = transport::PacketHeader {
+                                        sequence: packet.sequence,
+                                        stream_kind: transport::STREAM_KIND_VIDEO,
+                                        is_keyframe: packet.is_keyframe,
+                                        timestamp_us: packet.timestamp.elapsed().as_micros() as u64,
+                                    };
+
+                                    if let Err(e) = send_stream.write_all(&header.as_bytes()).await {
+                                        error!(error = %e, seq = packet.sequence, "Failed to send packet header");
+                                        connection_closed = true;
+                                        packets_dropped += 1;
+                                        continue;
+                                    }
+
+                                    let data_len = packet.data.len();
+                                    if let Err(e) = send_stream.write_all(&packet.data).await {
+                                        error!(error = %e, seq = packet.sequence, "Failed to send packet data");
+                                        connection_closed = true;
+                                        packets_dropped += 1;
+                                        continue;
+                                    }
+
+                                    if let Err(e) = send_stream.finish() {
+                                        error!(error = %e, seq = packet.sequence, "Failed to finish stream");
+                                        connection_closed = true;
+                                        packets_dropped += 1;
+                                        continue;
+                                    }
+
+                                    packets_sent += 1;
+                                    bytes_sent += data_len as u64;
+
+                                    if packets_sent % 60 == 0 {
+                                        debug!(
+                                            sent = packets_sent,
+                                            bytes = bytes_sent,
+                                            dropped = packets_dropped,
+                                            mbps = %format!("{:.1}", (bytes_sent as f64 * 8.0) / 1_000_000.0),
+                                            "Transport stats"
+                                        );
+                                    }
+                                }
+                                Err(e) => {
+                                    error!(error = %e, "Failed to open QUIC stream");
+                                    connection_closed = true;
+                                    packets_dropped += 1;
+                                }
                             }
                         }
                     }
@@ -384,6 +429,7 @@ impl StreamingServer {
         // Task 4: Monitor connection state and handle input streams from client
         let monitor_cancel = cancel.clone();
         let input_tx = self.input_tx.clone();
+        let keyframe_req_tx = keyframe_tx.clone();
         let monitor_span = tracing::info_span!("connection_monitor");
         tasks.spawn(async move {
             info!("Connection monitor started");
@@ -415,6 +461,14 @@ impl StreamingServer {
                                         // Parse as binary InputPacket
                                         match InputPacket::decode(&data) {
                                             Ok(packet) => {
+                                                // IDR requests are control-plane:
+                                                // signal the encoder, don't inject input.
+                                                if matches!(packet, InputPacket::RequestKeyframe) {
+                                                    debug!("Client requested IDR (sequence gap)");
+                                                    keyframe_req_tx
+                                                        .send_modify(|n| *n = n.wrapping_add(1));
+                                                    continue;
+                                                }
                                                 // Forward to input injector via channel
                                                 if let Some(ref tx) = input_tx {
                                                    // Use send() without await (broadcast is sync).
@@ -453,21 +507,27 @@ impl StreamingServer {
         if let Some(adaptive_bitrate) = self.adaptive_bitrate.take() {
             let bitrate_cancel = cancel.clone();
             let bitrate_span = tracing::info_span!("bitrate_monitor");
-            tasks.spawn(async move {
-                info!("Adaptive bitrate monitor started");
-                let monitor = AdaptiveBitrateMonitor::new(adaptive_bitrate);
-                monitor.run(&conn_for_bitrate, bitrate_cancel).await;
-            }.instrument(bitrate_span));
+            tasks.spawn(
+                async move {
+                    info!("Adaptive bitrate monitor started");
+                    let monitor = AdaptiveBitrateMonitor::new(adaptive_bitrate);
+                    monitor.run(&conn_for_bitrate, bitrate_cancel).await;
+                }
+                .instrument(bitrate_span),
+            );
         }
 
         // Task 6: Audio capture + Opus encoding + QUIC send (F1: Audio Streaming)
         let audio_cancel = cancel.clone();
         let audio_conn = connection.clone();
-        tasks.spawn(async move {
-            if let Err(e) = run_audio_pipeline(audio_conn, audio_cancel).await {
-                error!(error = %e, "Audio pipeline failed");
+        tasks.spawn(
+            async move {
+                if let Err(e) = run_audio_pipeline(audio_conn, audio_cancel).await {
+                    error!(error = %e, "Audio pipeline failed");
+                }
             }
-        }.instrument(tracing::info_span!("audio_pipeline")));
+            .instrument(tracing::info_span!("audio_pipeline")),
+        );
 
         // Wait for all tasks to complete or connection to close
         let result = tasks.join_next().await;
@@ -488,7 +548,10 @@ impl StreamingServer {
             }
         }
 
-        info!(tasks_drained = cleanup_count, "Streaming pipeline shut down complete");
+        info!(
+            tasks_drained = cleanup_count,
+            "Streaming pipeline shut down complete"
+        );
 
         match result {
             Some(Ok(_)) => Ok(()),
@@ -622,8 +685,8 @@ async fn run_audio_pipeline(
         frame_duration_ms: 20,
     };
 
-    let mut encoder = AudioOpusEncoder::new(audio_config)
-        .context("Failed to create Opus encoder")?;
+    let mut encoder =
+        AudioOpusEncoder::new(audio_config).context("Failed to create Opus encoder")?;
 
     let frame_samples = encoder.config().samples_per_frame();
     let channels = encoder.config().channels;
@@ -632,16 +695,17 @@ async fn run_audio_pipeline(
     // Try PipeWire audio loopback capture
     let (pcm_tx, mut pcm_rx) = mpsc::channel::<audio_capture::PcmBuffer>(8);
     let pw_cancel = cancel.clone();
-    let using_pipewire = match audio_capture::start_audio_capture(48000, 2, 20, pcm_tx, pw_cancel).await {
-        Ok(_session) => {
-            info!("PipeWire audio loopback active");
-            true
-        }
-        Err(e) => {
-            info!(error = %e, "PipeWire audio capture unavailable, falling back to silence");
-            false
-        }
-    };
+    let using_pipewire =
+        match audio_capture::start_audio_capture(48000, 2, 20, pcm_tx, pw_cancel).await {
+            Ok(_session) => {
+                info!("PipeWire audio loopback active");
+                true
+            }
+            Err(e) => {
+                info!(error = %e, "PipeWire audio capture unavailable, falling back to silence");
+                false
+            }
+        };
 
     // Silence fallback buffer
     let silence_buffer = vec![0i16; frame_samples * channels as usize];

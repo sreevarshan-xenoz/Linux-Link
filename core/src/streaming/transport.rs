@@ -37,6 +37,53 @@ impl Default for StreamTransportConfig {
 }
 
 // ---------------------------------------------------------------------------
+// QUIC transport parameters
+// ---------------------------------------------------------------------------
+
+/// Build the QUIC `TransportConfig` used by every Linux Link endpoint.
+///
+/// Tuned for real-time A/V: large datagram buffers and high stream
+/// concurrency (video opens one unidirectional stream per frame). The
+/// congestion controller is selectable for A/B testing via the
+/// `LINUX_LINK_CC` environment variable: `bbr`, `cubic`, or `new_reno`
+/// (the default, matching quinn's own default).
+pub fn configured_transport() -> quinn::TransportConfig {
+    let mut transport = quinn::TransportConfig::default();
+    transport.datagram_send_buffer_size(16 * 1024 * 1024);
+    transport.datagram_receive_buffer_size(Some(16 * 1024 * 1024));
+    transport.max_concurrent_uni_streams(1024u32.into());
+    transport.max_concurrent_bidi_streams(128u32.into());
+    apply_congestion_controller(&mut transport);
+    transport
+}
+
+fn apply_congestion_controller(transport: &mut quinn::TransportConfig) {
+    let requested = std::env::var("LINUX_LINK_CC")
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    let reno: Arc<dyn quinn::congestion::ControllerFactory + Send + Sync + 'static> =
+        Arc::new(quinn::congestion::NewRenoConfig::default());
+    let (label, factory): (
+        &str,
+        Arc<dyn quinn::congestion::ControllerFactory + Send + Sync + 'static>,
+    ) = match requested.as_str() {
+        "bbr" => ("BBR", Arc::new(quinn::congestion::BbrConfig::default())),
+        "cubic" => ("CUBIC", Arc::new(quinn::congestion::CubicConfig::default())),
+        "" | "new_reno" | "reno" => ("NewReno", reno),
+        other => {
+            warn!(
+                "LINUX_LINK_CC='{other}' is not one of bbr|cubic|new_reno — falling back to NewReno"
+            );
+            ("NewReno", reno)
+        }
+    };
+    transport.congestion_controller_factory(factory);
+    static LOGGED: std::sync::Once = std::sync::Once::new();
+    LOGGED.call_once(|| info!("QUIC congestion controller: {label}"));
+}
+
+// ---------------------------------------------------------------------------
 // Certificate management with TOFU (Trust On First Use) verification
 // ---------------------------------------------------------------------------
 
@@ -119,11 +166,7 @@ impl CertManager {
         let key = PrivateKeyDer::try_from(self.key_der.clone())
             .map_err(|_| anyhow::anyhow!("Failed to parse private key"))?;
 
-        let mut transport = quinn::TransportConfig::default();
-        transport.datagram_send_buffer_size(16 * 1024 * 1024);
-        transport.datagram_receive_buffer_size(Some(16 * 1024 * 1024));
-        transport.max_concurrent_uni_streams(1024u32.into());
-        transport.max_concurrent_bidi_streams(128u32.into());
+        let transport = configured_transport();
 
         let mut crypto = rustls::ServerConfig::builder()
             .with_no_client_auth()
@@ -163,14 +206,7 @@ impl CertManager {
             .context("Failed to create QUIC client crypto config")?;
 
         let mut client_config = quinn::ClientConfig::new(Arc::new(quic_crypto));
-
-        // Default transport config – caller can override
-        let mut transport = quinn::TransportConfig::default();
-        transport.datagram_send_buffer_size(16 * 1024 * 1024);
-        transport.datagram_receive_buffer_size(Some(16 * 1024 * 1024));
-        transport.max_concurrent_uni_streams(1024u32.into());
-        transport.max_concurrent_bidi_streams(128u32.into());
-        client_config.transport_config(Arc::new(transport));
+        client_config.transport_config(Arc::new(configured_transport()));
 
         Ok(client_config)
     }
@@ -336,15 +372,7 @@ impl StreamServer {
             String::from_utf8_lossy(&config.alpn)
         );
 
-        let mut server_config = cert_manager.server_config(vec![config.alpn.clone()])?;
-
-        // Override transport config with caller's settings
-        let mut transport_config = quinn::TransportConfig::default();
-        if config.use_datagrams {
-            transport_config.datagram_send_buffer_size(16 * 1024 * 1024);
-            transport_config.datagram_receive_buffer_size(Some(16 * 1024 * 1024));
-        }
-        server_config.transport_config(Arc::new(transport_config));
+        let server_config = cert_manager.server_config(vec![config.alpn.clone()])?;
 
         let endpoint = quinn::Endpoint::server(server_config, config.address)
             .context("Failed to create endpoint")?;
@@ -408,15 +436,7 @@ impl StreamClient {
     pub fn new(config: StreamTransportConfig, cert_manager: &CertManager) -> Result<Self> {
         info!("Creating streaming client");
 
-        let mut client_config = cert_manager.client_config(vec![config.alpn.clone()])?;
-
-        // Override transport config with caller's settings
-        let mut transport_config = quinn::TransportConfig::default();
-        if config.use_datagrams {
-            transport_config.datagram_send_buffer_size(16 * 1024 * 1024);
-            transport_config.datagram_receive_buffer_size(Some(16 * 1024 * 1024));
-        }
-        client_config.transport_config(Arc::new(transport_config));
+        let client_config = cert_manager.client_config(vec![config.alpn.clone()])?;
 
         let mut endpoint = quinn::Endpoint::client("0.0.0.0:0".parse()?)
             .context("Failed to create client endpoint")?;
@@ -608,5 +628,17 @@ mod tests {
         let config = StreamTransportConfig::default();
         assert_eq!(config.alpn, b"linux-link-stream");
         assert!(config.use_datagrams);
+    }
+
+    #[test]
+    fn test_configured_transport_builds() {
+        // Unknown values warn and fall back; any accepted value must build.
+        // (Serial because LINUX_LINK_CC is process-global.)
+        for value in ["", "bbr", "cubic", "new_reno", "bogus"] {
+            // Test-only env mutation; no other test in this binary uses the var.
+            unsafe { std::env::set_var("LINUX_LINK_CC", value) };
+            let _ = configured_transport();
+        }
+        unsafe { std::env::remove_var("LINUX_LINK_CC") };
     }
 }

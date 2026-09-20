@@ -14,6 +14,7 @@ const TAG_KEY_EVENT: u8 = 3;
 const TAG_TEXT: u8 = 4;
 const TAG_GAMEPAD: u8 = 5;
 const TAG_MOUSE_MOVE_ABS: u8 = 6;
+const TAG_REQUEST_KEYFRAME: u8 = 7;
 
 /// A compact binary input event for real-time remote control.
 ///
@@ -44,6 +45,9 @@ pub enum InputPacket {
     },
     /// Raw text input (typed via clipboard paste or IME).
     Text(String),
+    /// Client detected a video sequence gap and asks the server to emit an
+    /// IDR frame immediately.
+    RequestKeyframe,
     /// Gamepad state: 6 analog axes + 16-bit button bitmask.
     Gamepad {
         /// Left stick X, Left stick Y, Right stick X, Right stick Y, L2, R2.
@@ -106,6 +110,7 @@ impl InputPacket {
                 buf.extend_from_slice(text_bytes);
                 buf
             }
+            InputPacket::RequestKeyframe => vec![TAG_REQUEST_KEYFRAME],
         }
     }
 
@@ -164,6 +169,10 @@ impl InputPacket {
                 let text = String::from_utf8(data[5..5 + len].to_vec())
                     .context("Invalid UTF-8 in Text packet")?;
                 Ok(InputPacket::Text(text))
+            }
+            TAG_REQUEST_KEYFRAME => {
+                anyhow::ensure!(data.len() == 1, "RequestKeyframe packet must be 1 byte");
+                Ok(InputPacket::RequestKeyframe)
             }
             _ => {
                 anyhow::bail!("Unknown input packet tag: {}", tag);
@@ -326,6 +335,18 @@ mod tests {
             }
             _ => panic!("Wrong variant"),
         }
+    }
+
+    #[test]
+    fn test_request_keyframe_roundtrip() {
+        let packet = InputPacket::RequestKeyframe;
+        let data = packet.encode();
+        assert_eq!(data.len(), 1);
+        let decoded = InputPacket::decode(&data).unwrap();
+        assert!(matches!(decoded, InputPacket::RequestKeyframe));
+        // Trailing garbage must be rejected so a stats/input framing bug
+        // is caught loudly instead of silently mis-parsed.
+        assert!(InputPacket::decode(&[7, 0]).is_err());
     }
 
     #[test]

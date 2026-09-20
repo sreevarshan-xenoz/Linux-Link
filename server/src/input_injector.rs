@@ -413,6 +413,9 @@ impl InputInjector {
                 self.key(enigo_key, *pressed)
             }
             InputPacket::Text(text) => self.text(text),
+            // Control-plane request, intercepted by the streaming server before
+            // the input channel; nothing to inject.
+            InputPacket::RequestKeyframe => Ok(()),
             InputPacket::Gamepad { axes, buttons } => {
                 // Map gamepad axes/buttons to keyboard/mouse for broad compatibility.
                 // Left stick -> mouse movement

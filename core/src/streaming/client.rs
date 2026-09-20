@@ -51,7 +51,11 @@ impl StreamingClient {
     pub fn new(
         channel_capacity: usize,
         _cert_manager: std::sync::Arc<CertManager>,
-    ) -> (Self, mpsc::Receiver<EncodedPacket>, mpsc::Receiver<AudioPacket>) {
+    ) -> (
+        Self,
+        mpsc::Receiver<EncodedPacket>,
+        mpsc::Receiver<AudioPacket>,
+    ) {
         let (frame_tx, frame_rx) = mpsc::channel(channel_capacity);
         let (audio_tx, audio_rx) = mpsc::channel(channel_capacity);
         let client = Self {
@@ -100,8 +104,11 @@ impl StreamingClient {
         async move {
             info!("Connecting to streaming server");
 
-            let transport = super::transport::StreamClient::new(StreamTransportConfig::default(), &cert_manager)
-                .context("Failed to create QUIC transport")?;
+            let transport = super::transport::StreamClient::new(
+                StreamTransportConfig::default(),
+                &cert_manager,
+            )
+            .context("Failed to create QUIC transport")?;
 
             let server_name = addr.ip().to_string();
             let connection = tokio::time::timeout(
@@ -145,7 +152,9 @@ impl StreamingClient {
             };
 
             Ok((client, frame_rx, audio_rx))
-        }.instrument(span).await
+        }
+        .instrument(span)
+        .await
     }
 
     /// Start receiving frames. This runs until cancelled or the connection closes.
@@ -179,20 +188,27 @@ impl StreamingClient {
             // Spawn the receive loop using our cancel-aware receiver
             let recv_cancel = cancel.clone();
             let recv_span = tracing::info_span!("packet_recv");
-            let recv_handle = tokio::spawn(async move {
-                let result = recv_with_cancel(&connection, frame_tx, audio_tx, recv_cancel).await;
-                match result {
-                    Ok(()) => debug!("Frame receiver finished normally"),
-                    Err(e) => warn!(error = %e, "Frame receiver error"),
+            let recv_handle = tokio::spawn(
+                async move {
+                    let result =
+                        recv_with_cancel(&connection, frame_tx, audio_tx, recv_cancel).await;
+                    match result {
+                        Ok(()) => debug!("Frame receiver finished normally"),
+                        Err(e) => warn!(error = %e, "Frame receiver error"),
+                    }
                 }
-            }.instrument(recv_span));
+                .instrument(recv_span),
+            );
 
             // Spawn a stats feedback loop that periodically sends RTT data
             let stats_cancel = cancel.clone();
             let stats_span = tracing::info_span!("stats_feedback");
-            let _stats_handle = tokio::spawn(async move {
-                send_stats_loop(&stats_connection, stats_cancel).await;
-            }.instrument(stats_span));
+            let _stats_handle = tokio::spawn(
+                async move {
+                    send_stats_loop(&stats_connection, stats_cancel).await;
+                }
+                .instrument(stats_span),
+            );
 
             // Wait for cancellation or receive task completion
             tokio::select! {
@@ -205,7 +221,9 @@ impl StreamingClient {
                     }
                 }
             }
-        }.instrument(span).await
+        }
+        .instrument(span)
+        .await
     }
 
     /// Signal the client to stop receiving.
@@ -278,6 +296,14 @@ async fn recv_with_cancel(
 ) -> Result<()> {
     info!("Starting packet receiver (video + audio)");
 
+    // Video sequence-gap tracking for IDR requests. Because each frame is sent
+    // on its own unidirectional stream, frames can complete out of order; we
+    // only ask for a fresh IDR when a *non-keyframe* arrives with a gap before
+    // it (a broken delta chain), and rate-limit so we don't spam the server.
+    let mut last_video_seq: Option<u64> = None;
+    let mut last_idr_request: Option<std::time::Instant> = None;
+    const IDR_REQUEST_INTERVAL: Duration = Duration::from_millis(250);
+
     loop {
         tokio::select! {
             biased;
@@ -333,6 +359,29 @@ async fn recv_with_cancel(
                                 break;
                             }
                         } else {
+                            // Gap detection: a missing frame between the last
+                            // delta we got and this one breaks the decode chain.
+                            // A keyframe restarts the chain, so it never needs a
+                            // request; a delta after a gap does.
+                            let gap = !header.is_keyframe
+                                && last_video_seq
+                                    .is_some_and(|last| header.sequence > last + 1);
+                            if gap {
+                                let now = std::time::Instant::now();
+                                let throttled = last_idr_request
+                                    .is_some_and(|t| now.duration_since(t) < IDR_REQUEST_INTERVAL);
+                                if !throttled {
+                                    last_idr_request = Some(now);
+                                    debug!(
+                                        seq = header.sequence,
+                                        last = ?last_video_seq,
+                                        "Video sequence gap — requesting IDR"
+                                    );
+                                    send_keyframe_request(connection).await;
+                                }
+                            }
+                            last_video_seq = Some(header.sequence);
+
                             // Route to video channel
                             let packet = EncodedPacket {
                                 data,
@@ -361,6 +410,23 @@ async fn recv_with_cancel(
     }
 
     Ok(())
+}
+
+/// Best-effort IDR request to the server after a detected video gap.
+async fn send_keyframe_request(connection: &quinn::Connection) {
+    let data = InputPacket::RequestKeyframe.encode();
+    match connection.open_uni().await {
+        Ok(mut stream) => {
+            if let Err(e) = stream.write_all(&data).await {
+                debug!("Failed to send IDR request: {e}");
+            } else {
+                let _ = stream.finish();
+            }
+        }
+        Err(e) => {
+            debug!("Failed to open IDR request stream: {e}");
+        }
+    }
 }
 
 /// Periodically send connection stats (RTT) back to the server on a feedback stream.

@@ -37,6 +37,14 @@ Optional config file location:
 
 - `~/.config/linux-link/config.toml` (see `config.toml.example`)
 
+Streaming QUIC congestion control can be A/B tested via the `LINUX_LINK_CC`
+environment variable (`bbr`, `cubic`, or `new_reno`; default `new_reno`).
+It applies to both the server and client endpoints.
+
+```bash
+LINUX_LINK_CC=bbr cargo run --bin linux-link -- start
+```
+
 ## 4. Android Client (Kotlin + Rust JNI bridge)
 
 - `android/app` — Kotlin/Compose app.
