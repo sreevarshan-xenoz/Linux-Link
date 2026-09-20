@@ -91,11 +91,18 @@ fun RemoteScreen(
             modifier = Modifier.fillMaxSize(),
         )
 
-        StatsHud(
+        Column(
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .padding(8.dp),
-        )
+        ) {
+            StatsHud()
+            WorkspaceHud(
+                address = address,
+                port = port,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+        }
 
         TextButton(
             onClick = onExit,

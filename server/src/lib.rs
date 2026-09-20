@@ -4,6 +4,7 @@
 
 pub mod cli;
 pub mod config;
+pub mod hypr_events;
 pub mod hyprland;
 pub mod input_injector;
 pub mod kde;

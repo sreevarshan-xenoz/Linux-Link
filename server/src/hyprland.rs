@@ -86,6 +86,16 @@ pub struct HyprMonitor {
     pub height: i32,
 }
 
+/// A workspace as reported by `j/workspaces`.
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
+pub struct HyprWorkspace {
+    pub id: i32,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub active: bool,
+}
+
 /// One line from socket2: `eventname>>payload`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HyprEvent {
@@ -198,6 +208,11 @@ impl HyprlandIpc {
         self.json("j/monitors").await
     }
 
+    /// All workspaces, in id order, with the `active` flag.
+    pub async fn workspaces(&self) -> Result<Vec<HyprWorkspace>> {
+        self.json("j/workspaces").await
+    }
+
     /// Spawn a task streaming socket2 events (activewindow, openwindow,
     /// movewindow, …) into `rx`. Ends when the connection closes (Hyprland
     /// quit) — reconnection is a follow-up; consumers treat channel close as
@@ -291,6 +306,19 @@ mod tests {
         assert_eq!(monitors[1].x, 1920);
         assert_eq!(monitors[1].y, -100);
         assert_eq!(monitors[1].width, 2560);
+    }
+
+    #[test]
+    fn deserialize_workspaces() {
+        let json = r#"[
+            {"id":1,"name":"1","monitor":0,"active":true,"special":false,"windows":3,"extra":1},
+            {"id":2,"name":"2:web","monitor":1,"active":false}
+        ]"#;
+        let ws: Vec<HyprWorkspace> = serde_json::from_str(json).unwrap();
+        assert_eq!(ws.len(), 2);
+        assert!(ws[0].active);
+        assert_eq!(ws[1].name, "2:web");
+        assert!(!ws[1].active);
     }
 
     // Live-IPC tests run only on a Hyprland session (skipped silently

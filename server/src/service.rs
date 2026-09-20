@@ -1,4 +1,6 @@
 use crate::config::Config;
+use crate::hypr_events;
+use crate::hyprland::HyprlandIpc;
 use crate::input_injector::InputInjector;
 use crate::kde;
 use crate::notification_monitor::start_notification_monitor;
@@ -171,6 +173,69 @@ pub async fn run(config: Config) -> Result<()> {
         });
     }
 
+    // R3#8: Workspace HUD — forward Hyprland socket2 events to connected
+    // clients. Absent compositor (non-Hyprland session) simply skips this.
+    let hypr_ipc: Option<Arc<HyprlandIpc>> = if HyprlandIpc::is_available() {
+        HyprlandIpc::from_env().ok().map(Arc::new)
+    } else {
+        None
+    };
+    if let Some(ipc) = hypr_ipc.as_ref() {
+        // The client's packet poller re-subscribes per drain, so a register-time
+        // push can fall into a subscription gap; periodic snapshots let the HUD
+        // self-heal. Events stay for instant response between snapshots.
+        let ipc_snap = ipc.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(4));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tick.tick().await;
+                let clients = state::clone_clients().await;
+                if clients.is_empty() {
+                    continue;
+                }
+                let Some(packet) = hypr_events::state_packet(&ipc_snap).await else {
+                    continue;
+                };
+                for sender in clients.iter() {
+                    let _ = sender.send_packet(&packet).await;
+                }
+            }
+        });
+
+        let mut ev_rx = hypr_events::start_hypr_event_monitor((**ipc).clone()).subscribe();
+        tokio::spawn(async move {
+            tracing::info!("Hyprland event broadcast task started");
+            loop {
+                match ev_rx.recv().await {
+                    Ok(ev) => {
+                        let Some(packet) = hypr_events::event_packet(&ev) else {
+                            continue;
+                        };
+                        let clients = state::clone_clients().await;
+                        let mut dead_clients = Vec::new();
+                        for sender in clients.iter() {
+                            if let Err(e) = sender.send_packet(&packet).await {
+                                tracing::debug!("Detected dead client during Hyprland push: {e}");
+                                dead_clients.push(sender.connection_id().to_string());
+                            }
+                        }
+                        if !dead_clients.is_empty() {
+                            state::prune_dead_clients(&dead_clients).await;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        tracing::info!("Hyprland event broadcast channel closed");
+                        break;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!("Hyprland event broadcast lagged by {n} messages");
+                    }
+                }
+            }
+        });
+    }
+
     // Input injection channel shared between v1 and v2
     let (input_tx, mut input_rx) = tokio::sync::broadcast::channel::<InputPacket>(16);
     let streaming_config = config.video_quality.to_streaming_config();
@@ -216,9 +281,15 @@ pub async fn run(config: Config) -> Result<()> {
                         tracing::info!("Incoming v1 TCP connection from {}", peer_addr);
                         let identity_packet = kde_service.identity_packet().clone();
                         let registry_clone = Arc::clone(&registry);
+                        let hypr = hypr_ipc.clone();
                         tokio::spawn(async move {
-                            if let Err(error) =
-                                handle_connection_with_kde(stream, identity_packet, &registry_clone).await
+                            if let Err(error) = handle_connection_with_kde(
+                                stream,
+                                identity_packet,
+                                &registry_clone,
+                                hypr.as_deref(),
+                            )
+                            .await
                             {
                                 tracing::warn!("connection handler failed: {}", error);
                             }
@@ -444,6 +515,7 @@ async fn handle_connection_with_kde(
     stream: TcpStream,
     identity_packet: Option<NetworkPacket>,
     registry: &Arc<PluginRegistry>,
+    hypr_ipc: Option<&HyprlandIpc>,
 ) -> Result<()> {
     use tokio::io::AsyncWriteExt;
     use tracing::Instrument;
@@ -526,6 +598,11 @@ async fn handle_connection_with_kde(
 
         // Register this client for notification broadcasting and enforce single-session rule
         state::register_client(sender.clone()).await;
+
+        // Seed the Workspace HUD with the current compositor state (R3#8)
+        if let Some(ipc) = hypr_ipc {
+            hypr_events::push_state_to(&sender, ipc).await;
+        }
 
         tracing::info!("Entering main packet loop");
         loop {
