@@ -77,7 +77,6 @@ fun AudioControlSheet(
     var snapshot by remember { mutableStateOf<AudioSnapshot?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var slider by remember { mutableFloatStateOf(0f) }
-    var refresh by remember { mutableStateOf(0) }
     val scope = rememberCoroutineScope()
 
     suspend fun call(body: JSONObject): JSONObject? {
@@ -112,7 +111,7 @@ fun AudioControlSheet(
         }
     }
 
-    LaunchedEffect(address, controlPort, refresh) {
+    LaunchedEffect(address, controlPort) {
         error = null
         refreshAll()
     }

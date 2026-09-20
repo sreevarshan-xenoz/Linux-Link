@@ -28,6 +28,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -196,6 +197,10 @@ fun RemoteScreen(
     // flapping radio from tearing down a healthy stream.
     var lastNetwork by remember { mutableStateOf<Network?>(null) }
     var lastRebindMs by remember { mutableLongStateOf(0L) }
+    // The callback lives across recompositions (keyed on address only), so
+    // everything it reads must be a live reference, not the value captured
+    // at registration.
+    val pipNow = rememberUpdatedState(inPictureInPicture)
     DisposableEffect(address) {
         val handler = Handler(Looper.getMainLooper())
         val callback = object : ConnectivityManager.NetworkCallback() {
@@ -204,7 +209,7 @@ fun RemoteScreen(
                     val previous = lastNetwork
                     lastNetwork = network
                     if (previous != null && previous != network &&
-                        !inPictureInPicture &&
+                        !pipNow.value &&
                         SystemClock.elapsedRealtime() - lastRebindMs > 3_000
                     ) {
                         lastRebindMs = SystemClock.elapsedRealtime()
