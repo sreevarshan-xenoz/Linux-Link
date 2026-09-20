@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import dev.linuxlink.android.MainActivity
+import dev.linuxlink.android.R
 import dev.linuxlink.android.bridge.RustCore
 
 /**
@@ -96,7 +97,7 @@ class SessionForegroundService : Service() {
     private fun createChannel() {
         val channel = NotificationChannel(
             CHANNEL_ID,
-            "Remote desktop session",
+            getString(R.string.channel_session),
             NotificationManager.IMPORTANCE_LOW,
         )
         channel.setShowBadge(false)
@@ -133,21 +134,21 @@ class SessionForegroundService : Service() {
         )
         return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_menu_view)
-            .setContentTitle("Linux Link")
-            .setContentText("Streaming to $address")
+            .setContentTitle(getString(R.string.app_name))
+            .setContentText(getString(R.string.notif_streaming, address))
             .setContentIntent(open)
             .setOngoing(true)
             .addAction(
                 Notification.Action.Builder(
                     null,
-                    "Disconnect",
+                    getString(R.string.disconnect),
                     disconnect,
                 ).build(),
             )
             .addAction(
                 Notification.Action.Builder(
                     null,
-                    "Lock desktop",
+                    getString(R.string.lock_desktop),
                     lockDesktop,
                 ).build(),
             )

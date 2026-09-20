@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="share_target_label">Linux Link-க்கு அனுப்பு</string>
+    <string name="app_name">Linux Link</string>
+
+    <!-- ConnectScreen -->
+    <string name="host_address">ஹோஸ்ட் முகவரி</string>
+    <string name="streaming_port">ஸ்ட்ரீமிங் போர்ட்</string>
+    <string name="control_port">கண்ட்ரோல் போர்ட் (க்ளிப் போர்டு, கோப்புகள்)</string>
+    <string name="wol_mac_label">Wake-on-LAN MAC (இந்த ஹோஸ்டை ரிலே ஆகப் பயன்படுத்தி விழிக்கவும்)</string>
+    <string name="auto_connect">தொடங்கும்போது தானாக இணை</string>
+    <string name="connect">இணை</string>
+    <string name="send_wol">Wake-on-LAN அனுப்பு</string>
+    <string name="wake_sent">%1$s வழியாக வேக் பேக்கெட் அனுப்பப்பட்டது.</string>
+    <string name="wake_failed">விழிக்க முடியவில்லை: %1$s</string>
+    <string name="rust_core_version">Rust core v%1$s</string>
+    <string name="language">மொழி</string>
+
+    <!-- Session bar + status (RemoteScreen) -->
+    <string name="wan_link">WAN இணைப்பு (iroh)</string>
+    <string name="connecting">இணைக்கிறது…</string>
+    <string name="retry">மீண்டும் முயற்சி</string>
+    <string name="exit">வெளியேறு</string>
+    <string name="mode_direct_touch">முறை: நேரடித் தொடும்</string>
+    <string name="mode_trackpad">முறை: டிராக்பேட்</string>
+    <string name="clip_on">க்ளிப்: இயக்கம்</string>
+    <string name="clip_off">க்ளிப்: முடக்கம்</string>
+    <string name="history">வரலாறு</string>
+    <string name="window_all">சாளரம்: அனைத்தும்</string>
+    <string name="window_named">சாளரம்: %1$s</string>
+    <string name="monitor_auto">மானிட்டர்: தானியங்கி</string>
+    <string name="monitor_indexed">மானிட்டர்: #%1$d</string>
+    <string name="ring_pc">PC ஒலியெழுப்பு</string>
+    <string name="audio">ஒலி</string>
+    <string name="pair_action">இணைப்பு…</string>
+    <string name="paired">இணைக்கப்பட்டது ✓</string>
+    <string name="privacy_on">தனியுரிமை: இயக்கம்</string>
+    <string name="privacy_off">தனியுரிமை: முடக்கம்</string>
+    <string name="privacy_error">தனியுரிமை: %1$s</string>
+    <string name="lock_pc">PC பூட்டு</string>
+    <string name="blackout">கருப்புத் திரை</string>
+    <string name="pip">PiP</string>
+    <string name="blackout_unlock">கருப்புத் திரை — திறக்க இருமுறை தட்டவும்</string>
+
+    <!-- Foreground-service + notification relay -->
+    <string name="channel_session">தொலைநுணுக பணித்தள அமர்வு</string>
+    <string name="notif_streaming">%1$s க்கு ஸ்ட்ரீம் செய்கிறது</string>
+    <string name="disconnect">துண்டி</string>
+    <string name="lock_desktop">பணித்தளத்தைப் பூட்டு</string>
+    <string name="channel_desktop_notifications">பணித்தள அறிவிப்புகள்</string>
+    <string name="reply">பதில்</string>
+    <string name="reply_to">%1$s க்கு பதிலளி</string>
+
+    <!-- ShareActivity -->
+    <string name="share_no_host">Linux Link: சேமித்த ஹோஸ்ட் இல்லை. முதலில் செயலியிலிருந்து ஒருமுறை இணையுங்கள்.</string>
+    <string name="share_nothing">இந்த intent-ல் பகிர ஏதும் இல்லை.</string>
+    <string name="share_sending_text">%1$s க்கு உரை அனுப்புகிறது…</string>
+    <string name="share_sent_clipboard">க்ளிப் போர்டுக்கு அனுப்பப்பட்டது.</string>
+    <string name="share_failed">தோல்வி: %1$s</string>
+    <string name="share_preparing">%1$s தயாராகிறது…</string>
+    <string name="share_sent_file">%1$s அனுப்பப்பட்டது.</string>
+
+    <!-- Pairing sheet -->
+    <string name="pair_title">%1$s உடன் இணை</string>
+    <string name="pair_read_pin">டெஸ்க்டாப் திரையில் PIN ஐப் படியுங்கள்…</string>
+    <string name="pair_pin_ready">டெஸ்க்டாப்பில் PIN காட்டுகிறது (`linux-link pair`) — கீழே தட்டிடுங்கள்.</string>
+    <string name="pair_error">பிழை: %1$s</string>
+    <string name="pair_no_pin">டெஸ்க்டாப் PIN ஐ உறுதிப்படுத்தவில்லை.</string>
+    <string name="pair_wrong_pin">தவறான அல்லது காலாவதியான PIN.</string>
+    <string name="pair_waiting">டெஸ்க்டாப்பிற்காகக் காத்திருக்கிறது…</string>
+    <string name="pair_show_pin">டெஸ்க்டாப்பில் PIN காட்டு</string>
+    <string name="pair_pin_label">6-இலக்க PIN</string>
+    <string name="pair_enter_pin">டெஸ்க்டாப் PIN ஐ உள்ளிடுங்கள்</string>
+    <string name="cancel">ரத்து</string>
+
+    <!-- Window picker -->
+    <string name="stream_window">சாளரத்தை ஸ்ட்ரீம் செய்</string>
+    <string name="whole_desktop_current">முழுப் பணித்தளம் (தற்போது)</string>
+    <string name="whole_desktop">முழுப் பணித்தளம்</string>
+    <string name="malformed_windows">சீர்கேடான சாளரப் பட்டியல்</string>
+    <string name="window_query_failed">சாளர வினவல் தோல்வி</string>
+    <string name="window_focused">செயலில்</string>
+
+    <!-- Monitor picker -->
+    <string name="stream_monitor">மானிட்டரை ஸ்ட்ரீம் செய்</string>
+    <string name="auto_primary_current">தானியங்கி — முதன்மை (தற்போது)</string>
+    <string name="auto_primary">தானியங்கி — முதன்மை</string>
+    <string name="malformed_monitors">சீர்கேடான மானிட்டர் பட்டியல்</string>
+    <string name="monitor_query_failed">மானிட்டர் வினவல் தோல்வி</string>
+    <string name="monitor_primary">முதன்மை</string>
+    <string name="monitor_current">தற்போது</string>
+
+    <!-- Clipboard history sheet -->
+    <string name="clipboard_history">க்ளிப் போர்டு வரலாறு</string>
+    <string name="clear">அழி</string>
+    <string name="clipboard_empty">இதுவரை எதுவும் பிடிக்கப்படவில்லை — ஏதேனும் நகலெடுங்கள் அல்லது க்ளிப் போர்டு ஒத்திசைவை இயக்குங்கள்.</string>
+
+    <!-- Audio sheet -->
+    <string name="desktop_audio">டெஸ்க்டாப் ஒலி</string>
+    <string name="audio_volume">ஒலியளவு · %1$d%%</string>
+    <string name="audio_muted">(அணைக்கப்பட்டது)</string>
+    <string name="mute">அணை</string>
+    <string name="output_device">வெளியீட்டுச் சாதனம்</string>
+    <string name="sink_default">இயல்பு</string>
+    <string name="audio_rejected">டெஸ்க்டாப் கோரிக்கையை மறுத்தது</string>
+    <string name="audio_failed">ஒலிக் கட்டுப்பாடு தோல்வி</string>
+</resources>

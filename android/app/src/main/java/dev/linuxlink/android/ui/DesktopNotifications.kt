@@ -11,6 +11,7 @@ import android.content.Intent
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.platform.LocalContext
+import dev.linuxlink.android.R
 import dev.linuxlink.android.bridge.DesktopNotification
 import dev.linuxlink.android.bridge.RustCore
 import kotlinx.coroutines.Dispatchers
@@ -58,7 +59,7 @@ private fun ensureDesktopNotificationChannel(context: Context) {
     if (manager.getNotificationChannel(CHANNEL_DESKTOP_NOTIFICATIONS) != null) return
     val channel = NotificationChannel(
         CHANNEL_DESKTOP_NOTIFICATIONS,
-        "Desktop notifications",
+        context.getString(R.string.channel_desktop_notifications),
         NotificationManager.IMPORTANCE_DEFAULT,
     )
     manager.createNotificationChannel(channel)
@@ -86,11 +87,11 @@ private fun postDesktopNotification(
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
     )
     val remoteInput = RemoteInput.Builder(KEY_REPLY)
-        .setLabel("Reply to ${note.source}")
+        .setLabel(context.getString(R.string.reply_to, note.source))
         .build()
     val action = Notification.Action.Builder(
         null,
-        "Reply",
+        context.getString(R.string.reply),
         replyIntent,
     )
         .addRemoteInput(remoteInput)

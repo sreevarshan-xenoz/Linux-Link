@@ -22,8 +22,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.linuxlink.android.R
 import dev.linuxlink.android.bridge.RustCore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -68,6 +70,8 @@ fun MonitorPickerSheet(
 ) {
     var monitors by remember { mutableStateOf<List<DesktopMonitor>?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
+    val malformedMsg = stringResource(R.string.malformed_monitors)
+    val queryFailMsg = stringResource(R.string.monitor_query_failed)
 
     LaunchedEffect(address, controlPort) {
         val result =
@@ -78,17 +82,18 @@ fun MonitorPickerSheet(
             onSuccess = { json ->
                 runCatching { parseMonitorsPayload(json) }
                     .onSuccess { monitors = it }
-                    .onFailure { error = "Malformed monitor list" }
+                    .onFailure { error = malformedMsg }
             },
-            onFailure = { error = it.message ?: "Monitor query failed" },
+            onFailure = { error = it.message ?: queryFailMsg },
         )
     }
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(modifier = Modifier.padding(horizontal = 16.dp)) {
-            Text("Stream a monitor", style = MaterialTheme.typography.titleMedium)
+            Text(stringResource(R.string.stream_monitor), style = MaterialTheme.typography.titleMedium)
             TextButton(onClick = { onPick(-1) }) {
-                val label = if (selected == -1) "Auto — primary (current)" else "Auto — primary"
+                val label =
+                    if (selected == -1) stringResource(R.string.auto_primary_current) else stringResource(R.string.auto_primary)
                 Text(label, style = MaterialTheme.typography.bodyMedium)
             }
             HorizontalDivider()
@@ -127,9 +132,11 @@ fun MonitorPickerSheet(
                             )
                             Text(
                                 buildString {
+                                    val primaryTag = stringResource(R.string.monitor_primary)
+                                    val currentTag = stringResource(R.string.monitor_current)
                                     append("${m.width}x${m.height}")
-                                    if (m.isPrimary) append("  ·  primary")
-                                    if (m.index == selected) append("  ·  current")
+                                    if (m.isPrimary) append("  ·  $primaryTag")
+                                    if (m.index == selected) append("  ·  $currentTag")
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,

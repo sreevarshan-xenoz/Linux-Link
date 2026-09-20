@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  UI chrome strings (Tier-3 #17 remainder: per-app language). Telemetry HUD
+  units (fps/kbps/rtt/e2e/drops), shortcut key labels (Super, Alt+Tab, …) and
+  desktop-supplied data (window titles, monitor names, Rust-side error
+  reasons) are deliberately NOT localized — they are technical tokens or
+  remote content. Locales must stay in sync with res/xml/locales_config.xml.
+-->
+<resources>
+    <string name="share_target_label">Send to Linux Link</string>
+    <string name="app_name">Linux Link</string>
+
+    <!-- ConnectScreen -->
+    <string name="host_address">Host address</string>
+    <string name="streaming_port">Streaming port</string>
+    <string name="control_port">Control port (clipboard, files)</string>
+    <string name="wol_mac_label">Wake-on-LAN MAC (wake via this host as relay)</string>
+    <string name="auto_connect">Auto-connect on launch</string>
+    <string name="connect">Connect</string>
+    <string name="send_wol">Send Wake-on-LAN</string>
+    <string name="wake_sent">Wake packet sent via %1$s.</string>
+    <string name="wake_failed">Wake failed: %1$s</string>
+    <string name="rust_core_version">Rust core v%1$s</string>
+    <string name="language">Language</string>
+
+    <!-- Session bar + status (RemoteScreen) -->
+    <string name="wan_link">WAN link (iroh)</string>
+    <string name="connecting">Connecting…</string>
+    <string name="retry">Retry</string>
+    <string name="exit">Exit</string>
+    <string name="mode_direct_touch">Mode: direct touch</string>
+    <string name="mode_trackpad">Mode: trackpad</string>
+    <string name="clip_on">Clip: on</string>
+    <string name="clip_off">Clip: off</string>
+    <string name="history">History</string>
+    <string name="window_all">Window: all</string>
+    <string name="window_named">Window: %1$s</string>
+    <string name="monitor_auto">Monitor: auto</string>
+    <string name="monitor_indexed">Monitor: #%1$d</string>
+    <string name="ring_pc">Ring PC</string>
+    <string name="audio">Audio</string>
+    <string name="pair_action">Pair…</string>
+    <string name="paired">Paired ✓</string>
+    <string name="privacy_on">Privacy: on</string>
+    <string name="privacy_off">Privacy: off</string>
+    <string name="privacy_error">Privacy: %1$s</string>
+    <string name="lock_pc">Lock PC</string>
+    <string name="blackout">Blackout</string>
+    <string name="pip">PiP</string>
+    <string name="blackout_unlock">Blackout — double-tap to unlock</string>
+
+    <!-- Foreground-service + notification relay -->
+    <string name="channel_session">Remote desktop session</string>
+    <string name="notif_streaming">Streaming to %1$s</string>
+    <string name="disconnect">Disconnect</string>
+    <string name="lock_desktop">Lock desktop</string>
+    <string name="channel_desktop_notifications">Desktop notifications</string>
+    <string name="reply">Reply</string>
+    <string name="reply_to">Reply to %1$s</string>
+
+    <!-- ShareActivity -->
+    <string name="share_no_host">Linux Link: no saved host. Connect once from the app first.</string>
+    <string name="share_nothing">Nothing shareable in this intent.</string>
+    <string name="share_sending_text">Sending text to %1$s…</string>
+    <string name="share_sent_clipboard">Sent to clipboard.</string>
+    <string name="share_failed">Failed: %1$s</string>
+    <string name="share_preparing">Preparing %1$s…</string>
+    <string name="share_sent_file">Sent %1$s.</string>
+
+    <!-- Pairing sheet -->
+    <string name="pair_title">Pair with %1$s</string>
+    <string name="pair_read_pin">Read the PIN off the desktop screen…</string>
+    <string name="pair_pin_ready">A PIN is showing on the desktop (`linux-link pair`) — type it below.</string>
+    <string name="pair_error">Error: %1$s</string>
+    <string name="pair_no_pin">Desktop did not confirm a PIN.</string>
+    <string name="pair_wrong_pin">Wrong or expired PIN.</string>
+    <string name="pair_waiting">Waiting for desktop…</string>
+    <string name="pair_show_pin">Show PIN on desktop</string>
+    <string name="pair_pin_label">6-digit PIN</string>
+    <string name="pair_enter_pin">Enter PIN from desktop</string>
+    <string name="cancel">Cancel</string>
+
+    <!-- Window picker -->
+    <string name="stream_window">Stream a window</string>
+    <string name="whole_desktop_current">Whole desktop (current)</string>
+    <string name="whole_desktop">Whole desktop</string>
+    <string name="malformed_windows">Malformed window list</string>
+    <string name="window_query_failed">Window query failed</string>
+    <string name="window_focused">focused</string>
+
+    <!-- Monitor picker -->
+    <string name="stream_monitor">Stream a monitor</string>
+    <string name="auto_primary_current">Auto — primary (current)</string>
+    <string name="auto_primary">Auto — primary</string>
+    <string name="malformed_monitors">Malformed monitor list</string>
+    <string name="monitor_query_failed">Monitor query failed</string>
+    <string name="monitor_primary">primary</string>
+    <string name="monitor_current">current</string>
+
+    <!-- Clipboard history sheet -->
+    <string name="clipboard_history">Clipboard history</string>
+    <string name="clear">Clear</string>
+    <string name="clipboard_empty">Nothing captured yet — copy something or turn on clipboard sync.</string>
+
+    <!-- Audio sheet -->
+    <string name="desktop_audio">Desktop audio</string>
+    <string name="audio_volume">Volume · %1$d%%</string>
+    <string name="audio_muted">(muted)</string>
+    <string name="mute">Mute</string>
+    <string name="output_device">Output device</string>
+    <string name="sink_default">default</string>
+    <string name="audio_rejected">Desktop rejected the request</string>
+    <string name="audio_failed">Audio control failed</string>
+</resources>

@@ -26,10 +26,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.text.KeyboardOptions
+import android.content.Intent
+import android.provider.Settings
+import androidx.core.net.toUri
 import dev.linuxlink.android.HostStore
+import dev.linuxlink.android.R
 import dev.linuxlink.android.bridge.RustCore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -58,7 +63,8 @@ fun ConnectScreen(
     var wolMac by rememberSaveable {
         mutableStateOf(HostStore.wolMac(context, initial?.address.orEmpty()))
     }
-    var wakeStatus by remember { mutableStateOf<String?>(null) }
+    var wakeStatusRes by remember { mutableStateOf<Int?>(null) }
+    var wakeStatusArg by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val portValue = port.toIntOrNull()
     val controlPortValue = controlPort.toIntOrNull()
@@ -72,12 +78,12 @@ fun ConnectScreen(
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text("Linux Link", style = MaterialTheme.typography.headlineMedium)
+        Text(stringResource(R.string.app_name), style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(24.dp))
         OutlinedTextField(
             value = address,
             onValueChange = { address = it },
-            label = { Text("Host address") },
+            label = { Text(stringResource(R.string.host_address)) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -87,7 +93,7 @@ fun ConnectScreen(
             onValueChange = { input ->
                 if (input.all { it.isDigit() } && input.length <= 5) port = input
             },
-            label = { Text("Streaming port") },
+            label = { Text(stringResource(R.string.streaming_port)) },
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             modifier = Modifier.fillMaxWidth(),
@@ -98,7 +104,7 @@ fun ConnectScreen(
             onValueChange = { input ->
                 if (input.all { it.isDigit() } && input.length <= 5) controlPort = input
             },
-            label = { Text("Control port (clipboard, files)") },
+            label = { Text(stringResource(R.string.control_port)) },
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             modifier = Modifier.fillMaxWidth(),
@@ -107,7 +113,7 @@ fun ConnectScreen(
         OutlinedTextField(
             value = wolMac,
             onValueChange = { wolMac = it },
-            label = { Text("Wake-on-LAN MAC (wake via this host as relay)") },
+            label = { Text(stringResource(R.string.wol_mac_label)) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -115,7 +121,7 @@ fun ConnectScreen(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Switch(checked = rememberHost, onCheckedChange = { rememberHost = it })
             Spacer(Modifier.height(0.dp))
-            Text("Auto-connect on launch")
+            Text(stringResource(R.string.auto_connect))
         }
         Spacer(Modifier.height(24.dp))
         Button(
@@ -133,7 +139,7 @@ fun ConnectScreen(
             },
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text("Connect")
+            Text(stringResource(R.string.connect))
         }
         Spacer(Modifier.height(8.dp))
         OutlinedButton(
@@ -146,28 +152,45 @@ fun ConnectScreen(
                     val result = withContext(Dispatchers.IO) {
                         RustCore.wakeViaRelay(address.trim(), relayPort, target)
                     }
-                    wakeStatus = if (result.isSuccess) {
-                        "Wake packet sent via ${address.trim()}."
-                    } else {
-                        "Wake failed: ${result.exceptionOrNull()?.message}"
-                    }
+                    wakeStatusRes = if (result.isSuccess) R.string.wake_sent else R.string.wake_failed
+                    wakeStatusArg = if (result.isSuccess) address.trim() else result.exceptionOrNull()?.message
                 }
             },
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text("Send Wake-on-LAN")
+            Text(stringResource(R.string.send_wol))
         }
-        if (wakeStatus != null) {
+        val wakeText =
+            wakeStatusRes?.let { stringResource(it, wakeStatusArg.orEmpty()) }
+        if (wakeText != null) {
             Spacer(Modifier.height(8.dp))
             Text(
-                wakeStatus.orEmpty(),
+                wakeText,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         Spacer(Modifier.height(16.dp))
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            OutlinedButton(
+                onClick = {
+                    runCatching {
+                        context.startActivity(
+                            Intent(
+                                Settings.ACTION_APP_LOCALE_SETTINGS,
+                                ("package:${context.packageName}").toUri(),
+                            ),
+                        )
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(stringResource(R.string.language))
+            }
+            Spacer(Modifier.height(8.dp))
+        }
         Text(
-            "Rust core v${RustCore.version}",
+            stringResource(R.string.rust_core_version, RustCore.version),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

@@ -1,10 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Per-app language support (Tier-3 #17, Play table stakes). Only locales
-  listed here get the system "Languages" entry for this app. Translations
-  are not shipped yet (all UI strings are still hardcoded English), so this
-  is the plumbing: add <locale android:name="xx"/> as each locale lands.
+  Per-app language support (Tier-3 #17). Only locales listed here get the
+  system "Languages" entry for this app (API 33+; the ConnectScreen
+  "Language" button deep-links there). Keep in sync with res/values-*/.
 -->
 <locale-config xmlns:android="http://schemas.android.com/apk/res/android">
     <locale android:name="en" />
+    <locale android:name="es" />
+    <locale android:name="ta" />
 </locale-config>

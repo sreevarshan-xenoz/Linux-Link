@@ -31,7 +31,7 @@ class ShareActivity : ComponentActivity() {
 
         val host = HostStore.lastHost(this)
         if (host == null) {
-            status.text = "Linux Link: no saved host. Connect once from the app first."
+            status.text = getString(R.string.share_no_host)
             return
         }
 
@@ -42,7 +42,7 @@ class ShareActivity : ComponentActivity() {
         when {
             uri != null -> sendFile(host, uri)
             !text.isNullOrBlank() -> sendText(host, text)
-            else -> status.text = "Nothing shareable in this intent."
+            else -> status.text = getString(R.string.share_nothing)
         }
     }
 
@@ -50,12 +50,16 @@ class ShareActivity : ComponentActivity() {
         host: HostStore.Host,
         text: String,
     ) {
-        status.text = "Sending text to ${host.address}…"
+        status.text = getString(R.string.share_sending_text, host.address)
         Thread {
             val result = RustCore.sendClipboard(host.address, host.controlPort, text)
             runOnUiThread {
                 status.text =
-                    if (result.isSuccess) "Sent to clipboard." else "Failed: ${result.exceptionOrNull()?.message}"
+                    if (result.isSuccess) {
+                        getString(R.string.share_sent_clipboard)
+                    } else {
+                        getString(R.string.share_failed, result.exceptionOrNull()?.message)
+                    }
                 finish()
             }
         }.start()
@@ -65,7 +69,7 @@ class ShareActivity : ComponentActivity() {
         host: HostStore.Host,
         uri: Uri,
     ) {
-        status.text = "Preparing ${displayName(uri)}…"
+        status.text = getString(R.string.share_preparing, displayName(uri))
         Thread {
             val temp = File(cacheDir, "share/" + displayName(uri))
             temp.parentFile?.mkdirs()
@@ -84,9 +88,9 @@ class ShareActivity : ComponentActivity() {
             runOnUiThread {
                 status.text =
                     if (result.isSuccess) {
-                        "Sent ${temp.name}."
+                        getString(R.string.share_sent_file, temp.name)
                     } else {
-                        "Failed: ${result.exceptionOrNull()?.message}"
+                        getString(R.string.share_failed, result.exceptionOrNull()?.message)
                     }
                 finish()
             }

@@ -35,8 +35,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import dev.linuxlink.android.HostStore
+import dev.linuxlink.android.R
 import dev.linuxlink.android.bridge.RustCore
 import dev.linuxlink.android.service.SessionForegroundService
 import dev.linuxlink.android.stream.InputMode
@@ -100,6 +102,19 @@ fun RemoteScreen(
     // 10-minute TTL, so an enabled session must keep refreshing it and must
     // release it on exit; a refresh failure means the server auto-released.
     var privacyGrab by remember { mutableStateOf(false) }
+    // Toast text is resolved during composition (configuration-aware) and
+    // fired by this one-shot effect, not from the event callback.
+    var privacyError by remember { mutableStateOf<String?>(null) }
+    val privacyErrorMessage =
+        privacyError?.let { stringResource(R.string.privacy_error, it) }
+    LaunchedEffect(privacyErrorMessage) {
+        if (privacyErrorMessage != null) {
+            android.widget.Toast
+                .makeText(context, privacyErrorMessage, android.widget.Toast.LENGTH_SHORT)
+                .show()
+            privacyError = null
+        }
+    }
 
     LaunchedEffect(privacyGrab, address) {
         if (!privacyGrab) return@LaunchedEffect
@@ -312,7 +327,7 @@ fun RemoteScreen(
             val status = streamStatus
             if (status is StreamStatus.Up && status.kind == StreamTransportKind.Wan) {
                 Text(
-                    "WAN link (iroh)",
+                    stringResource(R.string.wan_link),
                     color = Color.White,
                     style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier
@@ -328,7 +343,7 @@ fun RemoteScreen(
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     val label = when (status) {
-                        is StreamStatus.Connecting -> "Connecting…"
+                        is StreamStatus.Connecting -> stringResource(R.string.connecting)
                         is StreamStatus.Down -> status.reason
                         else -> ""
                     }
@@ -345,7 +360,7 @@ fun RemoteScreen(
                     )
                     if (status is StreamStatus.Down) {
                         TextButton(onClick = ::retryStream) {
-                            Text("Retry", color = Color.White)
+                            Text(stringResource(R.string.retry), color = Color.White)
                         }
                     }
                 }
@@ -370,7 +385,7 @@ fun RemoteScreen(
                     .align(Alignment.TopEnd)
                     .padding(4.dp),
             ) {
-                Text("Exit", color = Color.White)
+                Text(stringResource(R.string.exit), color = Color.White)
             }
         }
 
@@ -384,24 +399,40 @@ fun RemoteScreen(
                         },
                     ) {
                         val label =
-                            if (mode == InputMode.DirectTouch) "Mode: direct touch" else "Mode: trackpad"
+                            if (mode == InputMode.DirectTouch) {
+                                stringResource(R.string.mode_direct_touch)
+                            } else {
+                                stringResource(R.string.mode_trackpad)
+                            }
                         Text(label, color = Color.White)
                     }
                     TextButton(onClick = { clipboardSync = !clipboardSync }) {
-                        val label = if (clipboardSync) "Clip: on" else "Clip: off"
+                        val label =
+                            if (clipboardSync) stringResource(R.string.clip_on) else stringResource(R.string.clip_off)
                         Text(label, color = Color.White)
                     }
                     TextButton(onClick = { showHistory = true }) {
-                        Text("History", color = Color.White)
+                        Text(stringResource(R.string.history), color = Color.White)
                     }
                     TextButton(onClick = { showPicker = true }) {
                         val label =
-                            if (cropWindow == null) "Window: all" else "Window: ${(cropWindow?.title ?: "").take(18)}"
+                            if (cropWindow == null) {
+                                stringResource(R.string.window_all)
+                            } else {
+                                stringResource(
+                                    R.string.window_named,
+                                    (cropWindow?.title ?: "").take(18),
+                                )
+                            }
                         Text(label, color = Color.White)
                     }
                     TextButton(onClick = { showMonitorPicker = true }) {
                         val label =
-                            if (monitorIndex == -1) "Monitor: auto" else "Monitor: #$monitorIndex"
+                            if (monitorIndex == -1) {
+                                stringResource(R.string.monitor_auto)
+                            } else {
+                                stringResource(R.string.monitor_indexed, monitorIndex)
+                            }
                         Text(label, color = Color.White)
                     }
                     TextButton(
@@ -411,13 +442,18 @@ fun RemoteScreen(
                             }
                         },
                     ) {
-                        Text("Ring PC", color = Color.White)
+                        Text(stringResource(R.string.ring_pc), color = Color.White)
                     }
                     TextButton(onClick = { showAudio = true }) {
-                        Text("Audio", color = Color.White)
+                        Text(stringResource(R.string.audio), color = Color.White)
                     }
                     TextButton(onClick = { pairingMessage = null; showPairing = true }) {
-                        val label = if (pairedServerId == null) "Pair…" else "Paired ✓"
+                        val label =
+                            if (pairedServerId == null) {
+                                stringResource(R.string.pair_action)
+                            } else {
+                                stringResource(R.string.paired)
+                            }
                         Text(label, color = Color.White)
                     }
                     TextButton(
@@ -430,17 +466,14 @@ fun RemoteScreen(
                                     if (result.isSuccess) {
                                         privacyGrab = next
                                     } else {
-                                        android.widget.Toast.makeText(
-                                            context,
-                                            "Privacy: ${result.exceptionOrNull()?.message}",
-                                            android.widget.Toast.LENGTH_SHORT,
-                                        ).show()
+                                        privacyError = result.exceptionOrNull()?.message
                                     }
                                 }
                             }
                         },
                     ) {
-                        val label = if (privacyGrab) "Privacy: on" else "Privacy: off"
+                        val label =
+                            if (privacyGrab) stringResource(R.string.privacy_on) else stringResource(R.string.privacy_off)
                         Text(label, color = if (privacyGrab) Color(0xFF80FFB0) else Color.White)
                     }
                     TextButton(
@@ -450,10 +483,10 @@ fun RemoteScreen(
                             }
                         },
                     ) {
-                        Text("Lock PC", color = Color.White)
+                        Text(stringResource(R.string.lock_pc), color = Color.White)
                     }
                     TextButton(onClick = { blackout = true }) {
-                        Text("Blackout", color = Color.White)
+                        Text(stringResource(R.string.blackout), color = Color.White)
                     }
                     TextButton(
                         onClick = {
@@ -464,7 +497,7 @@ fun RemoteScreen(
                                 )
                         },
                     ) {
-                        Text("PiP", color = Color.White)
+                        Text(stringResource(R.string.pip), color = Color.White)
                     }
                 }
                 ShortcutBar(
@@ -490,7 +523,7 @@ fun RemoteScreen(
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    "Blackout — double-tap to unlock",
+                    stringResource(R.string.blackout_unlock),
                     color = Color.White.copy(alpha = 0.35f),
                     style = MaterialTheme.typography.bodyMedium,
                 )

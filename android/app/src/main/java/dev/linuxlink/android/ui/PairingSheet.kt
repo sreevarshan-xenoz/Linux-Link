@@ -20,12 +20,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.text.KeyboardOptions
 import dev.linuxlink.android.HostStore
+import dev.linuxlink.android.R
 import dev.linuxlink.android.bridge.RustCore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -52,16 +54,26 @@ fun PairingSheet(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val keyboard = LocalSoftwareKeyboardController.current
-    var status by remember { mutableStateOf(message ?: "") }
+    // Status kept as resource + arg (or raw server text) so the visible
+    // string is resolved at render time and follows configuration changes.
+    var statusRes by remember { mutableStateOf<Int?>(null) }
+    var statusArg by remember { mutableStateOf<String?>(null) }
+    var statusText by remember { mutableStateOf(message) }
     var waiting by remember { mutableStateOf(false) }
     var pinEntry by remember { mutableStateOf("") }
+
+    fun setStatus(res: Int, arg: String? = null) {
+        statusRes = res
+        statusArg = arg
+        statusText = null
+    }
 
     LaunchedEffect(waiting) {
         while (waiting) {
             val serverId = withContext(Dispatchers.IO) { RustCore.checkPairResult(PIN_WAIT_SECS) }
             if (serverId != null) {
                 waiting = false
-                status = "Paired ✓"
+                setStatus(R.string.paired)
                 HostStore.savePairedDesktop(context, address, serverId)
                 onPaired(serverId)
                 delay(600)
@@ -78,7 +90,8 @@ fun PairingSheet(
                 .padding(horizontal = 20.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Text("Pair with $address", style = MaterialTheme.typography.titleMedium)
+            Text(stringResource(R.string.pair_title, address), style = MaterialTheme.typography.titleMedium)
+            val status = statusRes?.let { stringResource(it, statusArg.orEmpty()) } ?: statusText.orEmpty()
             if (status.isNotEmpty()) {
                 Text(status, style = MaterialTheme.typography.bodyMedium)
             }
@@ -91,24 +104,25 @@ fun PairingSheet(
                                 RustCore.requestPairPin(address, controlPort)
                             }
                         val error = result.exceptionOrNull()?.message
-                        status = when (result.getOrNull()) {
+                        when (result.getOrNull()) {
                             "pinSent" -> {
                                 waiting = true
-                                "Read the PIN off the desktop screen…"
+                                setStatus(R.string.pair_read_pin)
                             }
                             "pinReady" ->
-                                "A PIN is showing on the desktop (`linux-link pair`) — type it below."
-                            else -> error?.let { "Error: $it" } ?: "Desktop did not confirm a PIN."
+                                setStatus(R.string.pair_pin_ready)
+                            else ->
+                                if (error != null) setStatus(R.string.pair_error, error) else setStatus(R.string.pair_no_pin)
                         }
                     }
                 },
             ) {
-                Text(if (waiting) "Waiting for desktop…" else "Show PIN on desktop")
+                Text(if (waiting) stringResource(R.string.pair_waiting) else stringResource(R.string.pair_show_pin))
             }
             OutlinedTextField(
                 value = pinEntry,
                 onValueChange = { pinEntry = it.filter(Char::isDigit).take(6) },
-                label = { Text("6-digit PIN") },
+                label = { Text(stringResource(R.string.pair_pin_label)) },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
@@ -125,19 +139,19 @@ fun PairingSheet(
                             }
                         val serverId = result.getOrNull()
                         if (serverId != null) {
-                            status = "Paired ✓"
+                            setStatus(R.string.paired)
                             HostStore.savePairedDesktop(context, address, serverId)
                             onPaired(serverId)
                             delay(600)
                             onDismiss()
                         } else {
                             val error = result.exceptionOrNull()?.message
-                            status = error?.let { "Error: $it" } ?: "Wrong or expired PIN."
+                            if (error != null) setStatus(R.string.pair_error, error) else setStatus(R.string.pair_wrong_pin)
                         }
                     }
                 },
             ) {
-                Text("Enter PIN from desktop")
+                Text(stringResource(R.string.pair_enter_pin))
             }
             TextButton(
                 onClick = {
@@ -145,7 +159,7 @@ fun PairingSheet(
                     onDismiss()
                 },
             ) {
-                Text("Cancel")
+                Text(stringResource(R.string.cancel))
             }
         }
     }

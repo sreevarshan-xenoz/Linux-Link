@@ -22,8 +22,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.linuxlink.android.R
 import dev.linuxlink.android.bridge.RustCore
 import dev.linuxlink.android.stream.DesktopMapping
 import kotlinx.coroutines.Dispatchers
@@ -121,6 +123,8 @@ fun WindowPickerSheet(
 ) {
     var listing by remember { mutableStateOf<WindowsListing?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
+    val malformedMsg = stringResource(R.string.malformed_windows)
+    val queryFailMsg = stringResource(R.string.window_query_failed)
 
     LaunchedEffect(address, controlPort) {
         val result =
@@ -131,18 +135,22 @@ fun WindowPickerSheet(
             onSuccess = { json ->
                 runCatching { parseWindowsPayload(json) }
                     .onSuccess { listing = it }
-                    .onFailure { error = "Malformed window list" }
+                    .onFailure { error = malformedMsg }
             },
-            onFailure = { error = it.message ?: "Window query failed" },
+            onFailure = { error = it.message ?: queryFailMsg },
         )
     }
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(modifier = Modifier.padding(horizontal = 16.dp)) {
-            Text("Stream a window", style = MaterialTheme.typography.titleMedium)
+            Text(stringResource(R.string.stream_window), style = MaterialTheme.typography.titleMedium)
             TextButton(onClick = onFullDesktop) {
                 Text(
-                    if (selected == null) "Whole desktop (current)" else "Whole desktop",
+                    if (selected == null) {
+                        stringResource(R.string.whole_desktop_current)
+                    } else {
+                        stringResource(R.string.whole_desktop)
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                 )
             }
@@ -183,13 +191,14 @@ fun WindowPickerSheet(
                             )
                             Text(
                                 buildString {
+                                    val focusedTag = stringResource(R.string.window_focused)
                                     append(w.app.ifBlank { "?" })
                                     if (w.workspaceName.isNotBlank()) {
                                         append("  ·  ws ")
                                         append(w.workspaceName)
                                     }
                                     append("  ·  ${w.size[0]}x${w.size[1]}")
-                                    if (w.active) append("  ·  focused")
+                                    if (w.active) append("  ·  $focusedTag")
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,

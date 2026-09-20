@@ -21,8 +21,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.linuxlink.android.R
 
 /** Phone-side clipboard history, persisted across sessions (Tier 1 #4). */
 object ClipHistory {
@@ -92,7 +94,7 @@ fun ClipboardHistorySheet(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
             ) {
                 Text(
-                    "Clipboard history",
+                    stringResource(R.string.clipboard_history),
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.weight(1f),
                 )
@@ -102,7 +104,7 @@ fun ClipboardHistorySheet(
                         entries.value = emptyList()
                     },
                 ) {
-                    Text("Clear", color = MaterialTheme.colorScheme.error)
+                    Text(stringResource(R.string.clear), color = MaterialTheme.colorScheme.error)
                 }
             }
             HorizontalDivider()
@@ -110,7 +112,7 @@ fun ClipboardHistorySheet(
                 if (entries.value.isEmpty()) {
                     item {
                         Text(
-                            "Nothing captured yet - copy something or turn on clipboard sync.",
+                            stringResource(R.string.clipboard_empty),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(16.dp),

@@ -26,8 +26,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.linuxlink.android.R
 import dev.linuxlink.android.bridge.RustCore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -75,9 +77,17 @@ fun AudioControlSheet(
     onDismiss: () -> Unit,
 ) {
     var snapshot by remember { mutableStateOf<AudioSnapshot?>(null) }
-    var error by remember { mutableStateOf<String?>(null) }
+    // Errors split in two: server-supplied text (not localizable) vs a local
+    // fallback resource, resolved at render time so it follows configuration.
+    var errorText by remember { mutableStateOf<String?>(null) }
+    var errorRes by remember { mutableStateOf<Int?>(null) }
     var slider by remember { mutableFloatStateOf(0f) }
     val scope = rememberCoroutineScope()
+
+    fun clearError() {
+        errorText = null
+        errorRes = null
+    }
 
     suspend fun call(body: JSONObject): JSONObject? {
         val result =
@@ -90,12 +100,16 @@ fun AudioControlSheet(
                 if (obj.optBoolean("ok", true)) {
                     obj
                 } else {
-                    error = obj.optString("error", "Desktop rejected the request")
+                    val srv = obj.optString("error", "")
+                    errorText = srv.ifBlank { null }
+                    errorRes = if (srv.isBlank()) R.string.audio_rejected else null
                     null
                 }
             },
-            onFailure = {
-                error = it.message ?: "Audio control failed"
+            onFailure = { e ->
+                val msg = e.message
+                errorText = msg?.ifBlank { null }
+                errorRes = if (msg.isNullOrBlank()) R.string.audio_failed else null
                 null
             },
         )
@@ -112,14 +126,15 @@ fun AudioControlSheet(
     }
 
     LaunchedEffect(address, controlPort) {
-        error = null
+        clearError()
         refreshAll()
     }
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(modifier = Modifier.padding(horizontal = 16.dp)) {
-            Text("Desktop audio", style = MaterialTheme.typography.titleMedium)
+            Text(stringResource(R.string.desktop_audio), style = MaterialTheme.typography.titleMedium)
             val s = snapshot
+            val error = errorText ?: errorRes?.let { stringResource(it) }
             when {
                 s == null && error == null ->
                     Row(
@@ -134,7 +149,7 @@ fun AudioControlSheet(
                 else -> {
                     if (error != null) {
                         Text(
-                            error!!,
+                            error,
                             color = MaterialTheme.colorScheme.error,
                             style = MaterialTheme.typography.bodyMedium,
                             modifier = Modifier.padding(vertical = 8.dp),
@@ -142,8 +157,8 @@ fun AudioControlSheet(
                     }
                     if (s != null) {
                         Text(
-                            "Volume · ${slider.toInt()}%" +
-                                if (s.muted) "  (muted)" else "",
+                            stringResource(R.string.audio_volume, slider.toInt()) +
+                                if (s.muted) "  ${stringResource(R.string.audio_muted)}" else "",
                             style = MaterialTheme.typography.bodyMedium,
                             modifier = Modifier.padding(top = 8.dp),
                         )
@@ -153,7 +168,7 @@ fun AudioControlSheet(
                             valueRange = 0f..100f,
                             onValueChangeFinished = {
                                 val v = slider.toInt()
-                                error = null
+                                clearError()
                                 scope.launch {
                                     if (
                                         call(
@@ -171,11 +186,11 @@ fun AudioControlSheet(
                             modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text("Mute", style = MaterialTheme.typography.bodyMedium)
+                            Text(stringResource(R.string.mute), style = MaterialTheme.typography.bodyMedium)
                             Switch(
                                 checked = s.muted,
                                 onCheckedChange = { m ->
-                                    error = null
+                                    clearError()
                                     scope.launch {
                                         if (
                                             call(
@@ -192,7 +207,7 @@ fun AudioControlSheet(
                         }
                         HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
                         Text(
-                            "Output device",
+                            stringResource(R.string.output_device),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -202,7 +217,7 @@ fun AudioControlSheet(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .clickable {
-                                            error = null
+                                            clearError()
                                             scope.launch {
                                                 if (
                                                     call(
@@ -224,7 +239,7 @@ fun AudioControlSheet(
                                         overflow = TextOverflow.Ellipsis,
                                     )
                                     Text(
-                                        sink.name + if (sink.isDefault) "  ·  default" else "",
+                                        sink.name + if (sink.isDefault) "  ·  ${stringResource(R.string.sink_default)}" else "",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         maxLines = 1,
