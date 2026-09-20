@@ -169,6 +169,7 @@ pub async fn spawn_wan_endpoint(
                 let mut streaming_server =
                     StreamingServer::new(config, StreamTransportConfig::default(), cert_manager);
                 streaming_server.set_input_channel(input_tx);
+                streaming_server.set_session_telemetry(true);
                 if pairing_required {
                     streaming_server.set_pairing_gate(|device_id| {
                         device_id

@@ -19,6 +19,12 @@ pub enum Commands {
     Stop,
     /// Print local tailscale status
     Status,
+    /// Show recorded streaming-session outcomes (R4 A2 telemetry log)
+    Sessions {
+        /// Number of recent sessions to list
+        #[arg(short, long, default_value_t = 10)]
+        count: usize,
+    },
     /// List peers currently visible on the tailnet
     List,
     /// Continuously watch peer discovery events

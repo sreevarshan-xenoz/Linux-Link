@@ -69,6 +69,17 @@ pub trait InStream: Send {
     async fn read_to_end(&mut self, limit: usize) -> Result<Vec<u8>, ConnectionError>;
 }
 
+/// Which transport stack a connection rides. The pipeline is deliberately
+/// transport-agnostic, but *telemetry* must classify sessions by it: quinn
+/// connections are point-to-point by construction (LAN/Tailscale — no relay
+/// concept), while iroh connections may ride a relay until hole punching
+/// opens a direct path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportFamily {
+    Quinn,
+    Iroh,
+}
+
 /// A live remote connection usable by the streaming pipeline.
 #[async_trait]
 pub trait Connection: Send + Sync {
@@ -76,6 +87,7 @@ pub trait Connection: Send + Sync {
     async fn accept_uni(&self) -> Result<Box<dyn InStream>, ConnectionError>;
     fn remote_address(&self) -> SocketAddr;
     fn stats(&self) -> ConnectionStats;
+    fn transport_family(&self) -> TransportFamily;
     /// Immediately tear down the connection with an application error code
     /// and reason (e.g. rejecting an unpaired session), instead of letting
     /// the peer sit on a live-but-dead connection until the idle timeout.
@@ -160,6 +172,10 @@ impl Connection for QuinnConnection {
             lost_packets: s.path.lost_packets,
             relayed: false,
         }
+    }
+
+    fn transport_family(&self) -> TransportFamily {
+        TransportFamily::Quinn
     }
 
     fn close(&self, error_code: u32, reason: &[u8]) {

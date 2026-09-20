@@ -27,6 +27,7 @@ use iroh::{Endpoint, EndpointAddr, RelayMode};
 
 use super::connection::{
     Connection, ConnectionError, ConnectionStats, InStream, OutStream, SharedConnection,
+    TransportFamily,
 };
 use super::transport::StreamTransportConfig;
 
@@ -127,6 +128,10 @@ impl Connection for IrohConnection {
             lost_packets: self.inner.stats().lost_packets,
             relayed,
         }
+    }
+
+    fn transport_family(&self) -> TransportFamily {
+        TransportFamily::Iroh
     }
 
     fn close(&self, error_code: u32, reason: &[u8]) {

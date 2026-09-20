@@ -28,9 +28,15 @@ async fn main() -> Result<()> {
     tracing::info!("Linux Link Server starting");
 
     match cli.command.unwrap_or(cli::Commands::Start) {
-        cli::Commands::Start => service::run(config).await,
+        cli::Commands::Start => {
+            // R4 A2: register the session-outcome telemetry sink before any
+            // streaming pipeline can run.
+            session_telemetry::init();
+            service::run(config).await
+        }
         cli::Commands::Stop => service::stop().await,
         cli::Commands::Status => service::print_status().await,
+        cli::Commands::Sessions { count } => session_telemetry::print_sessions(count),
         cli::Commands::List => service::list_peers().await,
         cli::Commands::Watch { interval } => service::watch_peers(interval).await,
         cli::Commands::Capabilities => service::print_capabilities().await,

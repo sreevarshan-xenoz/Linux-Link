@@ -13,6 +13,7 @@ pub mod input_packet;
 #[cfg(feature = "wan")]
 pub mod iroh_connection;
 pub mod session;
+pub mod session_telemetry;
 pub mod transport;
 
 // Server-only modules — these require Linux-specific dependencies
@@ -41,13 +42,16 @@ pub use client::DEFAULT_STREAMING_PORT;
 pub use client::StreamingClient;
 pub use connection::{
     Connection, ConnectionError, ConnectionStats, InStream, OutStream, QuinnConnection,
-    SharedConnection,
+    SharedConnection, TransportFamily,
 };
 pub use encoder_detect::{AvailableEncoders, HardwareEncoder, probe_encoders, resolve_encoder};
 pub use input_packet::InputPacket;
 #[cfg(feature = "wan")]
 pub use iroh_connection::{IrohConnection, IrohDial};
 pub use session::{SessionType, detect_session_type};
+pub use session_telemetry::{
+    SessionGuard, SessionOutcome, SessionRecorder, SessionReport, set_session_telemetry_callback,
+};
 #[cfg(feature = "server")]
 pub use streamer::StreamingServer;
 

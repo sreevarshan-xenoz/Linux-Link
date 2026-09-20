@@ -377,6 +377,7 @@ pub async fn run(config: Config) -> Result<()> {
                                     cert_manager_clone
                                 );
                                 streaming_server.set_input_channel(input_tx);
+                                streaming_server.set_session_telemetry(true);
                                 if pairing_required {
                                     // The stream transport's TLS is anonymous — the
                                     // gate judges the deviceId the client announces

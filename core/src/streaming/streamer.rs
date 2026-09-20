@@ -3,6 +3,7 @@
 //! Wires together capture → encoder → QUIC send into a single coordinated pipeline.
 //! Manages lifecycle, error handling, and graceful shutdown.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -19,6 +20,7 @@ use super::capture;
 use super::connection::{Connection, QuinnConnection, SharedConnection};
 use super::encoder::VideoEncoder;
 use super::input_packet::InputPacket;
+use super::session_telemetry::{SessionOutcome, SessionRecorder};
 use super::transport::{self, CertManager, StreamServer, StreamTransportConfig};
 use super::{EncodedPacket, StreamingConfig, VideoFrame};
 
@@ -40,6 +42,9 @@ pub struct StreamingServer {
     /// announced in-band (None if it sent none); returning false rejects the
     /// session before capture starts. See `set_pairing_gate`.
     pairing_gate: Option<std::sync::Arc<dyn Fn(Option<String>) -> bool + Send + Sync + 'static>>,
+    /// Record per-session outcome telemetry (R4 A2) through the sink
+    /// registered in `session_telemetry`. Off by default.
+    telemetry: bool,
 }
 
 impl StreamingServer {
@@ -60,7 +65,15 @@ impl StreamingServer {
             adaptive_bitrate: None,
             input_tx: None,
             pairing_gate: None,
+            telemetry: false,
         }
+    }
+
+    /// Enable per-session outcome telemetry (R4 A2). Reports are emitted
+    /// through the sink registered via
+    /// `session_telemetry::set_session_telemetry_callback`.
+    pub fn set_session_telemetry(&mut self, enabled: bool) {
+        self.telemetry = enabled;
     }
 
     /// Enable adaptive bitrate control with the given controller
@@ -195,6 +208,21 @@ impl StreamingServer {
         // Read optional client config streams before starting the pipeline.
         let device_id = read_client_config(&connection, &mut self.config).await;
 
+        // R4 A2 session telemetry: a shared recorder observes the connection
+        // on a slow poll and an RAII guard emits the outcome report when the
+        // pipeline function exits — including via `?`, which is why the
+        // guard is armed before the first fallible statement below.
+        let telemetry = self.telemetry.then(|| {
+            (
+                std::sync::Arc::new(SessionRecorder::new(
+                    connection.transport_family(),
+                    device_id.clone(),
+                )),
+                std::sync::Arc::new(AtomicU64::new(0)),
+            )
+        });
+        let _telemetry_guard = telemetry.as_ref().map(|(r, b)| r.guard(b.clone()));
+
         if let Some(gate) = &self.pairing_gate
             && !gate(device_id.clone())
         {
@@ -202,6 +230,9 @@ impl StreamingServer {
                 device_id = device_id.as_deref().unwrap_or("<none announced>"),
                 "Streaming session rejected: device not paired"
             );
+            if let Some(guard) = &_telemetry_guard {
+                guard.record(SessionOutcome::Rejected);
+            }
             connection.close(0u32, b"pairing required");
             return Err(anyhow::anyhow!(
                 "pairing required: this device must pair over the control channel first"
@@ -393,6 +424,7 @@ impl StreamingServer {
         }.instrument(encode_span));
 
         // Task 3: Packet transport — sends packets over QUIC (newest-only)
+        let telemetry_bytes_tx = telemetry.as_ref().map(|t| t.1.clone());
         let transport_cancel = cancel.clone();
         let transport_span = tracing::info_span!("video_transport");
         tasks.spawn(async move {
@@ -487,6 +519,9 @@ impl StreamingServer {
 
                                     packets_sent += 1;
                                     bytes_sent += data_len as u64;
+                                    if let Some(counter) = &telemetry_bytes_tx {
+                                        counter.fetch_add(data_len as u64, Ordering::Relaxed);
+                                    }
 
                                     if packets_sent % 60 == 0 {
                                         debug!(
@@ -636,8 +671,29 @@ impl StreamingServer {
             .instrument(tracing::info_span!("audio_pipeline")),
         );
 
+        // Task 7: session telemetry poll (R4 A2) — samples path + RTT every
+        // 5 s so the end-of-session report reflects what the link actually
+        // did (punching can complete mid-session), not how it started.
+        if let Some(shared) = telemetry.as_ref() {
+            let recorder = shared.0.clone();
+            let poll_cancel = cancel.clone();
+            let poll_conn = connection.clone();
+            tasks.spawn(async move {
+                loop {
+                    tokio::select! {
+                        _ = poll_cancel.cancelled() => break,
+                        _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+                    }
+                    recorder.sample(&poll_conn);
+                }
+            });
+        }
+
         // Wait for all tasks to complete or connection to close
         let result = tasks.join_next().await;
+        if let Some(guard) = &_telemetry_guard {
+            guard.mark_completed();
+        }
 
         // 4. Shutdown & Cleanup (Mandate 7.1)
         info!("Initiating pipeline shutdown...");

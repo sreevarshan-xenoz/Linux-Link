@@ -108,6 +108,7 @@ place.
 - [ ] Phone on LTE (Wi-Fi off): dial from cached identity succeeds → badge shows "WAN · punching…" then settles to "WAN · direct" or "WAN · relayed — trying direct…", video + input + keyframe-on-gap all work through relays (R4 A1).
 - [ ] Desktop reconnects (restart server) → identity re-announced within 30 s, phone re-dials.
 - [ ] Hole punching through a real NAT (relay-free if possible): check `directAddrs` paths get used.
+- [ ] After both a LAN and a WAN session: `linux-link sessions` shows one line per session with distinct `outcome=` (`lan_direct` vs `wan_punched`/`wan_relayed`), plausible `rtt_ms`/`kbps`, and `dev=` = the paired deviceId.
 - [ ] Relayed → direct upgrade while streaming: badge flips to "WAN · direct" on its own (iroh keeps punching) and the bridge logs "upgraded from relay to direct path" (logcat). Relayed session must stay usable the whole time, not stall on the transition.
 
 ## 12. Roaming (Tier-3 #13 remainder)

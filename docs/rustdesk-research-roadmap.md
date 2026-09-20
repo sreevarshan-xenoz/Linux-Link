@@ -110,15 +110,23 @@ From **scrcpy** (code-level OK, Apache-2.0):
   the `RemoteScreen` WAN badge now reads "WAN · direct" / "WAN · relayed —
   trying direct…" (es/ta strings included); relay↔direct transitions are
   logged once client-side. No new JNI exports.
-  path vs relayed per peer; iroh exposes path selection) into a new
-  `kdeconnect.linuxlink.linkstate` push + a `RemoteScreen` chip upgrade:
-  "LAN" / "WAN direct" / "WAN relayed — trying direct…". Accept: chip shows
-  the truth against `iroh`'s own path info; auto-upgrade attempts visible.
-- **A2 · Session telemetry log.** Per-attempt outcome (punched-direct vs
-  relayed vs failed), latency sample, and negotiated bitrate, appended to a
-  rotating log + exposed via `linux-link status`. Accept: after mixed use,
-  log lines distinguish the three outcomes. (Sizes our expectations against
-  the §3 ~50/70% reality; honest instrumented numbers instead of folklore.)
+- **A2 · Session telemetry log.** ✅ **Landed 2026-09-20** (log format
+  verified by unit tests; field population pending real sessions):
+  `core/src/streaming/session_telemetry.rs` — every `run_pipeline` execution
+  is observed by a `SessionRecorder` (transport family + pairing-gate
+  deviceId, relay flag sampled every 5 s from `Connection::stats()`, wire
+  goodput counted at the transport task, mean RTT) and emits one tab-
+  separated `k=v` line through a process-wide sink via an RAII
+  `SessionGuard` (Drop-based, so `?`-early-exits are logged too). Outcomes:
+  `lan_direct` / `wan_punched` / `wan_relayed` (plus `ever_relayed=true` for
+  mid-session punch-through) / `rejected` / `failed`. The server registers a
+  sink appending to `$XDG_STATE_HOME/linux-link/streaming_sessions.log`
+  (1 MB rotation keeping the newest half) and `linux-link sessions
+  [--count N]` prints the outcome tally, the relayed share and the tail.
+  Clients (Android bridge) never register a sink → zero cost there; no new
+  JNI exports. Accept: after mixed use, log lines distinguish the three
+  outcomes. (Sizes our expectations against the §3 ~50/70% reality; honest
+  instrumented numbers instead of folklore.)
 - **A3 · Relay-quality floor.** When relayed, auto-drop to a conservative
   bitrate/fps preset (relay bandwidth is not ours) and surface a one-tap
   "quality mode" hint. Accept: relayed session starts at preset, user can

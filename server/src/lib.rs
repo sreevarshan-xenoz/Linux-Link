@@ -14,5 +14,6 @@ pub mod notification_monitor;
 pub mod plugins;
 pub mod privacy;
 pub mod service;
+pub mod session_telemetry;
 pub mod state;
 pub mod v2_multiplexer;
