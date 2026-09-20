@@ -1,0 +1,16 @@
+[package]
+name = "iroh-spike"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+iroh = "1.2"
+bytes = "1"
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+# Only used by the compile-time proof that iroh's connection type is not
+# quinn's; see tests/loopback.rs.
+quinn = { workspace = true }

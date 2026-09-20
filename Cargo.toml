@@ -4,6 +4,7 @@ members = [
     "core",
     "server",
     "android/bridge",
+    "spike/iroh",
 ]
 
 [workspace.package]

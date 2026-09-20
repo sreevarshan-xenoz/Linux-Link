@@ -1853,9 +1853,11 @@ Candidate pool for Phase 7+, ranked by impact-per-effort. These are proposals fr
 
 Today the server requires Tailscale and connects via its IPs. Research conclusion: adopt **iroh 1.x** (1.0 stable June 2026, v1.2.x current) as the default WAN transport.
 
+**Spike done 2026-09-20 (`spike/iroh`, run with `cargo test -p iroh-spike`):** loopback connectivity confirmed on iroh 1.2 — bidi + uni stream and app-datagram echo with relays/DNS disabled (`Minimal` preset, direct `EndpointAddr` dial; `addr()` even exposed the machine's routable IPv6 for free). Key finding: **iroh 1.x no longer uses the quinn fork — it runs on `noq`**, so `iroh::endpoint::Connection`/streams are type-incompatible with core's quinn 0.11 transport code. The crates coexist in one binary, so integration needs a connection-abstraction trait over `core/src/streaming` (quinn impl for LAN, iroh impl for WAN) rather than a drop-in swap — see `spike/iroh/README.md` for the API gotchas (datagram buffer opt-in, `bind_addr` returns `Result`, mandatory `Endpoint::close`, heartbeat/MTU-discovery/multipath on by default).
+
 | Change | Effort | Rationale |
 |--------|--------|-----------|
-| Replace raw quinn WAN path with an iroh endpoint (QUIC end-to-end, built-in hole punching via their quinn fork) | Medium | Bidirectional dial/punch that plain quinn lacks; works on Android through the JNI bridge |
+| | | Replace raw quinn WAN path with an iroh endpoint (QUIC end-to-end, built-in hole punching via their `noq` QUIC stack) | Med-Large (spike: needs the connection abstraction, not a swap) | Bidirectional dial/punch that plain quinn lacks; works on Android through the JNI bridge |
 | Demote Tailscale to an optional *candidate address*, keep mDNS for LAN | Low | Removes the install prerequisite without losing the mesh users |
 | Self-host one `iroh-relay` for symmetric-CGNAT/corporate fallback | Low ops / Med | Punching succeeds on ~80-85% of home-NAT pairs; relay must exist in the design for the rest (RustDesk's hbbs/hbbr model proves this) |
 | PIN/QR pairing: iroh node-id (32-byte key) doubles as identity + address, bound to the existing TOFU cert | Medium | Moonlight has zero remote-access story (manual port forwarding); this beats both Moonlight and plain RustDesk UX |
