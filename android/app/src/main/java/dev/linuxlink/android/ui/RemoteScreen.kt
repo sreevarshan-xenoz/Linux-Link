@@ -4,6 +4,11 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
@@ -19,6 +24,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -175,6 +181,47 @@ fun RemoteScreen(
         scope.launch {
             withContext(Dispatchers.IO) { RustCore.stopStreaming() }
             showStream = true
+        }
+    }
+
+    // Tier-3 #13 remainder: Wi-Fi↔LTE roaming. quinn's QUIC migration is
+    // ready (server accepts a changing source address), but Android pins
+    // the endpoint's UDP socket to the network that was default when it
+    // was created, so a migrated path can't actually leave the old radio.
+    // The reachable fix is a reconnect on the new default network — cheap
+    // for us: fresh QUIC handshake + gap-driven keyframe request. Baseline
+    // semantics: registerDefaultNetworkCallback fires onAvailable for the
+    // *current* network immediately — that one is swallowed; only a
+    // *different* later network triggers a rebind. The cooldown keeps a
+    // flapping radio from tearing down a healthy stream.
+    var lastNetwork by remember { mutableStateOf<Network?>(null) }
+    var lastRebindMs by remember { mutableLongStateOf(0L) }
+    DisposableEffect(address) {
+        val handler = Handler(Looper.getMainLooper())
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                handler.post {
+                    val previous = lastNetwork
+                    lastNetwork = network
+                    if (previous != null && previous != network &&
+                        !inPictureInPicture &&
+                        SystemClock.elapsedRealtime() - lastRebindMs > 3_000
+                    ) {
+                        lastRebindMs = SystemClock.elapsedRealtime()
+                        android.util.Log.i(
+                            "RemoteScreen",
+                            "default network changed — rebinding stream",
+                        )
+                        retryStream()
+                    }
+                }
+            }
+        }
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        runCatching { cm.registerDefaultNetworkCallback(callback) }
+        onDispose {
+            handler.removeCallbacksAndMessages(null)
+            runCatching { cm.unregisterNetworkCallback(callback) }
         }
     }
 
