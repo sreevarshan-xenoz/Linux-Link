@@ -543,6 +543,12 @@ async fn start_x11_capture(
 }
 
 /// Run the X11 capture loop, sending frames through the channel.
+///
+/// Frame pacing is variable-rate: an unchanged grab is not forwarded to the
+/// encoder at all, and once the screen goes static the loop backs its polling
+/// off to `IDLE_FPS` so a still desktop costs ~10 GetImage round-trips per
+/// second instead of 60 encodes. The Wayland/PipeWire path is already
+/// damage-driven; this mirrors that behaviour for X11.
 fn run_x11_capture_loop(
     conn: x11rb::rust_connection::RustConnection,
     root: u32,
@@ -554,8 +560,14 @@ fn run_x11_capture_loop(
 ) -> Result<()> {
     use x11rb::protocol::xproto::{ConnectionExt as _, ImageFormat};
 
+    /// Poll rate for a static screen — matches the "5–15 fps when idle" target.
+    const IDLE_FPS: u64 = 10;
+
     let frame_interval = Duration::from_micros(1_000_000 / fps as u64);
+    let idle_interval = Duration::from_micros(1_000_000 / IDLE_FPS.min(fps as u64));
     let mut frame_count = 0u64;
+    let mut idle = false;
+    let mut prev_frame: Option<Vec<u8>> = None;
 
     loop {
         if cancel.is_cancelled() {
@@ -582,34 +594,49 @@ fn run_x11_capture_loop(
                     let frame_data = reply.data.to_vec();
                     let stride = width * 4;
 
-                    frame_count += 1;
-                    if frame_count.is_multiple_of(30) {
-                        debug!("X11 capture: frame #{}, {}x{}", frame_count, width, height);
+                    // Change detection: only forward (and stay at full fps) when
+                    // pixels actually moved. A cheap byte compare vs. encoding a
+                    // whole frame.
+                    if prev_frame.as_ref() != Some(&frame_data) {
+                        if idle {
+                            debug!("X11 capture: screen active, resuming {fps} fps pacing");
+                            idle = false;
+                        }
+                        frame_count += 1;
+                        if frame_count.is_multiple_of(30) {
+                            debug!("X11 capture: frame #{}, {}x{}", frame_count, width, height);
+                        }
+
+                        let frame = VideoFrame {
+                            data: frame_data.clone(),
+                            width,
+                            height,
+                            stride,
+                            timestamp: Instant::now(),
+                        };
+                        // Send frame to pipeline. prev_frame only advances when
+                        // the frame actually reached the pipeline — if the
+                        // encoder backlog forced a drop, the next poll must
+                        // still see it as a change and retry.
+                        match frame_tx.try_send(frame) {
+                            Ok(_) => prev_frame = Some(frame_data),
+                            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {}
+                            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                                debug!("Frame channel closed, stopping capture");
+                                break;
+                            }
+                        }
+                    } else if !idle {
+                        info!("X11 capture: screen static, dropping to {IDLE_FPS} fps idle pacing");
+                        idle = true;
                     }
 
-                    let frame = VideoFrame {
-                        data: frame_data,
-                        width,
-                        height,
-                        stride,
-                        timestamp: Instant::now(),
-                    };
-// Send frame to pipeline
-match frame_tx.try_send(frame) {
-    Ok(_) => {}
-    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-        // Ignore Full error
-    }
-    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-        debug!("Frame channel closed, stopping capture");
-        break;
-    }
-}
-
-                    // Maintain target framerate
+                    // Pace: full rate while frames are being forwarded, idle
+                    // rate once the screen is static.
+                    let target = if idle { idle_interval } else { frame_interval };
                     let elapsed = frame_start.elapsed();
-                    if elapsed < frame_interval {
-                        std::thread::sleep(frame_interval - elapsed);
+                    if elapsed < target {
+                        std::thread::sleep(target - elapsed);
                     }
                 }
                 Err(e) => {
