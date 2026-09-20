@@ -86,6 +86,12 @@ object RustCore {
     private external fun nativeCheckPairResult(waitSecs: Long): String
     private external fun nativePairedServers(): String
     private external fun nativeTakePendingNotifications(): String
+    private external fun nativeDesktopPrivacy(
+        address: String,
+        port: Int,
+        action: String,
+        lock: Boolean,
+    ): String
     private external fun nativeSendNotificationReply(
         address: String,
         port: Int,
@@ -364,6 +370,19 @@ object RustCore {
 
     fun getMonitorCount(address: String, port: Int): Result<String> =
         envelope(nativeGetMonitorCount(address, port))
+
+    /**
+     * Desktop privacy mode (Tier-3 #15). [action]: "grab" blocks the desktop's
+     * physical keyboard+mouse (and re-arms the auto-release TTL), "release"
+     * gives them back, "status" queries. [lock] additionally engages the
+     * desktop screen locker. Returns the plugin reply JSON.
+     */
+    fun desktopPrivacy(
+        address: String,
+        port: Int,
+        action: String,
+        lock: Boolean = false,
+    ): Result<String> = envelope(nativeDesktopPrivacy(address, port, action, lock))
 
     /**
      * Consume the find-my-device siren latch (Tier-2 #11). Returns true once

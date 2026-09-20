@@ -1547,6 +1547,54 @@ pub async fn get_battery(address: String, port: u16) -> Result<serde_json::Value
     }
 }
 
+/// Desktop privacy mode (Tier-3 #15): ask the server to grab/release the
+/// physical keyboard+mouse and/or lock its screen, then wait for the
+/// plugin's reply body (`{ok, grabbed?, locked?, error?}`). Other pushes
+/// may arrive first on the control socket, so lines are matched by packet
+/// type within the timeout.
+pub async fn desktop_privacy(
+    address: String,
+    port: u16,
+    action: String,
+    lock: bool,
+) -> Result<serde_json::Value, String> {
+    let conn_mgr = ConnectionManager::new(Duration::from_secs(5));
+    let identity = client_identity();
+    let stream = conn_mgr
+        .connect(&address, port, &identity)
+        .await
+        .map_err(|e| format!("Connection failed: {e}"))?;
+    let (reader, writer) = tokio::io::split(stream);
+    let sender = TcpDeviceSender::new(writer, address);
+    let request = NetworkPacket::new("kdeconnect.linuxlink.privacy")
+        .with_body(serde_json::json!({ "action": action, "lock": lock }));
+    sender
+        .send_packet(&request)
+        .await
+        .map_err(|e| format!("Failed to send privacy request: {e}"))?;
+
+    let mut lines = tokio::io::BufReader::new(reader).lines();
+    let deadline = tokio::time::sleep(Duration::from_secs(5));
+    tokio::pin!(deadline);
+    loop {
+        let line = tokio::select! {
+            _ = &mut deadline => return Err("Timeout waiting for privacy response".to_string()),
+            l = lines.next_line() => l,
+        };
+        match line {
+            Ok(Some(line)) => {
+                if let Ok(packet) = NetworkPacket::from_wire(&line)
+                    && packet.packet_type == "kdeconnect.linuxlink.privacy"
+                {
+                    return Ok(packet.body);
+                }
+            }
+            Ok(None) => return Err("Connection closed by peer".to_string()),
+            Err(e) => return Err(format!("Read error: {e}")),
+        }
+    }
+}
+
 /// A desktop window reported by the server's Hyprland windows plugin
 /// (R3#7 picker). `at`/`size` are global desktop coordinates; `local_at` is
 /// the window origin within its monitor — the space `InputPacket::WindowCrop`

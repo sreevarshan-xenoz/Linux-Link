@@ -85,6 +85,34 @@ fun RemoteScreen(
     var pairingMessage by remember { mutableStateOf<String?>(null) }
     // Tier-3 #14: decoded video frame size, used to pick the PiP aspect ratio.
     var videoSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
+    // Tier-3 #15: desktop privacy mode. The server's input grab carries a
+    // 10-minute TTL, so an enabled session must keep refreshing it and must
+    // release it on exit; a refresh failure means the server auto-released.
+    var privacyGrab by remember { mutableStateOf(false) }
+
+    LaunchedEffect(privacyGrab, address) {
+        if (!privacyGrab) return@LaunchedEffect
+        while (isActive) {
+            val ok = withContext(Dispatchers.IO) {
+                RustCore.desktopPrivacy(address, controlPort, "grab").isSuccess
+            }
+            if (!ok) {
+                privacyGrab = false
+                break
+            }
+            delay(4 * 60 * 1000)
+        }
+    }
+
+    DisposableEffect(privacyGrab) {
+        onDispose {
+            if (privacyGrab) {
+                Thread {
+                    runCatching { RustCore.desktopPrivacy(address, controlPort, "release") }
+                }.start()
+            }
+        }
+    }
 
     LaunchedEffect(address) {
         val serverId = withContext(Dispatchers.IO) { RustCore.checkPairResult(1L) }
@@ -289,6 +317,38 @@ fun RemoteScreen(
                     TextButton(onClick = { pairingMessage = null; showPairing = true }) {
                         val label = if (pairedServerId == null) "Pair…" else "Paired ✓"
                         Text(label, color = Color.White)
+                    }
+                    TextButton(
+                        onClick = {
+                            scope.launch(Dispatchers.IO) {
+                                val next = !privacyGrab
+                                val result =
+                                    RustCore.desktopPrivacy(address, controlPort, if (next) "grab" else "release")
+                                withContext(Dispatchers.Main) {
+                                    if (result.isSuccess) {
+                                        privacyGrab = next
+                                    } else {
+                                        android.widget.Toast.makeText(
+                                            context,
+                                            "Privacy: ${result.exceptionOrNull()?.message}",
+                                            android.widget.Toast.LENGTH_SHORT,
+                                        ).show()
+                                    }
+                                }
+                            }
+                        },
+                    ) {
+                        val label = if (privacyGrab) "Privacy: on" else "Privacy: off"
+                        Text(label, color = if (privacyGrab) Color(0xFF80FFB0) else Color.White)
+                    }
+                    TextButton(
+                        onClick = {
+                            scope.launch(Dispatchers.IO) {
+                                RustCore.desktopPrivacy(address, controlPort, "status", lock = true)
+                            }
+                        },
+                    ) {
+                        Text("Lock PC", color = Color.White)
                     }
                     TextButton(
                         onClick = {

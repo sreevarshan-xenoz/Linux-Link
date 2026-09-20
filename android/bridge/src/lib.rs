@@ -593,6 +593,29 @@ pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeGetBatte
     to_jstring(&mut env, json)
 }
 
+/// Desktop privacy mode (Tier-3 #15): `action` is "grab" | "release" |
+/// "status"; `lock` additionally engages the desktop screen locker.
+/// Returns the plugin reply as `{"ok": {json}}`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeDesktopPrivacy(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    address: JString<'_>,
+    port: jint,
+    action: JString<'_>,
+    lock: jboolean,
+) -> jstring {
+    let address = jstring_to_string(&mut env, &address);
+    let action = jstring_to_string(&mut env, &action);
+    let json = envelope(RUNTIME.block_on(api::desktop_privacy(
+        address,
+        port as u16,
+        action,
+        lock != 0,
+    )));
+    to_jstring(&mut env, json)
+}
+
 /// Consume the find-my-device siren latch — `{"ok":true}` once per desktop
 /// `kdeconnect.findmydevice` push (R3 Tier-2 #11).
 #[unsafe(no_mangle)]

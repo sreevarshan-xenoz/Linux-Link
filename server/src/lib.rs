@@ -11,6 +11,7 @@ pub mod iroh_endpoint;
 pub mod kde;
 pub mod notification_monitor;
 pub mod plugins;
+pub mod privacy;
 pub mod service;
 pub mod state;
 pub mod v2_multiplexer;
