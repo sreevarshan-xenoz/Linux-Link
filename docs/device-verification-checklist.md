@@ -105,9 +105,10 @@ place.
 ## 11. WAN over iroh (R1)
 
 - [ ] On same LAN: identity cached (logcat), status shows LAN.
-- [ ] Phone on LTE (Wi-Fi off): dial from cached identity succeeds → "WAN link (iroh)" badge, video + input + keyframe-on-gap all work through relays.
+- [ ] Phone on LTE (Wi-Fi off): dial from cached identity succeeds → badge shows "WAN · punching…" then settles to "WAN · direct" or "WAN · relayed — trying direct…", video + input + keyframe-on-gap all work through relays (R4 A1).
 - [ ] Desktop reconnects (restart server) → identity re-announced within 30 s, phone re-dials.
 - [ ] Hole punching through a real NAT (relay-free if possible): check `directAddrs` paths get used.
+- [ ] Relayed → direct upgrade while streaming: badge flips to "WAN · direct" on its own (iroh keeps punching) and the bridge logs "upgraded from relay to direct path" (logcat). Relayed session must stay usable the whole time, not stall on the transition.
 
 ## 12. Roaming (Tier-3 #13 remainder)
 

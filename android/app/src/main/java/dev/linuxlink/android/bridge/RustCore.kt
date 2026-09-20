@@ -187,6 +187,7 @@ object RustCore {
             bitrateKbps = obj.optLong("bitrate_kbps", 0L),
             e2eLatencyMs = obj.optLong("e2e_latency_ms", 0L),
             frameDrops = obj.optLong("frame_drops", 0L),
+            linkState = obj.optString("link_state", "none"),
             rttUs = nativeGetStreamingRtt().toLong(),
         )
     }
@@ -196,6 +197,8 @@ object RustCore {
         val bitrateKbps: Long,
         val e2eLatencyMs: Long,
         val frameDrops: Long,
+        /** "lan" | "wan_direct" | "wan_relayed" | "wan" | "none" (R4 A1). */
+        val linkState: String,
         val rttUs: Long,
     ) {
         val rttMs: Long get() = rttUs / 1000

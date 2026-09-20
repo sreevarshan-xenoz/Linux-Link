@@ -25,6 +25,9 @@
 
     <!-- Session bar + status (RemoteScreen) -->
     <string name="wan_link">WAN link (iroh)</string>
+    <string name="wan_link_direct">WAN · direct</string>
+    <string name="wan_link_punching">WAN · punching…</string>
+    <string name="wan_link_relayed">WAN · relayed — trying direct…</string>
     <string name="connecting">Connecting…</string>
     <string name="retry">Retry</string>
     <string name="exit">Exit</string>

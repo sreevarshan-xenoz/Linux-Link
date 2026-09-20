@@ -64,6 +64,21 @@ pub(crate) static STREAMING_RTT_US: std::sync::atomic::AtomicU64 =
 /// Atomic flag indicating whether streaming is active (avoids try_lock race).
 pub(crate) static STREAMING_ACTIVE: AtomicBool = AtomicBool::new(false);
 
+/// True when the live streaming session rode a relay path (iroh WAN without a
+/// punched direct path). Updated by the RTT poller; LAN sessions are always
+/// direct, so the flag also doubles as the relay-transition latch for the
+/// server log.
+pub(crate) static SESSION_RELAYED: AtomicBool = AtomicBool::new(false);
+
+/// Live link path for the stats DTO / session UI chip:
+/// 0 = unknown (no session, or a WAN connection with no path snapshot yet),
+/// 1 = LAN direct (quinn), 2 = WAN direct (punched), 3 = WAN via relay.
+pub(crate) static LINK_STATE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// Whether the live streaming session was dialed over iroh (WAN) rather than
+/// quinn (LAN). Written by `install_streaming` before `STREAMING_ACTIVE`.
+pub(crate) static SESSION_IS_WAN: AtomicBool = AtomicBool::new(false);
+
 /// Streaming metrics for stats display.
 pub(crate) static STREAMING_FRAME_COUNT: AtomicU64 = AtomicU64::new(0);
 pub(crate) static STREAMING_BYTE_COUNT: AtomicU64 = AtomicU64::new(0);

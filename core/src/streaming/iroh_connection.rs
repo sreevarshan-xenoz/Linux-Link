@@ -112,9 +112,20 @@ impl Connection for IrohConnection {
         // noq keeps RTT per path; path 0 is the initial path every
         // connection has. None (no samples yet) reads as zero, like quinn's
         // fresh-connection value.
+        //
+        // `relayed` mirrors iroh's path selection: DCUtR keeps trying to
+        // punch a direct path while traffic rides the relay, so this flips
+        // false on its own once punching succeeds — callers surface it as
+        // "relayed — trying direct…", never as a dead end.
+        let relayed = self
+            .inner
+            .paths()
+            .iter()
+            .any(|p| p.is_selected() && p.is_relay());
         ConnectionStats {
             rtt: self.inner.rtt(PathId::ZERO).unwrap_or(Duration::ZERO),
             lost_packets: self.inner.stats().lost_packets,
+            relayed,
         }
     }
 
@@ -313,6 +324,10 @@ mod tests {
             client_q.remote_address(),
             server_addr,
             "direct loopback connection reports the dialed socket address"
+        );
+        assert!(
+            !client_q.stats().relayed && !server_conn.stats().relayed,
+            "relay-less loopback traffic is direct"
         );
 
         let payload = tokio::join!(

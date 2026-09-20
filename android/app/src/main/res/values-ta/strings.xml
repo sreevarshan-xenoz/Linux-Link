@@ -18,6 +18,9 @@
 
     <!-- Session bar + status (RemoteScreen) -->
     <string name="wan_link">WAN இணைப்பு (iroh)</string>
+    <string name="wan_link_direct">WAN · நேரடி</string>
+    <string name="wan_link_punching">WAN · துளையிடிறது…</string>
+    <string name="wan_link_relayed">WAN · ரிலே வழி — நேரடியாக முயற்சிக்கிறது…</string>
     <string name="connecting">இணைக்கிறது…</string>
     <string name="retry">மீண்டும் முயற்சி</string>
     <string name="exit">வெளியேறு</string>

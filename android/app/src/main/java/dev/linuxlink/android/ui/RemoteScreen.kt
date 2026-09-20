@@ -89,6 +89,20 @@ fun RemoteScreen(
     var streamStatus by remember {
         mutableStateOf<StreamStatus>(StreamStatus.Connecting)
     }
+    // R4 A1: live link path of the video session ("lan" | "wan_direct" |
+    // "wan_relayed" | "wan" | "none"), polled from the bridge while up.
+    var linkState by remember { mutableStateOf("none") }
+    val status = streamStatus
+    LaunchedEffect(status) {
+        if (status !is StreamStatus.Up || status.kind != StreamTransportKind.Wan) {
+            linkState = "none"
+            return@LaunchedEffect
+        }
+        while (isActive) {
+            linkState = runCatching { RustCore.streamingStats().linkState }.getOrDefault("wan")
+            delay(1_000)
+        }
+    }
     // Tier-2 #11b: PIN pairing state. Unpaired sessions open the sheet —
     // with pairing enforced, the control channel only answers the handshake.
     var pairedServerId by remember(address) { mutableStateOf(HostStore.pairedDesktopId(context, address)) }
@@ -323,11 +337,17 @@ fun RemoteScreen(
         if (!inPictureInPicture) {
             // Connect-status chip: shown until the video link is up (and again
             // if it fails, with the LAN/WAN reasons + a retry). A live WAN link
-            // keeps a small badge so the user knows the video is off-LAN.
-            val status = streamStatus
+            // keeps a small badge reporting *how* it is connected (R4 A1) —
+            // punched-direct vs relayed, since relayed is a normal first-class
+            // state iroh keeps trying to upgrade, not an error.
             if (status is StreamStatus.Up && status.kind == StreamTransportKind.Wan) {
+                val label = when (linkState) {
+                    "wan_direct" -> stringResource(R.string.wan_link_direct)
+                    "wan_relayed" -> stringResource(R.string.wan_link_relayed)
+                    else -> stringResource(R.string.wan_link_punching)
+                }
                 Text(
-                    stringResource(R.string.wan_link),
+                    label,
                     color = Color.White,
                     style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier

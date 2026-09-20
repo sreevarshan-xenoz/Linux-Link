@@ -43,10 +43,14 @@ impl std::error::Error for ConnectionError {}
 /// The connection-level facts the pipeline reads (RTT feedback loop,
 /// adaptive bitrate). Deliberately narrow: extend only when the pipeline
 /// actually needs another field.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ConnectionStats {
     pub rtt: Duration,
     pub lost_packets: u64,
+    /// True when the selected transport path rides a relay (iroh WAN), i.e.
+    /// hole punching has not produced a direct path yet. Always false for
+    /// quinn, which has no relay concept.
+    pub relayed: bool,
 }
 
 /// Write half of a stream handed out by [`Connection::open_uni`].
@@ -154,6 +158,7 @@ impl Connection for QuinnConnection {
         ConnectionStats {
             rtt: s.path.rtt,
             lost_packets: s.path.lost_packets,
+            relayed: false,
         }
     }
 
@@ -263,6 +268,10 @@ mod tests {
             "server should see the client's loopback address"
         );
         assert!(client.stats().rtt < Duration::from_secs(5));
+        assert!(
+            !client.stats().relayed && !server.stats().relayed,
+            "quinn has no relay concept — traffic is always direct"
+        );
 
         let payload = tokio::join!(
             async {

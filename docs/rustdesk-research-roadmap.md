@@ -103,7 +103,13 @@ From **scrcpy** (code-level OK, Apache-2.0):
 ## 5. Proposed roadmap (R4) — phases, effort, verifiable on this box unless noted
 
 ### Phase A — Connection telemetry & relay-first (S–M) — *no device needed for server half*
-- **A1 · Link-path reporting.** Bridge iroh connection-type telemetry (direct
+- **A1 · Link-path reporting.** ✅ **Landed 2026-09-20** (device behavior
+  unverified): `ConnectionStats.relayed` (quinn = always direct; iroh = the
+  selected path is a relay), surfaced through the bridge's 1 s stats poll as
+  `link_state` ("lan" / "wan_direct" / "wan_relayed") in the stats JSON, and
+  the `RemoteScreen` WAN badge now reads "WAN · direct" / "WAN · relayed —
+  trying direct…" (es/ta strings included); relay↔direct transitions are
+  logged once client-side. No new JNI exports.
   path vs relayed per peer; iroh exposes path selection) into a new
   `kdeconnect.linuxlink.linkstate` push + a `RemoteScreen` chip upgrade:
   "LAN" / "WAN direct" / "WAN relayed — trying direct…". Accept: chip shows

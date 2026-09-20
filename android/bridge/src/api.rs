@@ -128,6 +128,9 @@ pub struct StreamingStatsDto {
     pub bitrate_kbps: u64,
     pub e2e_latency_ms: u64,
     pub frame_drops: u64,
+    /// Live link path (R4 A1): "lan" | "wan_direct" | "wan_relayed" |
+    /// "wan" (punched/relay not yet observable) | "none" (no session).
+    pub link_state: &'static str,
 }
 
 /// Monitor information for display in Flutter
@@ -1135,8 +1138,29 @@ async fn install_streaming(
                     break;
                 }
                 _ = interval.tick() => {
-                    let rtt_us = rtt_connection.stats().rtt.as_micros() as u64;
+                    let stats = rtt_connection.stats();
+                    let rtt_us = stats.rtt.as_micros() as u64;
                     update_streaming_rtt(rtt_us);
+
+                    // Link-path telemetry (R4 A1): quinn LAN is always
+                    // direct; an iroh WAN session rides a relay until hole
+                    // punching opens a direct path — and iroh keeps trying,
+                    // so a relayed→direct transition is expected, not novel.
+                    let is_wan = crate::SESSION_IS_WAN.load(Ordering::Relaxed);
+                    let state = if !is_wan {
+                        1
+                    } else if stats.relayed {
+                        3
+                    } else {
+                        2
+                    };
+                    crate::LINK_STATE.store(state, Ordering::Relaxed);
+                    let was_relayed = crate::SESSION_RELAYED.swap(stats.relayed, Ordering::Relaxed);
+                    if stats.relayed && !was_relayed {
+                        tracing::warn!("WAN session is riding a relay (punching not complete)");
+                    } else if !stats.relayed && was_relayed {
+                        tracing::info!("WAN session upgraded from relay to direct path");
+                    }
 
                     // Update session status based on RTT (detect staleness)
                     let mut status_guard = crate::SESSION_STATUS.lock().unwrap();
@@ -1152,6 +1176,11 @@ async fn install_streaming(
     });
 
     STREAMING_ACTIVE.store(true, std::sync::atomic::Ordering::Release);
+    crate::SESSION_IS_WAN.store(wan_dial.is_some(), std::sync::atomic::Ordering::Relaxed);
+    crate::LINK_STATE.store(
+        if wan_dial.is_some() { 0 } else { 1 },
+        std::sync::atomic::Ordering::Relaxed,
+    );
     *crate::SESSION_STATUS.lock().unwrap() = SessionStatus::Active;
 
     let mut handle = (*STREAMING_HANDLE).lock().await;
@@ -1358,6 +1387,9 @@ pub async fn stop_streaming() -> Result<(), String> {
     STREAMING_BYTE_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
     *crate::STREAMING_START_TIME.lock().unwrap() = None;
     STREAMING_RTT_US.store(0, std::sync::atomic::Ordering::Relaxed);
+    crate::LINK_STATE.store(0, std::sync::atomic::Ordering::Relaxed);
+    crate::SESSION_IS_WAN.store(false, std::sync::atomic::Ordering::Relaxed);
+    crate::SESSION_RELAYED.store(false, std::sync::atomic::Ordering::Relaxed);
     *crate::SESSION_STATUS.lock().unwrap() = SessionStatus::Disconnected;
 
     let handle = {
@@ -1419,6 +1451,13 @@ pub fn get_streaming_stats() -> StreamingStatsDto {
         bitrate_kbps,
         e2e_latency_ms: rtt_ms,
         frame_drops: 0,
+        link_state: match crate::LINK_STATE.load(Ordering::Relaxed) {
+            1 => "lan",
+            2 => "wan_direct",
+            3 => "wan_relayed",
+            _ if is_streaming_active() => "wan",
+            _ => "none",
+        },
     }
 }
 
