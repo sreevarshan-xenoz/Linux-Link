@@ -7,16 +7,21 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.viewinterop.AndroidView
 import dev.linuxlink.android.bridge.RustCore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlin.math.hypot
 import kotlin.math.roundToInt
 
 /**
@@ -27,6 +32,44 @@ import kotlin.math.roundToInt
 enum class InputMode {
     DirectTouch,
     Trackpad,
+}
+
+/**
+ * Pinch-zoom transform over the video surface (Tier 1 #6). The whole desktop
+ * fits the viewport at scale 1; zooming in magnifies HiDPI text and
+ * [ViewportZoom.toContent] maps viewport touch points back to desktop space so
+ * direct-touch still hits what the user sees.
+ *
+ * Rendering is a graphicsLayer on the SurfaceView, which composes correctly
+ * on Android 10+ (API 29); on older devices the surface may not follow the
+ * transform cleanly.
+ */
+private class ViewportZoom {
+    var scale by mutableFloatStateOf(1f)
+        private set
+    var offsetX by mutableFloatStateOf(0f)
+        private set
+    var offsetY by mutableFloatStateOf(0f)
+        private set
+
+    val isZoomed: Boolean get() = scale > 1.01f
+
+    fun applyGesture(zoomDelta: Float, pan: Offset, containerW: Float, containerH: Float) {
+        val newScale = (scale * zoomDelta).coerceIn(1f, 8f)
+        offsetX = (offsetX + pan.x).coerceIn(containerW * (1f - newScale), 0f)
+        offsetY = (offsetY + pan.y).coerceIn(containerH * (1f - newScale), 0f)
+        scale = newScale
+    }
+
+    fun reset() {
+        scale = 1f
+        offsetX = 0f
+        offsetY = 0f
+    }
+
+    /** Viewport point -> desktop point in scale-1 content space. */
+    fun toContent(pos: Offset): Offset =
+        Offset((pos.x - offsetX) / scale, (pos.y - offsetY) / scale)
 }
 
 /**
@@ -50,41 +93,61 @@ fun RemoteDesktopView(
     modifier: Modifier = Modifier,
 ) {
     val decoderHost = remember { DecoderHost() }
+    val zoom = remember { ViewportZoom() }
+    // Pinch-to-zoom only in DirectTouch: Trackpad already owns two-finger
+    // gestures for remote scrolling.
+    val zoomGesturesEnabled = inputMode == InputMode.DirectTouch
 
     Box(modifier) {
-        AndroidView(
-            factory = { context ->
-                SurfaceView(context).apply {
-                    holder.addCallback(
-                        object : android.view.SurfaceHolder.Callback {
-                            override fun surfaceCreated(holder: android.view.SurfaceHolder) {
-                                declareFrameRate(holder, display)
-                                decoderHost.start(holder.surface, address, port, width, height)
-                            }
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .graphicsLayer {
+                    scaleX = zoom.scale
+                    scaleY = zoom.scale
+                    translationX = zoom.offsetX
+                    translationY = zoom.offsetY
+                },
+        ) {
+            AndroidView(
+                factory = { context ->
+                    SurfaceView(context).apply {
+                        holder.addCallback(
+                            object : android.view.SurfaceHolder.Callback {
+                                override fun surfaceCreated(holder: android.view.SurfaceHolder) {
+                                    declareFrameRate(holder, display)
+                                    decoderHost.start(holder.surface, address, port, width, height)
+                                }
 
-                            override fun surfaceChanged(
-                                holder: android.view.SurfaceHolder,
-                                format: Int,
-                                width: Int,
-                                height: Int,
-                            ) {
-                            }
+                                override fun surfaceChanged(
+                                    holder: android.view.SurfaceHolder,
+                                    format: Int,
+                                    width: Int,
+                                    height: Int,
+                                ) {
+                                }
 
-                            override fun surfaceDestroyed(holder: android.view.SurfaceHolder) {
-                                decoderHost.stop()
-                            }
-                        },
-                    )
-                }
-            },
-            modifier = Modifier.matchParentSize(),
-        )
+                                override fun surfaceDestroyed(holder: android.view.SurfaceHolder) {
+                                    decoderHost.stop()
+                                }
+                            },
+                        )
+                    }
+                },
+                modifier = Modifier.matchParentSize(),
+            )
+        }
 
         InputOverlay(
             address = address,
             port = port,
             mode = inputMode,
-            modifier = Modifier.matchParentSize(),
+            zoom = zoom,
+            modifier = Modifier
+                .matchParentSize()
+                .pointerInput(zoomGesturesEnabled) {
+                    if (zoomGesturesEnabled) zoomGestureDetector(zoom)
+                },
         )
     }
 
@@ -94,14 +157,62 @@ fun RemoteDesktopView(
 }
 
 /**
+ * Two-finger pinch + pan. Ignores single-pointer events (those stay input
+ * passthrough) and consumes everything while two or more fingers are down.
+ */
+private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.zoomGestureDetector(
+    zoom: ViewportZoom,
+) {
+    awaitEachGesture {
+        var prevCentroid: Offset? = null
+        var prevSpan = 0f
+        while (true) {
+            val event = awaitPointerEvent()
+            val pressed = event.changes.filter { it.pressed }
+            if (pressed.size >= 2) {
+                val centroid = pressed.map { it.position }
+                    .reduce { a, b -> Offset((a.x + b.x) / 2f, (a.y + b.y) / 2f) }
+                val dx = pressed[0].position.x - pressed[1].position.x
+                val dy = pressed[0].position.y - pressed[1].position.y
+                val span = hypot(dx, dy)
+                val pc = prevCentroid
+                if (pc != null && prevSpan > 0f && span > 0f) {
+                    zoom.applyGesture(
+                        zoomDelta = span / prevSpan,
+                        pan = centroid - pc,
+                        containerW = size.width.toFloat(),
+                        containerH = size.height.toFloat(),
+                    )
+                }
+                prevCentroid = centroid
+                prevSpan = span
+                pressed.forEach { it.consume() }
+            } else if (pressed.isEmpty()) {
+                break
+            } else {
+                // One finger left on the surface: back to passthrough.
+                prevCentroid = null
+                prevSpan = 0f
+            }
+        }
+    }
+}
+
+/**
  * Full-surface gesture catcher. All sends go through a single-perm
  * dispatcher so packets leave in gesture order (down -> move -> up).
+ *
+ * One-finger gestures drive remote input; a second finger cancels the
+ * direct-touch action (it belongs to a pinch-zoom gesture) before anything
+ * is sent. Touch positions are mapped through the current [ViewportZoom] so
+ * a tap hits the desktop point the user actually sees.
  */
 @Composable
 private fun InputOverlay(
     address: String,
     port: Int,
     mode: InputMode,
+    zoom: ViewportZoom,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -112,8 +223,9 @@ private fun InputOverlay(
     Box(
         modifier.pointerInput(address to port to mode) {
             fun sendAbs(pos: Offset) {
-                val x = RustCore.normalizedCoord(pos.x, size.width)
-                val y = RustCore.normalizedCoord(pos.y, size.height)
+                val content = zoom.toContent(pos)
+                val x = RustCore.normalizedCoord(content.x, size.width)
+                val y = RustCore.normalizedCoord(content.y, size.height)
                 send { RustCore.sendMouseAbs(x, y) }
             }
 
@@ -121,16 +233,33 @@ private fun InputOverlay(
                 val down = awaitFirstDown(requireUnconsumed = false)
                 when (mode) {
                     InputMode.DirectTouch -> {
-                        sendAbs(down.position)
+                        // Defer the first packet until we know this is a
+                        // one-finger gesture, not the start of a pinch.
+                        var cancelled = false
+                        var lastPos = down.position
                         var done = false
                         while (!done) {
                             val event = awaitPointerEvent()
-                            val change = event.changes.firstOrNull { it.pressed }
-                            if (change == null) {
-                                send { RustCore.sendMouseClick(0, false) }
-                                done = true
-                            } else {
-                                sendAbs(change.position)
+                            val pressed = event.changes.filter { it.pressed }
+                            when {
+                                cancelled -> {
+                                    if (pressed.isEmpty()) done = true
+                                }
+
+                                pressed.size >= 2 -> {
+                                    cancelled = true
+                                }
+
+                                pressed.isEmpty() -> {
+                                    sendAbs(lastPos)
+                                    send { RustCore.sendMouseClick(0, false) }
+                                    done = true
+                                }
+
+                                else -> {
+                                    lastPos = pressed.first().position
+                                    sendAbs(lastPos)
+                                }
                             }
                         }
                     }
@@ -156,7 +285,9 @@ private fun InputOverlay(
                                 continue
                             }
                             val pos = change.position
-                            val delta = pos - last
+                            // Divide by zoom so cursor travel matches the
+                            // on-screen distance the finger covered.
+                            val delta = (pos - last) / zoom.scale
                             last = pos
                             dragged += delta.getDistance()
                             if (twoFinger) {
