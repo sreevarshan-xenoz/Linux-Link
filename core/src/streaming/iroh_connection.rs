@@ -16,15 +16,19 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::{Context, Result};
 use async_trait::async_trait;
+use iroh::endpoint::presets::Minimal;
 use iroh::endpoint::{
     ClosedStream, ConnectionError as NoqError, PathId, ReadError, ReadExactError, ReadToEndError,
     RecvStream, SendStream, WriteError,
 };
+use iroh::{Endpoint, EndpointAddr, RelayMode};
 
 use super::connection::{
     Connection, ConnectionError, ConnectionStats, InStream, OutStream, SharedConnection,
 };
+use super::transport::StreamTransportConfig;
 
 /// Classify an iroh/noq connection error — identical taxonomy to quinn.
 fn classify_conn_error(e: NoqError) -> ConnectionError {
@@ -112,6 +116,89 @@ impl Connection for IrohConnection {
             rtt: self.inner.rtt(PathId::ZERO).unwrap_or(Duration::ZERO),
             lost_packets: self.inner.stats().lost_packets,
         }
+    }
+}
+
+/// Client-side WAN dial (R1 stage 3).
+///
+/// Owns the ephemeral iroh `Endpoint` for the life of the session: iroh
+/// aborts its socket task with an error if an `Endpoint` is dropped while
+/// live, so callers must `close()` the dial (or at least keep the endpoint
+/// alive until the connection ends). The identity the phone learned from the
+/// server's `kdeconnect.linuxlink.endpoint` announcement is reassembled here
+/// from its string parts — relays are dial-reachable fallbacks, direct
+/// addresses the LAN/Tailscale-routable set.
+pub struct IrohDial {
+    endpoint: Endpoint,
+    raw: iroh::endpoint::Connection,
+    connection: SharedConnection,
+}
+
+impl IrohDial {
+    /// Dial a server from its announced identity parts.
+    ///
+    /// `use_relays` selects n0 relay assistance (hole punching); `false`
+    /// restricts the dial to the direct addresses — loopback tests and
+    /// air-gapped direct paths.
+    pub async fn dial(
+        endpoint_id: &str,
+        relay_urls: &[String],
+        direct_addrs: &[String],
+        use_relays: bool,
+        timeout: Duration,
+    ) -> Result<Self> {
+        let id: iroh::EndpointId = endpoint_id.parse().context("invalid iroh EndpointId")?;
+        let mut addr = EndpointAddr::new(id);
+        for url in relay_urls {
+            let url = url
+                .parse()
+                .with_context(|| format!("invalid relay url: {url}"))?;
+            addr = addr.with_relay_url(url);
+        }
+        for a in direct_addrs {
+            let a: SocketAddr = a
+                .parse()
+                .with_context(|| format!("invalid direct address: {a}"))?;
+            addr = addr.with_ip_addr(a);
+        }
+
+        let alpn = StreamTransportConfig::default().alpn;
+        let endpoint = Endpoint::builder(Minimal)
+            .alpns(vec![alpn.clone()])
+            .relay_mode(if use_relays {
+                RelayMode::Default
+            } else {
+                RelayMode::Disabled
+            })
+            .bind_addr(SocketAddr::from(([0, 0, 0, 0], 0)))
+            .context("iroh bind_addr rejected wildcard socket addr")?
+            .bind()
+            .await
+            .context("iroh client endpoint bind failed")?;
+
+        let raw = tokio::time::timeout(timeout, endpoint.connect(addr, &alpn))
+            .await
+            .context("iroh dial timed out")?
+            .context("iroh dial failed")?;
+
+        Ok(Self {
+            endpoint,
+            connection: IrohConnection::shared(raw.clone()),
+            raw,
+        })
+    }
+
+    /// The trait handle `StreamingClient::attach` adopts.
+    pub fn connection(&self) -> SharedConnection {
+        self.connection.clone()
+    }
+
+    /// Gracefully close the connection and the endpoint. Mandatory before
+    /// drop to avoid iroh's dropped-live-endpoint error log.
+    pub async fn close(self) {
+        self.raw
+            .close(iroh::endpoint::VarInt::from_u32(0), b"session end");
+        self.endpoint.close().await;
     }
 }
 
@@ -242,6 +329,59 @@ mod tests {
         )
         .0;
         assert_eq!(payload, b"hello stream");
+
+        // Same exercise over the client dial path: reassemble the announced
+        // identity strings into an `EndpointAddr`, dial with relays off, and
+        // round-trip a stream pair through the traits. (The server handle is
+        // held open — dropping the last iroh Connection handle closes the
+        // connection, unlike quinn.)
+        {
+            let accept2 = {
+                let server = server.clone();
+                tokio::spawn(async move {
+                    let incoming = server.accept().await.expect("incoming 2");
+                    let conn = incoming
+                        .accept()
+                        .expect("reject 2")
+                        .await
+                        .expect("handshake 2");
+                    IrohConnection::shared(conn)
+                })
+            };
+            let dial = IrohDial::dial(
+                &server.id().to_string(),
+                &[],
+                &[server_addr.to_string()],
+                false,
+                Duration::from_secs(10),
+            )
+            .await
+            .expect("loopback dial over direct addr");
+            let dialed = dial.connection();
+            let server2 = accept2.await.expect("accept task 2");
+
+            let echoed = tokio::join!(
+                async {
+                    let mut r = server2.accept_uni().await.expect("server accept_uni");
+                    let data = r.read_to_end(64 * 1024).await.expect("server read");
+                    let mut s = server2.open_uni().await.expect("server open_uni");
+                    s.write_all(&data).await.expect("server echo");
+                    s.finish().expect("server finish");
+                },
+                async {
+                    let mut w = dialed.open_uni().await.expect("client open_uni");
+                    w.write_all(b"over the wan").await.expect("client write");
+                    w.finish().expect("client finish");
+                    let mut r = dialed.accept_uni().await.expect("client accept_uni");
+                    r.read_to_end(1024).await.expect("client read")
+                },
+            )
+            .1;
+            assert_eq!(echoed, b"over the wan");
+
+            drop(server2);
+            dial.close().await;
+        }
 
         // Close surfaces as ConnectionError::Closed on the accept loop —
         // the sentinel every streaming receive task breaks on.

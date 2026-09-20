@@ -46,7 +46,7 @@ pub use connection::{
 pub use encoder_detect::{AvailableEncoders, HardwareEncoder, probe_encoders, resolve_encoder};
 pub use input_packet::InputPacket;
 #[cfg(feature = "wan")]
-pub use iroh_connection::IrohConnection;
+pub use iroh_connection::{IrohConnection, IrohDial};
 pub use session::{SessionType, detect_session_type};
 #[cfg(feature = "server")]
 pub use streamer::StreamingServer;

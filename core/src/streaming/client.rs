@@ -87,10 +87,6 @@ impl StreamingClient {
             .parse()
             .with_context(|| format!("Invalid server address: {addr}"))?;
 
-        let channel_capacity = 8;
-        let (frame_tx, frame_rx) = mpsc::channel(channel_capacity);
-        let (audio_tx, audio_rx) = mpsc::channel(channel_capacity);
-
         let session_id = uuid::Uuid::new_v4().to_string();
         let conn_id = uuid::Uuid::new_v4().to_string();
         let span = tracing::info_span!(
@@ -119,44 +115,80 @@ impl StreamingClient {
             .await
             .context("Connection to streaming server timed out")?
             .context("Failed to connect to streaming server")?;
-            let connection = QuinnConnection::shared(quic_connection);
-
             info!("Streaming connection established");
 
-            // Send optional monitor_index to the server as a config stream
-            if let Some(index) = monitor_index {
-                match connection.open_uni().await {
-                    Ok(mut config_stream) => {
-                        // Format: [0xFF, 0x00] config marker + 4 bytes LE monitor_index
-                        let mut config_buf = [0u8; 6];
-                        config_buf[0..2].copy_from_slice(&MONITOR_CONFIG_MARKER);
-                        config_buf[2..6].copy_from_slice(&index.to_le_bytes());
-                        if let Err(e) = config_stream.write_all(&config_buf).await {
-                            warn!(error = %e, "Failed to send monitor index");
-                        }
-                        if let Err(e) = config_stream.finish() {
-                            warn!(error = %e, "Failed to finish config stream");
-                        }
-                        info!(index, "Sent monitor selection to server");
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "Failed to open config stream");
-                    }
-                }
-            }
-
-            let client = Self {
-                connection: Some(connection),
-                frame_tx,
-                audio_tx,
-                cancel: CancellationToken::new(),
+            let (client, frame_rx, audio_rx) = Self::attach_with_session(
+                QuinnConnection::shared(quic_connection),
+                monitor_index,
                 session_id,
-            };
-
+            )
+            .await;
             Ok((client, frame_rx, audio_rx))
         }
         .instrument(span)
         .await
+    }
+
+    /// Adopt an already-established transport-agnostic connection — e.g. an
+    /// iroh WAN dial (`super::IrohDial`) — into the same receive pipeline
+    /// `connect` builds. The caller keeps ownership of the endpoint/TLS
+    /// lifecycle; this only wraps the connection and optionally ships the
+    /// monitor-selection config stream.
+    pub async fn attach(
+        connection: SharedConnection,
+        monitor_index: Option<u32>,
+    ) -> (
+        Self,
+        mpsc::Receiver<EncodedPacket>,
+        mpsc::Receiver<AudioPacket>,
+    ) {
+        Self::attach_with_session(connection, monitor_index, uuid::Uuid::new_v4().to_string()).await
+    }
+
+    async fn attach_with_session(
+        connection: SharedConnection,
+        monitor_index: Option<u32>,
+        session_id: String,
+    ) -> (
+        Self,
+        mpsc::Receiver<EncodedPacket>,
+        mpsc::Receiver<AudioPacket>,
+    ) {
+        let channel_capacity = 8;
+        let (frame_tx, frame_rx) = mpsc::channel(channel_capacity);
+        let (audio_tx, audio_rx) = mpsc::channel(channel_capacity);
+
+        // Send optional monitor_index to the server as a config stream
+        if let Some(index) = monitor_index {
+            match connection.open_uni().await {
+                Ok(mut config_stream) => {
+                    // Format: [0xFF, 0x00] config marker + 4 bytes LE monitor_index
+                    let mut config_buf = [0u8; 6];
+                    config_buf[0..2].copy_from_slice(&MONITOR_CONFIG_MARKER);
+                    config_buf[2..6].copy_from_slice(&index.to_le_bytes());
+                    if let Err(e) = config_stream.write_all(&config_buf).await {
+                        warn!(error = %e, "Failed to send monitor index");
+                    }
+                    if let Err(e) = config_stream.finish() {
+                        warn!(error = %e, "Failed to finish config stream");
+                    }
+                    info!(index, "Sent monitor selection to server");
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to open config stream");
+                }
+            }
+        }
+
+        let client = Self {
+            connection: Some(connection),
+            frame_tx,
+            audio_tx,
+            cancel: CancellationToken::new(),
+            session_id,
+        };
+
+        (client, frame_rx, audio_rx)
     }
 
     /// Start receiving frames. This runs until cancelled or the connection closes.
