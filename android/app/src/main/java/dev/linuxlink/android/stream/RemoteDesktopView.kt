@@ -129,6 +129,7 @@ fun RemoteDesktopView(
     height: Int,
     inputMode: InputMode = InputMode.DirectTouch,
     mapping: DesktopMapping? = null,
+    monitorIndex: Int = -1,
     modifier: Modifier = Modifier,
 ) {
     val decoderHost = remember { DecoderHost() }
@@ -191,6 +192,7 @@ fun RemoteDesktopView(
                                         width,
                                         height,
                                         HostStore.wanIdentity(context, address),
+                                        monitorIndex,
                                     ) { w, h -> videoSize = IntSize(w, h) }
                                 }
 
@@ -459,6 +461,7 @@ private class DecoderHost {
         width: Int,
         height: Int,
         wanIdentity: String?,
+        monitorIndex: Int = -1,
         onVideoSize: (Int, Int) -> Unit,
     ) {
         if (thread != null) return
@@ -469,9 +472,9 @@ private class DecoderHost {
             // LAN first; fall back to dialing the cached iroh WAN identity
             // when the desktop is off-network (R1 stage 3).
             val connected =
-                RustCore.connectStreaming(address, port).isSuccess ||
+                RustCore.connectStreaming(address, port, monitorIndex).isSuccess ||
                     (wanIdentity != null &&
-                        RustCore.connectStreamingWan(address, wanIdentity).isSuccess)
+                        RustCore.connectStreamingWan(address, wanIdentity, monitorIndex).isSuccess)
             if (connected) active.start()
         }, "h264-decode").apply {
             isDaemon = true

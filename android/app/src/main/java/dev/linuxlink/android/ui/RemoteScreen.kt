@@ -61,6 +61,29 @@ fun RemoteScreen(
     var cropWindow by remember { mutableStateOf<DesktopWindow?>(null) }
     var cropScreen by remember { mutableStateOf<IntArray?>(null) }
     var showPicker by remember { mutableStateOf(false) }
+    // R3 Tier-2 #10: which desktop monitor to stream (-1 = server default).
+    // Toggling `showStream` tears the view down (surfaceDestroyed stops the
+    // session) before recreation, so the new connect can't hit the bridge's
+    // already-active check on the same address+port.
+    var monitorIndex by remember(address) {
+        mutableStateOf(HostStore.monitorIndex(context, address))
+    }
+    var showStream by remember { mutableStateOf(true) }
+    var showMonitorPicker by remember { mutableStateOf(false) }
+
+    fun switchMonitor(index: Int) {
+        showMonitorPicker = false
+        if (index == monitorIndex) return
+        HostStore.saveMonitorIndex(context, address, index)
+        cropWindow = null
+        cropScreen = null
+        monitorIndex = index
+        showStream = false
+        scope.launch {
+            withContext(Dispatchers.IO) { RustCore.stopStreaming() }
+            showStream = true
+        }
+    }
 
     ClipboardSyncEffect(address, controlPort, enabled = clipboardSync)
 
@@ -101,15 +124,18 @@ fun RemoteScreen(
             .fillMaxSize()
             .background(androidx.compose.ui.graphics.Color.Black),
     ) {
-        RemoteDesktopView(
-            address = address,
-            port = port,
-            width = metrics.widthPixels,
-            height = metrics.heightPixels,
-            inputMode = mode,
-            mapping = cropWindow?.desktopMapping(cropScreen),
-            modifier = Modifier.fillMaxSize(),
-        )
+        if (showStream) {
+            RemoteDesktopView(
+                address = address,
+                port = port,
+                width = metrics.widthPixels,
+                height = metrics.heightPixels,
+                inputMode = mode,
+                mapping = cropWindow?.desktopMapping(cropScreen),
+                monitorIndex = monitorIndex,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
 
         Column(
             modifier = Modifier
@@ -157,6 +183,11 @@ fun RemoteScreen(
                         if (cropWindow == null) "Window: all" else "Window: ${(cropWindow?.title ?: "").take(18)}"
                     Text(label, color = Color.White)
                 }
+                TextButton(onClick = { showMonitorPicker = true }) {
+                    val label =
+                        if (monitorIndex == -1) "Monitor: auto" else "Monitor: #$monitorIndex"
+                    Text(label, color = Color.White)
+                }
             }
             ShortcutBar(
                 address = address,
@@ -176,6 +207,16 @@ fun RemoteScreen(
                 }
                 showHistory = false
             },
+        )
+    }
+
+    if (showMonitorPicker) {
+        MonitorPickerSheet(
+            address = address,
+            controlPort = controlPort,
+            selected = monitorIndex,
+            onDismiss = { showMonitorPicker = false },
+            onPick = { index -> switchMonitor(index) },
         )
     }
 

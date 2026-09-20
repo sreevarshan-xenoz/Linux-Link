@@ -54,4 +54,17 @@ object HostStore {
     }
 
     private const val KEY_WAN_IDENTITY_PREFIX = "wan_identity:"
+
+    /** Selected streaming monitor per desktop (`-1` = server default). */
+    fun monitorIndex(ctx: Context, address: String): Int =
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getInt("$KEY_MONITOR_PREFIX$address", -1)
+
+    fun saveMonitorIndex(ctx: Context, address: String, index: Int) {
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putInt("$KEY_MONITOR_PREFIX$address", index)
+            .apply()
+    }
+
+    private const val KEY_MONITOR_PREFIX = "monitor:"
 }
