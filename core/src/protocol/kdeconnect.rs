@@ -1,5 +1,5 @@
-use anyhow::Context;
 use crate::error::Result;
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -20,6 +20,12 @@ pub struct NetworkPacket {
     pub body: Value,
     #[serde(default)]
     pub payload_size: Option<u64>,
+    /// Originating deviceId (KDE Connect convention), stamped by the sender.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// Id of the packet this one replies to (notification-reply correlation).
+    #[serde(default, rename = "replyId", skip_serializing_if = "Option::is_none")]
+    pub reply_id: Option<String>,
 }
 
 impl NetworkPacket {
@@ -29,6 +35,8 @@ impl NetworkPacket {
             id: 0,
             body: Value::Null,
             payload_size: None,
+            source: None,
+            reply_id: None,
         }
     }
 
@@ -57,11 +65,10 @@ impl NetworkPacket {
                 detail: "empty packet line".to_string(),
             });
         }
-        serde_json::from_str(trimmed)
-            .map_err(|e| crate::error::LinuxLinkError::Serialization {
-                format: "JSON",
-                detail: e.to_string(),
-            })
+        serde_json::from_str(trimmed).map_err(|e| crate::error::LinuxLinkError::Serialization {
+            format: "JSON",
+            detail: e.to_string(),
+        })
     }
 }
 
@@ -184,6 +191,10 @@ where
 
     async fn send_packet(&self, packet: &NetworkPacket) -> Result<()> {
         use tokio::io::AsyncWriteExt;
+        let mut packet = packet.clone();
+        if packet.source.is_none() {
+            packet.source = Some(self.device_id.clone());
+        }
         let bytes = packet.to_wire()?;
         let mut guard = self.writer.lock().await;
         guard.write_all(&bytes).await?;

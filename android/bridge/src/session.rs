@@ -107,6 +107,34 @@ pub(crate) static SIREN_RINGING: AtomicBool = AtomicBool::new(false);
 pub(crate) static PAIR_RESULT: LazyLock<TokioMutex<Option<serde_json::Value>>> =
     LazyLock::new(|| TokioMutex::new(None));
 
+/// Desktop-originated notifications (Tier-2 #11c) waiting to be posted as
+/// Android notifications. Bounded; drained by `take_pending_notifications`.
+pub(crate) static PENDING_NOTIFICATIONS: LazyLock<std::sync::Mutex<Vec<serde_json::Value>>> =
+    LazyLock::new(|| std::sync::Mutex::new(Vec::new()));
+
+/// Queue one captured `kdeconnect.notification` body for the UI.
+pub(crate) fn queue_notification(body: &serde_json::Value, source: &str) {
+    let Some(id) = body.get("id").and_then(|v| v.as_str()) else {
+        return;
+    };
+    let entry = serde_json::json!({
+        "id": id,
+        "app": body.get("app").and_then(|v| v.as_str()).unwrap_or(source),
+        "title": body.get("title").and_then(|v| v.as_str()).unwrap_or(""),
+        "text": body.get("text").and_then(|v| v.as_str()).unwrap_or(""),
+        "source": source,
+    });
+    let mut q = PENDING_NOTIFICATIONS.lock().expect("notification queue");
+    if q.iter().any(|n| n.get("id") == entry.get("id")) {
+        return; // desktop re-sends on reconnect; keep one per id
+    }
+    q.push(entry);
+    const MAX_QUEUED: usize = 32;
+    if q.len() > MAX_QUEUED {
+        q.remove(0);
+    }
+}
+
 /// Holds the live streaming client and its packet receiver.
 pub(crate) struct StreamingHandle {
     pub(crate) address: String,

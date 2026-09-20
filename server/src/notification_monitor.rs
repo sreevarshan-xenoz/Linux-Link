@@ -23,6 +23,7 @@ impl ForwardedNotification {
         serde_json::json!({
             "type": "kdeconnect.notification",
             "body": {
+                "id": format!("{}|{}", self.app_name, self.summary),
                 "app": self.app_name,
                 "title": self.summary,
                 "text": self.body,

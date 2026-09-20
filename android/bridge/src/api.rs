@@ -318,6 +318,24 @@ pub async fn connect_to_peer(address: String, port: u16) -> Result<ConnectionSta
                                         continue;
                                     }
                                 }
+                                // Desktop notifications addressed to us queue
+                                // for the notification-posting poller (Tier-2 #11c).
+                                if trimmed.contains("kdeconnect.notification")
+                                    && let Ok(pkt) = NetworkPacket::from_wire(&trimmed)
+                                    && pkt.packet_type == "kdeconnect.notification"
+                                    && pkt.source.as_deref() != Some(&client_identity().device_id)
+                                    && !pkt
+                                        .body
+                                        .get("isClear")
+                                        .and_then(|v| v.as_bool())
+                                        .unwrap_or(false)
+                                    && pkt.body.get("id").is_some()
+                                {
+                                    crate::queue_notification(
+                                        &pkt.body,
+                                        pkt.source.as_deref().unwrap_or("desktop"),
+                                    );
+                                }
                                 let _ = packet_tx.send(trimmed);
                             }
                             line.clear();
@@ -592,6 +610,48 @@ pub async fn check_pair_result(wait_secs: u64) -> Option<String> {
 /// JSON array of desktop device ids this phone has paired with.
 pub fn paired_servers_json() -> String {
     serde_json::to_string(&read_paired_servers()).unwrap_or_else(|_| "[]".to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Notification relay (R3 Tier-2 #11c)
+// ---------------------------------------------------------------------------
+
+/// Drain the desktop notifications queued by the control reader as a JSON
+/// array (`[{id,app,title,text,source}, …]`); Kotlin posts them as Android
+/// notifications with an inline-reply action.
+pub fn take_pending_notifications() -> String {
+    let drained = {
+        let mut q = crate::PENDING_NOTIFICATIONS
+            .lock()
+            .expect("notification queue");
+        std::mem::take(&mut *q)
+    };
+    serde_json::to_string(&drained).unwrap_or_else(|_| "[]".to_string())
+}
+
+/// Reply to a desktop notification (R3 Tier-2 #11c). One-shot control
+/// connection like the other queries; the server's notification_reply plugin
+/// relays the text (replies.log + clipboard + on-screen confirmation).
+pub async fn send_notification_reply(
+    address: String,
+    port: u16,
+    id: String,
+    text: String,
+) -> Result<(), String> {
+    let conn_mgr = ConnectionManager::new(Duration::from_secs(5));
+    let identity = client_identity();
+    let stream = conn_mgr
+        .connect(&address, port, &identity)
+        .await
+        .map_err(|e| format!("Connection failed: {e}"))?;
+    let (_reader, writer) = tokio::io::split(stream);
+    let sender = TcpDeviceSender::new(writer, address);
+    let request = NetworkPacket::new("kdeconnect.notification-reply")
+        .with_body(serde_json::json!({ "id": id, "reply": text, "passive": false }));
+    sender
+        .send_packet(&request)
+        .await
+        .map_err(|e| format!("Failed to send notification reply: {e}"))
 }
 
 /// Send clipboard content to peer using KDE Connect protocol.

@@ -5,6 +5,7 @@ pub mod file_browse;
 pub mod input;
 pub mod monitors;
 pub mod notification;
+pub mod notification_reply;
 pub mod pair;
 pub mod power;
 pub mod share;
@@ -13,10 +14,10 @@ pub mod windows;
 
 use linux_link_core::protocol::kdeconnect::PluginRegistry;
 
-/// Shorthand for the full plugin registry type with all 12 plugins registered.
+/// Shorthand for the full plugin registry type with all 13 plugins registered.
 pub type PluginSet = PluginRegistry;
 
-/// Register all 12 KDE Connect plugins and return the registry.
+/// Register all 13 KDE Connect plugins and return the registry.
 pub fn register_all() -> PluginSet {
     let mut registry = PluginRegistry::new();
     registry.register(battery::BatteryPlugin::new());
@@ -30,6 +31,7 @@ pub fn register_all() -> PluginSet {
     registry.register(monitors::MonitorsPlugin);
     registry.register(windows::WindowsPlugin);
     registry.register(siren::SirenPlugin::new());
+    registry.register(notification_reply::NotificationReplyPlugin::default());
     registry.register(pair::PairPlugin::default());
     registry
 }

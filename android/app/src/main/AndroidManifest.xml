@@ -45,6 +45,10 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Maintains the user-initiated remote-desktop QUIC video/input session while the app is backgrounded" />
         </service>
+
+        <receiver
+            android:name=".ui.NotificationReplyReceiver"
+            android:exported="false" />
     </application>
 
 </manifest>

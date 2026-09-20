@@ -670,6 +670,39 @@ pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativePairedSe
     to_jstring(&mut env, json)
 }
 
+/// Drain queued desktop notifications as a JSON array
+/// (`[{"id","app","title","text","source"}, …]`).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeTakePendingNotifications(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+) -> jstring {
+    let json = envelope(Ok(api::take_pending_notifications()));
+    to_jstring(&mut env, json)
+}
+
+/// Reply to a desktop notification from the phone (Tier-2 #11c).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeSendNotificationReply(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    address: JString<'_>,
+    port: jint,
+    id: JString<'_>,
+    text: JString<'_>,
+) -> jstring {
+    let address = jstring_to_string(&mut env, &address);
+    let id = jstring_to_string(&mut env, &id);
+    let text = jstring_to_string(&mut env, &text);
+    let json = envelope_unit(RUNTIME.block_on(api::send_notification_reply(
+        address,
+        port as u16,
+        id,
+        text,
+    )));
+    to_jstring(&mut env, json)
+}
+
 /// Hyprland window list (R3#7 picker):
 /// `{"ok": [[WindowInfoDto, ...], activeAddress, screenBoxOrNull]}` where
 /// `screenBoxOrNull` is the monitor layout `[x, y, w, h]` in desktop coords.

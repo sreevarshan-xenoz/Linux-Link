@@ -85,6 +85,13 @@ object RustCore {
     private external fun nativePairWithPin(address: String, port: Int, pin: String): String
     private external fun nativeCheckPairResult(waitSecs: Long): String
     private external fun nativePairedServers(): String
+    private external fun nativeTakePendingNotifications(): String
+    private external fun nativeSendNotificationReply(
+        address: String,
+        port: Int,
+        id: String,
+        text: String,
+    ): String
     private external fun nativeGetMonitorCount(address: String, port: Int): String
     private external fun nativeGetWindows(address: String, port: Int): String
     private external fun nativeSendWindowCrop(
@@ -395,6 +402,33 @@ object RustCore {
     }.getOrDefault(emptyList())
 
     /**
+     * Drain desktop notifications queued by the bridge control reader
+     * (Tier-2 #11c). Each has a stable `id` used for reply correlation and
+     * dedup; the queue is emptied on return.
+     */
+    fun takePendingNotifications(): List<DesktopNotification> = runCatching {
+        val arr = org.json.JSONArray(envelope(nativeTakePendingNotifications()).getOrThrow())
+        List(arr.length()) { i ->
+            val o = arr.getJSONObject(i)
+            DesktopNotification(
+                id = o.optString("id"),
+                app = o.optString("app"),
+                title = o.optString("title"),
+                text = o.optString("text"),
+                source = o.optString("source"),
+            )
+        }
+    }.getOrDefault(emptyList())
+
+    /** Reply to a desktop notification from the phone (Tier-2 #11c). */
+    fun sendNotificationReply(
+        address: String,
+        port: Int,
+        id: String,
+        text: String,
+    ): Result<Unit> = envelope(nativeSendNotificationReply(address, port, id, text)).map { }
+
+    /**
      * Hyprland window list (R3#7 picker). Payload JSON:
      * `[ [ {address,title,class,at:[x,y],local_at:[x,y],size:[w,h],monitor_size:[w,h],monitor,fullscreen,workspace{id,name},active}, … ], activeAddress, screenBox ]`
      * where `screenBox` is the monitor layout `[x,y,w,h]` in desktop coords
@@ -469,3 +503,12 @@ object RustCore {
         List(arr.length()) { arr.getString(it) }
     }.getOrDefault(emptyList())
 }
+
+/** One desktop notification pushed over the control channel (Tier-2 #11c). */
+data class DesktopNotification(
+    val id: String,
+    val app: String,
+    val title: String,
+    val text: String,
+    val source: String,
+)

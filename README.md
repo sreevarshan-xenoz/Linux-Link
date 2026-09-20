@@ -45,6 +45,9 @@ Linux Link is a **pure Rust** remote desktop solution built specifically for Lin
 - **File transfer** — send files from Android to Linux via KDE Share protocol
 - **Remote file browsing** — browse and navigate Linux directories from Android
 - **Notifications** — receive Android notifications on your Linux desktop
+- **Notification reply** — answer desktop notifications from the phone; the desktop records the reply, copies it to the clipboard and shows a confirmation
+- **Find my device** — ring the desktop from the phone, or ring the phone from the desktop
+- **PIN pairing** — 6-digit PIN pairing (shown on the desktop or printed by `linux-link pair`); unpaired control connections are locked out unless `pairing_required = false`
 - **Input control** — remote mouse/keyboard via trackpad gestures
 - **Battery info** — monitor Android device battery from Linux
 - **Presenter mode** — play/pause/next/previous from Android
