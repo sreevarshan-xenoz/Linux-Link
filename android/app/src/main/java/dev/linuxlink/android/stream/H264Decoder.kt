@@ -17,15 +17,27 @@ import java.util.concurrent.atomic.AtomicBoolean
  * Annex-B NAL units with in-band SPS/PPS (the encoder keyframes carry them),
  * so buffers are fed to MediaCodec as-is; the decoder signals the real format
  * on the first output buffer.
+ *
+ * [width]/[height] are only the initial guess — window-crop rebuilds the
+ * server encoder at the window's resolution mid-session, so when
+ * INFO_OUTPUT_FORMAT_CHANGED reports different dimensions the codec is
+ * reconfigured and the cached keyframe re-seeds it (the server always emits
+ * an IDR as the first packet after a rebuild). The new size is announced via
+ * [onVideoSize] so the UI can re-layout.
  */
 class H264Decoder(
     private val surface: Surface,
-    private val width: Int,
-    private val height: Int,
+    width: Int,
+    height: Int,
+    private val onVideoSize: ((Int, Int) -> Unit)? = null,
 ) {
     val running = AtomicBoolean(false)
 
     private var codec: MediaCodec? = null
+    private var configW = width
+    private var configH = height
+    /** Latest keyframe bytes, kept for reconfigure re-seeding. */
+    private var lastKeyframe: ByteArray? = null
 
     /**
      * Configure MediaCodec for real-time, minimum-latency decode.
@@ -35,7 +47,10 @@ class H264Decoder(
      * B-frame-free encoder output (R2#1) is what actually keeps `LOW_LATENCY`
      * honored end to end.
      */
-    private fun buildFormat(): MediaFormat {
+    private fun buildFormat(
+        width: Int,
+        height: Int,
+    ): MediaFormat {
         val format = MediaFormat.createVideoFormat(MIME, width, height)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
@@ -55,7 +70,7 @@ class H264Decoder(
         val mediaCodec = MediaCodec.createDecoderByType(MIME)
         codec = mediaCodec
         try {
-            mediaCodec.configure(buildFormat(), surface, null, 0)
+            mediaCodec.configure(buildFormat(configW, configH), surface, null, 0)
             mediaCodec.start()
             running.set(true)
 
@@ -86,6 +101,7 @@ class H264Decoder(
         data: ByteArray,
         isKeyframe: Boolean,
     ) {
+        if (isKeyframe) lastKeyframe = data.copyOf()
         val inIndex = codec.dequeueInputBuffer(INPUT_TIMEOUT_US)
         if (inIndex < 0) return
         val inputBuffer: ByteBuffer = codec.getInputBuffer(inIndex) ?: run {
@@ -101,13 +117,59 @@ class H264Decoder(
         drain(codec, info)
     }
 
-    private fun drain(codec: MediaCodec, info: MediaCodec.BufferInfo) {
+    private fun drain(
+        codec: MediaCodec,
+        info: MediaCodec.BufferInfo,
+    ) {
         var outIndex = codec.dequeueOutputBuffer(info, 0)
         while (outIndex >= 0) {
             // Render to the surface as soon as a frame is available.
             codec.releaseOutputBuffer(outIndex, true)
             outIndex = codec.dequeueOutputBuffer(info, 0)
         }
+        if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED && maybeReconfigure(codec)) {
+            return // reconfigure re-fed the stream; resume draining next frame
+        }
+    }
+
+    /**
+     * Reconfigure the codec when the signaled format size differs from what
+     * it was configured with. Returns true if a reconfigure happened (the
+     * caller must not consume output from the old run).
+     */
+    private fun maybeReconfigure(codec: MediaCodec): Boolean {
+        val format = codec.outputFormat
+        val w = format.getInteger(MediaFormat.KEY_WIDTH)
+        val h = format.getInteger(MediaFormat.KEY_HEIGHT)
+        if (w <= 0 || h <= 0 || (w == configW && h == configH)) return false
+        configW = w
+        configH = h
+        runCatching {
+            codec.stop()
+            codec.configure(buildFormat(w, h), surface, null, 0)
+            codec.start()
+        }.onFailure { return true }
+        onVideoSize?.invoke(w, h)
+        // Re-seed: the decoder needs an IDR to start the new run.
+        lastKeyframe?.let { seed ->
+            runCatching {
+                val inIndex = codec.dequeueInputBuffer(INPUT_TIMEOUT_US)
+                if (inIndex >= 0) {
+                    codec.getInputBuffer(inIndex)?.let { buf ->
+                        buf.clear()
+                        buf.put(seed)
+                    }
+                    codec.queueInputBuffer(
+                        inIndex,
+                        0,
+                        seed.size,
+                        System.nanoTime() / 1000,
+                        MediaCodec.BUFFER_FLAG_KEY_FRAME,
+                    )
+                }
+            }
+        }
+        return true
     }
 
     companion object {

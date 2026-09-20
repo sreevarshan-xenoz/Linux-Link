@@ -51,6 +51,11 @@ fun RemoteScreen(
     var mode by remember { mutableStateOf(InputMode.DirectTouch) }
     var clipboardSync by remember { mutableStateOf(true) }
     var showHistory by remember { mutableStateOf(false) }
+    // R3#7 single-window streaming: the picked window + the layout box the
+    // picker reported (needed to remap direct-touch through the crop).
+    var cropWindow by remember { mutableStateOf<DesktopWindow?>(null) }
+    var cropScreen by remember { mutableStateOf<IntArray?>(null) }
+    var showPicker by remember { mutableStateOf(false) }
 
     ClipboardSyncEffect(address, controlPort, enabled = clipboardSync)
 
@@ -82,6 +87,7 @@ fun RemoteScreen(
             width = metrics.widthPixels,
             height = metrics.heightPixels,
             inputMode = mode,
+            mapping = cropWindow?.desktopMapping(cropScreen),
             modifier = Modifier.fillMaxSize(),
         )
 
@@ -119,6 +125,11 @@ fun RemoteScreen(
                 TextButton(onClick = { showHistory = true }) {
                     Text("History", color = Color.White)
                 }
+                TextButton(onClick = { showPicker = true }) {
+                    val label =
+                        if (cropWindow == null) "Window: all" else "Window: ${(cropWindow?.title ?: "").take(18)}"
+                    Text(label, color = Color.White)
+                }
             }
             ShortcutBar(
                 address = address,
@@ -137,6 +148,31 @@ fun RemoteScreen(
                     RustCore.sendClipboard(address, controlPort, text)
                 }
                 showHistory = false
+            },
+        )
+    }
+
+    if (showPicker) {
+        WindowPickerSheet(
+            address = address,
+            controlPort = controlPort,
+            selected = cropWindow,
+            onDismiss = { showPicker = false },
+            onPick = { w, screen ->
+                // Crop rect is monitor-local capture space; the video is then
+                // re-encoded at the window's resolution.
+                cropWindow = w
+                cropScreen = screen
+                scope.launch(Dispatchers.IO) {
+                    RustCore.sendWindowCrop(w.localAt[0], w.localAt[1], w.size[0], w.size[1])
+                }
+                showPicker = false
+            },
+            onFullDesktop = {
+                cropWindow = null
+                cropScreen = null
+                scope.launch(Dispatchers.IO) { RustCore.clearWindowCrop() }
+                showPicker = false
             },
         )
     }

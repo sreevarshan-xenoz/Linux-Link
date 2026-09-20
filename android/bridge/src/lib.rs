@@ -422,6 +422,27 @@ pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeSendMous
     to_jstring(&mut env, json)
 }
 
+/// Restrict capture to a monitor-local window rect (R3#7 window crop);
+/// zero width/height clears the crop.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeSendWindowCrop(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    x: jint,
+    y: jint,
+    width: jint,
+    height: jint,
+) -> jstring {
+    let nonneg = |v: jint| v.max(0) as u32;
+    let json = envelope_unit(RUNTIME.block_on(api::send_window_crop(
+        nonneg(x),
+        nonneg(y),
+        nonneg(width),
+        nonneg(height),
+    )));
+    to_jstring(&mut env, json)
+}
+
 /// Send a keyboard event. `key_code` is an Android KeyCode; the bridge maps
 /// it to evdev internally. `text` carries the char for UTF-8 input paths.
 #[unsafe(no_mangle)]
@@ -522,6 +543,21 @@ pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeGetMonit
 ) -> jstring {
     let address = jstring_to_string(&mut env, &address);
     let json = envelope(RUNTIME.block_on(api::get_monitor_count(address, port as u16)));
+    to_jstring(&mut env, json)
+}
+
+/// Hyprland window list (R3#7 picker):
+/// `{"ok": [[WindowInfoDto, ...], activeAddress, screenBoxOrNull]}` where
+/// `screenBoxOrNull` is the monitor layout `[x, y, w, h]` in desktop coords.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeGetWindows(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    address: JString<'_>,
+    port: jint,
+) -> jstring {
+    let address = jstring_to_string(&mut env, &address);
+    let json = envelope(RUNTIME.block_on(api::get_windows(address, port as u16)));
     to_jstring(&mut env, json)
 }
 

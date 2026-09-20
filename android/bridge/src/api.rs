@@ -1082,6 +1082,115 @@ pub async fn get_monitor_count(address: String, port: u16) -> Result<u32, String
     get_monitors(address, port).await.map(|m| m.len() as u32)
 }
 
+/// A desktop window reported by the server's Hyprland windows plugin
+/// (R3#7 picker). `at`/`size` are global desktop coordinates; `local_at` is
+/// the window origin within its monitor — the space `InputPacket::WindowCrop`
+/// crop rects are expressed in (the capture stream is monitor-local).
+#[derive(serde::Deserialize, serde::Serialize)]
+pub struct WindowInfoDto {
+    pub address: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(rename = "class", default)]
+    pub class: String,
+    #[serde(default)]
+    pub at: [i32; 2],
+    #[serde(default)]
+    pub local_at: [i32; 2],
+    #[serde(default)]
+    pub size: [i32; 2],
+    /// Size of the monitor this window lives on `[w, h]`.
+    #[serde(default)]
+    pub monitor_size: [i32; 2],
+    #[serde(default)]
+    pub monitor: i32,
+    #[serde(default)]
+    pub fullscreen: u8,
+    #[serde(default)]
+    pub workspace: WorkspaceRefDto,
+    /// Set from the response's `activeAddress`, not per-window.
+    #[serde(default)]
+    pub active: bool,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Default)]
+pub struct WorkspaceRefDto {
+    #[serde(default)]
+    pub id: i32,
+    #[serde(default)]
+    pub name: String,
+}
+
+/// Enumerate the server's visible windows over the control channel.
+///
+/// Returns the list, the active window address, and the monitor layout
+/// bounding box `[x, y, w, h]` (desktop space normalized input spans;
+/// `None` if the server predates the field). `Err` on transport errors or
+/// when the server's plugin reports no Hyprland session.
+pub async fn get_windows(
+    address: String,
+    port: u16,
+) -> Result<(Vec<WindowInfoDto>, String, Option<[i32; 4]>), String> {
+    let conn_mgr = ConnectionManager::new(Duration::from_secs(5));
+    let identity = client_identity();
+    let stream = conn_mgr
+        .connect(&address, port, &identity)
+        .await
+        .map_err(|e| format!("Connection failed: {e}"))?;
+    let (reader, writer) = tokio::io::split(stream);
+    let sender = TcpDeviceSender::new(writer, address);
+
+    let request =
+        NetworkPacket::new("kdeconnect.linuxlink.windows").with_body(serde_json::json!({}));
+    sender
+        .send_packet(&request)
+        .await
+        .map_err(|e| format!("Failed to send window query: {e}"))?;
+
+    let mut lines = tokio::io::BufReader::new(reader).lines();
+    let line = tokio::time::timeout(Duration::from_secs(5), lines.next_line())
+        .await
+        .map_err(|_| "Timeout waiting for window response".to_string())?
+        .map_err(|e| format!("Read error: {e}"))?
+        .ok_or_else(|| "Connection closed by peer".to_string())?;
+
+    let packet = NetworkPacket::from_wire(&line)
+        .map_err(|e| format!("Failed to parse window response: {e}"))?;
+    if packet.packet_type != "kdeconnect.linuxlink.windows" {
+        return Err("Unexpected response packet type".to_string());
+    }
+    if !packet
+        .body
+        .get("available")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        return Err("Server is not running Hyprland (no window list)".to_string());
+    }
+
+    let active = packet
+        .body
+        .get("activeAddress")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let mut windows: Vec<WindowInfoDto> = packet
+        .body
+        .get("windows")
+        .cloned()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+    for w in &mut windows {
+        w.active = w.address == active;
+    }
+    let screen = packet
+        .body
+        .get("screen")
+        .cloned()
+        .and_then(|v| serde_json::from_value::<[i32; 4]>(v).ok());
+    Ok((windows, active, screen))
+}
+
 /// Execute a power management command on the remote server.
 /// Supported actions: "sleep", "shutdown", "restart", "hibernate".
 pub async fn send_power_command(address: String, port: u16, action: String) -> Result<(), String> {
@@ -1369,6 +1478,56 @@ pub async fn send_mouse_click(button: u8, pressed: bool) -> Result<(), String> {
         .ok_or_else(|| "Mouse click requires an active QUIC streaming connection".to_string())?;
 
     let data = InputPacket::MouseClick { button, pressed }.encode();
+    let mut send_stream = conn
+        .open_uni()
+        .await
+        .map_err(|e| format!("QUIC open stream: {e}"))?;
+    send_stream
+        .write_all(&data)
+        .await
+        .map_err(|e| format!("QUIC write: {e}"))?;
+    send_stream
+        .finish()
+        .map_err(|e| format!("QUIC finish: {e}"))?;
+    Ok(())
+}
+
+/// Restrict the server's capture to a window rect (R3#7 single-window
+/// streaming). The rect is in monitor-local capture coordinates
+/// (`WindowInfoDto::local_at` + `size`); zero width or height clears the
+/// crop and restores the full desktop. The server rebuilds the encoder at
+/// the cropped resolution, so the video stream size follows the window.
+/// QUIC-only, like `send_mouse_abs`.
+pub async fn send_window_crop(x: u32, y: u32, width: u32, height: u32) -> Result<(), String> {
+    let quic_conn = {
+        let guard = (*STREAMING_HANDLE).lock().await;
+        if let Some(h) = guard.as_ref() {
+            Some(h.connection.clone())
+        } else {
+            let v2_guard = (*crate::V2_HANDLE).lock().await;
+            v2_guard.as_ref().map(|h| h.connection.clone())
+        }
+    };
+
+    let conn = quic_conn
+        .ok_or_else(|| "Window crop requires an active QUIC streaming connection".to_string())?;
+
+    let packet = if width == 0 || height == 0 {
+        InputPacket::WindowCrop {
+            x: None,
+            y: None,
+            width: None,
+            height: None,
+        }
+    } else {
+        InputPacket::WindowCrop {
+            x: Some(x),
+            y: Some(y),
+            width: Some(width),
+            height: Some(height),
+        }
+    };
+    let data = packet.encode();
     let mut send_stream = conn
         .open_uni()
         .await

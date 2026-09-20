@@ -5,10 +5,12 @@ import android.view.SurfaceView
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -16,6 +18,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.viewinterop.AndroidView
 import dev.linuxlink.android.bridge.RustCore
 import kotlinx.coroutines.CoroutineScope
@@ -23,6 +28,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlin.math.hypot
 import kotlin.math.roundToInt
+
+/** Normalized absolute-input axis range shared with the wire protocol. */
+private const val NORM_RANGE = 65535
 
 /**
  * How touch on the video surface is translated into remote input.
@@ -33,6 +41,35 @@ enum class InputMode {
     DirectTouch,
     Trackpad,
 }
+
+/**
+ * Where the video frame sits in desktop space, for crop-accurate direct
+ * touch. The server normalizes absolute input across the whole monitor
+ * layout (`screen*`), but a window-cropped video covers only part of it:
+ * `desktop*` is the desktop rect the video shows (the selected window's
+ * global geometry), and the video's own encoded size supplies the scale.
+ * Built from the windows payload in [dev.linuxlink.android.ui.WindowPickerSheet].
+ */
+data class DesktopMapping(
+    val desktopX: Int,
+    val desktopY: Int,
+    val desktopW: Int,
+    val desktopH: Int,
+    val screenX: Int,
+    val screenY: Int,
+    val screenW: Int,
+    val screenH: Int,
+)
+
+/** Letterboxed placement of the video inside the composable container (px). */
+private data class VideoLayout(
+    val offsetX: Float,
+    val offsetY: Float,
+    val displayW: Float,
+    val displayH: Float,
+    val videoW: Int,
+    val videoH: Int,
+)
 
 /**
  * Pinch-zoom transform over the video surface (Tier 1 #6). The whole desktop
@@ -90,24 +127,54 @@ fun RemoteDesktopView(
     width: Int,
     height: Int,
     inputMode: InputMode = InputMode.DirectTouch,
+    mapping: DesktopMapping? = null,
     modifier: Modifier = Modifier,
 ) {
     val decoderHost = remember { DecoderHost() }
     val zoom = remember { ViewportZoom() }
+    // Real encoded frame size, reported by the decoder (the initial width/
+    // height are only a guess until the first SPS).
+    var videoSize by remember { mutableStateOf<IntSize?>(null) }
     // Pinch-to-zoom only in DirectTouch: Trackpad already owns two-finger
     // gestures for remote scrolling.
     val zoomGesturesEnabled = inputMode == InputMode.DirectTouch
 
-    Box(modifier) {
+    BoxWithConstraints(modifier) {
+        val containerW = constraints.maxWidth.toFloat()
+        val containerH = constraints.maxHeight.toFloat()
+        val videoLayout =
+            remember(containerW, containerH, videoSize) {
+                val vw = videoSize?.width ?: containerW.toInt()
+                val vh = videoSize?.height ?: containerH.toInt()
+                if (vw <= 0 || vh <= 0 || containerW <= 0f || containerH <= 0f) {
+                    VideoLayout(0f, 0f, containerW, containerH, containerW.toInt().coerceAtLeast(1), containerH.toInt().coerceAtLeast(1))
+                } else {
+                    val fit = minOf(containerW / vw, containerH / vh)
+                    val dw = vw * fit
+                    val dh = vh * fit
+                    VideoLayout((containerW - dw) / 2f, (containerH - dh) / 2f, dw, dh, vw, vh)
+                }
+            }
         Box(
-            modifier = Modifier
-                .matchParentSize()
-                .graphicsLayer {
-                    scaleX = zoom.scale
-                    scaleY = zoom.scale
-                    translationX = zoom.offsetX
-                    translationY = zoom.offsetY
-                },
+            modifier =
+                Modifier
+                    .layout { measurable, constraints ->
+                        val w = videoLayout.displayW.roundToInt().coerceAtLeast(1)
+                        val h = videoLayout.displayH.roundToInt().coerceAtLeast(1)
+                        val placeable = measurable.measure(Constraints.fixed(w, h))
+                        layout(constraints.maxWidth, constraints.maxHeight) {
+                            placeable.place(
+                                videoLayout.offsetX.roundToInt(),
+                                videoLayout.offsetY.roundToInt(),
+                            )
+                        }
+                    }
+                    .graphicsLayer {
+                        scaleX = zoom.scale
+                        scaleY = zoom.scale
+                        translationX = zoom.offsetX
+                        translationY = zoom.offsetY
+                    },
         ) {
             AndroidView(
                 factory = { context ->
@@ -116,7 +183,13 @@ fun RemoteDesktopView(
                             object : android.view.SurfaceHolder.Callback {
                                 override fun surfaceCreated(holder: android.view.SurfaceHolder) {
                                     declareFrameRate(holder, display)
-                                    decoderHost.start(holder.surface, address, port, width, height)
+                                    decoderHost.start(
+                                        holder.surface,
+                                        address,
+                                        port,
+                                        width,
+                                        height,
+                                    ) { w, h -> videoSize = IntSize(w, h) }
                                 }
 
                                 override fun surfaceChanged(
@@ -143,6 +216,8 @@ fun RemoteDesktopView(
             port = port,
             mode = inputMode,
             zoom = zoom,
+            layout = videoLayout,
+            mapping = mapping,
             modifier = Modifier
                 .matchParentSize()
                 .pointerInput(zoomGesturesEnabled) {
@@ -213,6 +288,8 @@ private fun InputOverlay(
     port: Int,
     mode: InputMode,
     zoom: ViewportZoom,
+    layout: VideoLayout,
+    mapping: DesktopMapping?,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -221,12 +298,30 @@ private fun InputOverlay(
     fun send(block: () -> Unit) = scope.launch(ordered) { block() }
 
     Box(
-        modifier.pointerInput(address to port to mode) {
+        modifier.pointerInput(address to port to mode to layout to mapping) {
             fun sendAbs(pos: Offset) {
+                // Viewport -> scale-1 content space -> letterboxed video
+                // pixel -> desktop coordinate -> normalized axis value.
+                // Without the video-pixel step a touch outside the fitted
+                // image (or with a crop active) hit the wrong desktop point.
                 val content = zoom.toContent(pos)
-                val x = RustCore.normalizedCoord(content.x, size.width)
-                val y = RustCore.normalizedCoord(content.y, size.height)
-                send { RustCore.sendMouseAbs(x, y) }
+                val vx = (content.x - layout.offsetX) / layout.displayW.coerceAtLeast(1f) * layout.videoW
+                val vy = (content.y - layout.offsetY) / layout.displayH.coerceAtLeast(1f) * layout.videoH
+                val xNorm: Int
+                val yNorm: Int
+                val m = mapping
+                if (m != null && m.screenW > 0 && m.screenH > 0 && layout.videoW > 0 && layout.videoH > 0) {
+                    val sx = m.desktopW.toFloat() / layout.videoW
+                    val sy = m.desktopH.toFloat() / layout.videoH
+                    val dx = m.desktopX + vx * sx - m.screenX
+                    val dy = m.desktopY + vy * sy - m.screenY
+                    xNorm = (dx / m.screenW * NORM_RANGE).roundToInt().coerceIn(0, NORM_RANGE)
+                    yNorm = (dy / m.screenH * NORM_RANGE).roundToInt().coerceIn(0, NORM_RANGE)
+                } else {
+                    xNorm = RustCore.normalizedCoord(vx.coerceIn(0f, layout.videoW.toFloat()), layout.videoW)
+                    yNorm = RustCore.normalizedCoord(vy.coerceIn(0f, layout.videoH.toFloat()), layout.videoH)
+                }
+                send { RustCore.sendMouseAbs(xNorm, yNorm) }
             }
 
             awaitEachGesture {
@@ -286,7 +381,12 @@ private fun InputOverlay(
                             }
                             val pos = change.position
                             // Divide by zoom so cursor travel matches the
-                            // on-screen distance the finger covered.
+                            // on-screen distance the finger covered, then
+                            // convert view px to video px (letterbox fit may
+                            // scale them apart; relative motion is unaffected
+                            // by the letterbox offset itself).
+                            val travel =
+                                if (layout.displayW > 0f) layout.videoW / layout.displayW else 1f
                             val delta = (pos - last) / zoom.scale
                             last = pos
                             dragged += delta.getDistance()
@@ -309,8 +409,8 @@ private fun InputOverlay(
                                     }
                                 }
                             } else if (dragged > viewConfiguration.touchSlop) {
-                                val dx = delta.x.roundToInt()
-                                val dy = delta.y.roundToInt()
+                                val dx = (delta.x * travel).roundToInt()
+                                val dy = (delta.y * travel).roundToInt()
                                 if (dx != 0 || dy != 0) {
                                     send {
                                         RustCore.sendMouseEvent(
@@ -350,9 +450,16 @@ private class DecoderHost {
     @Volatile
     private var thread: Thread? = null
 
-    fun start(surface: android.view.Surface, address: String, port: Int, width: Int, height: Int) {
+    fun start(
+        surface: android.view.Surface,
+        address: String,
+        port: Int,
+        width: Int,
+        height: Int,
+        onVideoSize: (Int, Int) -> Unit,
+    ) {
         if (thread != null) return
-        val active = H264Decoder(surface, width, height)
+        val active = H264Decoder(surface, width, height, onVideoSize)
         decoder = active
         thread = Thread({
             // The Rust bridge blocks, so connect + drain share this thread.

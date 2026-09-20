@@ -73,6 +73,13 @@ object RustCore {
     private external fun nativeListRemoteFiles(address: String, port: Int, remotePath: String): String
     private external fun nativeGetMonitors(address: String, port: Int): String
     private external fun nativeGetMonitorCount(address: String, port: Int): String
+    private external fun nativeGetWindows(address: String, port: Int): String
+    private external fun nativeSendWindowCrop(
+        x: Int,
+        y: Int,
+        width: Int,
+        height: Int,
+    ): String
     private external fun nativeSendPowerCommand(address: String, port: Int, action: String): String
     private external fun nativeExecuteRemoteCommand(
         address: String,
@@ -309,6 +316,32 @@ object RustCore {
 
     fun getMonitorCount(address: String, port: Int): Result<String> =
         envelope(nativeGetMonitorCount(address, port))
+
+    /**
+     * Hyprland window list (R3#7 picker). Payload JSON:
+     * `[ [ {address,title,class,at:[x,y],local_at:[x,y],size:[w,h],monitor_size:[w,h],monitor,fullscreen,workspace{id,name},active}, … ], activeAddress, screenBox ]`
+     * where `screenBox` is the monitor layout `[x,y,w,h]` in desktop coords
+     * (or null on older servers). `local_at` is the crop-rect origin in the
+     * monitor's own coordinate space; `at` stays global for input remapping.
+     * Errors when the server has no Hyprland IPC.
+     */
+    fun getWindows(address: String, port: Int): Result<String> =
+        envelope(nativeGetWindows(address, port))
+
+    /**
+     * Restrict the server's capture to a monitor-local rect (single-window
+     * streaming, R3#7): use a window's `local_at` + `size`. The video stream
+     * is re-encoded at the cropped resolution. Zero width/height clears the
+     * crop and restores the full desktop. QUIC-only.
+     */
+    fun sendWindowCrop(
+        x: Int,
+        y: Int,
+        width: Int,
+        height: Int,
+    ): Result<Unit> = envelope(nativeSendWindowCrop(x, y, width, height)).map { }
+
+    fun clearWindowCrop(): Result<Unit> = sendWindowCrop(0, 0, 0, 0)
 
     fun sendPowerCommand(address: String, port: Int, action: String): Result<Unit> =
         envelope(nativeSendPowerCommand(address, port, action)).map { }
