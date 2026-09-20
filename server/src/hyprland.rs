@@ -69,6 +69,23 @@ pub struct HyprWorkspaceRef {
     pub name: String,
 }
 
+/// A monitor as reported by `j/monitors`. Array position is the ID windows
+/// reference via `HyprWindow::monitor`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct HyprMonitor {
+    #[serde(default)]
+    pub name: String,
+    /// Global layout origin of this monitor.
+    #[serde(default)]
+    pub x: i32,
+    #[serde(default)]
+    pub y: i32,
+    #[serde(default)]
+    pub width: i32,
+    #[serde(default)]
+    pub height: i32,
+}
+
 /// One line from socket2: `eventname>>payload`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HyprEvent {
@@ -175,6 +192,12 @@ impl HyprlandIpc {
             .collect())
     }
 
+    /// Monitors in layout order — array position is the ID referenced by
+    /// `HyprWindow::monitor`.
+    pub async fn monitors(&self) -> Result<Vec<HyprMonitor>> {
+        self.json("j/monitors").await
+    }
+
     /// Spawn a task streaming socket2 events (activewindow, openwindow,
     /// movewindow, …) into `rx`. Ends when the connection closes (Hyprland
     /// quit) — reconnection is a follow-up; consumers treat channel close as
@@ -255,6 +278,19 @@ mod tests {
         assert_eq!(w.address, "0x1");
         assert!(!w.mapped);
         assert_eq!(w.size, [0, 0]);
+    }
+
+    #[test]
+    fn deserialize_monitors_layout() {
+        let json = r#"[
+            {"name":"eDP-1","x":0,"y":0,"width":1920,"height":1200,"reserved":99},
+            {"name":"HDMI-A-1","x":1920,"y":-100,"width":2560,"height":1440}
+        ]"#;
+        let monitors: Vec<HyprMonitor> = serde_json::from_str(json).unwrap();
+        assert_eq!(monitors.len(), 2);
+        assert_eq!(monitors[1].x, 1920);
+        assert_eq!(monitors[1].y, -100);
+        assert_eq!(monitors[1].width, 2560);
     }
 
     // Live-IPC tests run only on a Hyprland session (skipped silently

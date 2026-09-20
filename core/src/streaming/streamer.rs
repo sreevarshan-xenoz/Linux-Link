@@ -181,6 +181,12 @@ impl StreamingServer {
         // sequence gap. The encode task consumes it and forces a keyframe.
         let (keyframe_tx, mut keyframe_rx) = watch::channel(0u64);
 
+        // Window crop: set by the monitor task from client WindowCrop packets.
+        // The encode task applies the rect to each frame and rebuilds the
+        // encoder at the crop resolution (so the negotiated window size
+        // actually reaches the pipeline, not just the session config).
+        let (crop_tx, crop_rx) = watch::channel(None::<(u32, u32, u32, u32)>);
+
         let mut tasks = JoinSet::new();
 
         // Task 1: Screen capture (runs on dedicated OS thread internally)
@@ -209,8 +215,8 @@ impl StreamingServer {
 
         let mut encoder =
             VideoEncoder::new(encoder_config).context("Failed to create video encoder")?;
-
-        info!("Video encoder started");
+        let base_config = self.config.clone();
+        let encode_crop_rx = crop_rx.clone();
 
         // Spawn encoding task — reads frames, produces packets
         let encode_cancel = cancel.clone();
@@ -219,6 +225,8 @@ impl StreamingServer {
             info!("Encoding task started");
             let mut packets_encoded = 0u64;
             let mut frames_dropped = 0u64;
+            let mut crop: Option<(u32, u32, u32, u32)> = None;
+            let mut crop_rx = encode_crop_rx;
 
             loop {
                 tokio::select! {
@@ -235,6 +243,23 @@ impl StreamingServer {
                         encoder.request_keyframe();
                     }
 
+                    // Window crop changes. Size changes are handled by the
+                    // frame path (encoder must match incoming frame dims);
+                    // same-size rect moves only need a fresh IDR.
+                    Ok(()) = crop_rx.changed() => {
+                        let new = *crop_rx.borrow_and_update();
+                        if new != crop {
+                            info!(?new, "Window crop updated");
+                            if matches!(
+                                (new, crop),
+                                (Some((_, _, w, h)), Some((_, _, w2, h2))) if w == w2 && h == h2
+                            ) {
+                                encoder.request_keyframe();
+                            }
+                            crop = new;
+                        }
+                    }
+
                     // Check for bitrate updates
                     Ok(()) = encoder_bitrate_rx.changed() => {
                         let current_bitrate = *encoder_bitrate_rx.borrow();
@@ -242,7 +267,44 @@ impl StreamingServer {
                     }
 
                     // Process next frame
-                    Some(frame) = frame_rx.recv() => {
+                    Some(mut frame) = frame_rx.recv() => {
+                        if let Some((cx, cy, cw, ch)) = crop
+                            && !frame.crop_region(cx, cy, cw, ch)
+                        {
+                            // Crop rect lies outside the captured frame
+                            // (stale window geometry) — drop, don't show
+                            // the wrong region.
+                            frames_dropped += 1;
+                            continue;
+                        }
+
+                        // Adopt the frame resolution into the encoder: the
+                        // crop size (or the real capture size) must be what
+                        // FFmpeg was configured with, not the session default.
+                        if frame.width != encoder.config().width
+                            || frame.height != encoder.config().height
+                        {
+                            let mut cfg = base_config.clone();
+                            cfg.width = frame.width;
+                            cfg.height = frame.height;
+                            cfg.bitrate_bps = *encoder_bitrate_rx.borrow_and_update();
+                            match VideoEncoder::new(cfg) {
+                                Ok(e) => {
+                                    info!(
+                                        width = frame.width,
+                                        height = frame.height,
+                                        "Encoder rebuilt at frame resolution"
+                                    );
+                                    encoder = e;
+                                }
+                                Err(e) => {
+                                    error!(error = %e, "Failed to rebuild encoder; ending session");
+                                    encode_cancel.cancel();
+                                    break;
+                                }
+                            }
+                        }
+
                         match encoder.encode_frame(&frame) {
                             Ok(Some(packet)) => {
                                 packets_encoded += 1;
@@ -430,6 +492,7 @@ impl StreamingServer {
         let monitor_cancel = cancel.clone();
         let input_tx = self.input_tx.clone();
         let keyframe_req_tx = keyframe_tx.clone();
+        let monitor_crop_tx = crop_tx;
         let monitor_span = tracing::info_span!("connection_monitor");
         tasks.spawn(async move {
             info!("Connection monitor started");
@@ -467,6 +530,15 @@ impl StreamingServer {
                                                     debug!("Client requested IDR (sequence gap)");
                                                     keyframe_req_tx
                                                         .send_modify(|n| *n = n.wrapping_add(1));
+                                                    continue;
+                                                }
+                                                // Window crop is control-plane too:
+                                                // drive the capture-region/encoder
+                                                // resolution, don't inject input.
+                                                if matches!(packet, InputPacket::WindowCrop { .. }) {
+                                                    let rect = packet.crop_rect();
+                                                    info!(?rect, "Client set window crop");
+                                                    let _ = monitor_crop_tx.send(rect);
                                                     continue;
                                                 }
                                                 // Forward to input injector via channel

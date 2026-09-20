@@ -237,6 +237,42 @@ pub struct VideoFrame {
     pub timestamp: std::time::Instant,
 }
 
+impl VideoFrame {
+    /// Crop this frame in place to `x, y, width, height`, repacking BGRA rows.
+    ///
+    /// The rectangle is clamped to the frame bounds and the size is rounded
+    /// down to even values (H.264 4:2:0 chroma requires even dimensions).
+    /// Returns `false` (frame untouched) when the clamped rect is empty.
+    pub fn crop_region(&mut self, x: u32, y: u32, width: u32, height: u32) -> bool {
+        let x = x.min(self.width.saturating_sub(1));
+        let y = y.min(self.height.saturating_sub(1));
+        let w = width.min(self.width - x) & !1;
+        let h = height.min(self.height - y) & !1;
+        if w == 0 || h == 0 {
+            return false;
+        }
+
+        let bpp = 4usize; // BGRA from PipeWire/X11 capture
+        let src_stride = self.stride as usize;
+        let dst_stride = (w as usize) * bpp;
+        let mut data = Vec::with_capacity(dst_stride * h as usize);
+        for row in 0..h as usize {
+            let start = (y as usize + row) * src_stride + (x as usize) * bpp;
+            let end = start + dst_stride;
+            if end > self.data.len() {
+                return false;
+            }
+            data.extend_from_slice(&self.data[start..end]);
+        }
+
+        self.data = data;
+        self.width = w;
+        self.height = h;
+        self.stride = w * 4;
+        true
+    }
+}
+
 /// Encoded video packet ready for transmission
 #[derive(Debug)]
 pub struct EncodedPacket {
@@ -248,4 +284,81 @@ pub struct EncodedPacket {
     pub timestamp: std::time::Instant,
     /// Sequence number for ordering
     pub sequence: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Instant;
+
+    /// 8x6 BGRA frame, pixel (px,py) = [px, py, 0, 255] per channel group,
+    /// with a padded stride to exercise row repacking.
+    fn pattern_frame() -> VideoFrame {
+        let (w, h, stride) = (8u32, 6u32, 8 * 4 + 16u32);
+        let mut data = vec![0u8; (stride * h) as usize];
+        for py in 0..h as usize {
+            for px in 0..w as usize {
+                let o = py * stride as usize + px * 4;
+                data[o] = px as u8;
+                data[o + 1] = py as u8;
+                data[o + 3] = 255;
+            }
+        }
+        VideoFrame {
+            data,
+            width: w,
+            height: h,
+            stride,
+            timestamp: Instant::now(),
+        }
+    }
+
+    fn px(frame: &VideoFrame, x: usize, y: usize) -> (u8, u8) {
+        let o = y * frame.stride as usize + x * 4;
+        (frame.data[o], frame.data[o + 1])
+    }
+
+    #[test]
+    fn crop_region_repacks_rows() {
+        let mut f = pattern_frame();
+        assert!(f.crop_region(2, 1, 4, 4));
+        assert_eq!((f.width, f.height, f.stride), (4, 4, 16));
+        assert_eq!(f.data.len(), 64);
+        assert_eq!(px(&f, 0, 0), (2, 1));
+        assert_eq!(px(&f, 3, 3), (5, 4));
+    }
+
+    #[test]
+    fn crop_region_rounds_odd_size_down_to_even() {
+        let mut f = pattern_frame();
+        assert!(f.crop_region(0, 0, 5, 5));
+        assert_eq!((f.width, f.height), (4, 4));
+    }
+
+    #[test]
+    fn crop_region_clamps_to_bounds() {
+        let mut f = pattern_frame();
+        assert!(f.crop_region(6, 4, 100, 100));
+        // Remaining 2x2 region rounds to even fine.
+        assert_eq!((f.width, f.height), (2, 2));
+        assert_eq!(px(&f, 0, 0), (6, 4));
+    }
+
+    #[test]
+    fn crop_region_rejects_degenerate_rects() {
+        let mut f = pattern_frame();
+        assert!(!f.crop_region(0, 0, 1, 4)); // rounds to width 0
+        assert_eq!((f.width, f.height), (8, 6)); // untouched
+        let mut f2 = pattern_frame();
+        assert!(!f2.crop_region(0, 0, 0, 0));
+        assert_eq!((f2.width, f2.height), (8, 6));
+    }
+
+    #[test]
+    fn crop_region_rejects_rect_beyond_buffer() {
+        // Stride promises more rows than the buffer holds.
+        let mut f = pattern_frame();
+        f.data.truncate(4 * 4 * 2);
+        assert!(!f.crop_region(0, 2, 4, 4));
+    }
 }

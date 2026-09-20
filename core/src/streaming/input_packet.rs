@@ -15,6 +15,7 @@ const TAG_TEXT: u8 = 4;
 const TAG_GAMEPAD: u8 = 5;
 const TAG_MOUSE_MOVE_ABS: u8 = 6;
 const TAG_REQUEST_KEYFRAME: u8 = 7;
+const TAG_WINDOW_CROP: u8 = 8;
 
 /// A compact binary input event for real-time remote control.
 ///
@@ -48,6 +49,15 @@ pub enum InputPacket {
     /// Client detected a video sequence gap and asks the server to emit an
     /// IDR frame immediately.
     RequestKeyframe,
+    /// Restrict the stream to a region of the desktop (window-crop mode).
+    /// `None` fields mean 0; an all-`None` packet clears the crop and
+    /// restores the full desktop.
+    WindowCrop {
+        x: Option<u32>,
+        y: Option<u32>,
+        width: Option<u32>,
+        height: Option<u32>,
+    },
     /// Gamepad state: 6 analog axes + 16-bit button bitmask.
     Gamepad {
         /// Left stick X, Left stick Y, Right stick X, Right stick Y, L2, R2.
@@ -111,6 +121,39 @@ impl InputPacket {
                 buf
             }
             InputPacket::RequestKeyframe => vec![TAG_REQUEST_KEYFRAME],
+            InputPacket::WindowCrop {
+                x,
+                y,
+                width,
+                height,
+            } => {
+                let mut buf = Vec::with_capacity(17);
+                buf.push(TAG_WINDOW_CROP);
+                for v in [x, y, width, height] {
+                    buf.extend_from_slice(&v.unwrap_or(0).to_le_bytes());
+                }
+                buf
+            }
+        }
+    }
+
+    /// For a `WindowCrop` packet: the crop rectangle it establishes, or
+    /// `None` when the packet clears the crop (no width/height set).
+    /// Coordinates default to 0 when absent.
+    pub fn crop_rect(&self) -> Option<(u32, u32, u32, u32)> {
+        match self {
+            InputPacket::WindowCrop {
+                x,
+                y,
+                width,
+                height,
+            } => match (*width, *height) {
+                (Some(w), Some(h)) if w > 0 && h > 0 => {
+                    Some((x.unwrap_or(0), y.unwrap_or(0), w, h))
+                }
+                _ => None,
+            },
+            _ => None,
         }
     }
 
@@ -173,6 +216,23 @@ impl InputPacket {
             TAG_REQUEST_KEYFRAME => {
                 anyhow::ensure!(data.len() == 1, "RequestKeyframe packet must be 1 byte");
                 Ok(InputPacket::RequestKeyframe)
+            }
+            TAG_WINDOW_CROP => {
+                anyhow::ensure!(
+                    data.len() == 17,
+                    "WindowCrop packet must be 17 bytes, got {}",
+                    data.len()
+                );
+                let field = |i: usize| {
+                    let v = u32::from_le_bytes(data[1 + i * 4..5 + i * 4].try_into().unwrap());
+                    (v > 0).then_some(v)
+                };
+                Ok(InputPacket::WindowCrop {
+                    x: field(0),
+                    y: field(1),
+                    width: field(2),
+                    height: field(3),
+                })
             }
             _ => {
                 anyhow::bail!("Unknown input packet tag: {}", tag);
@@ -347,6 +407,67 @@ mod tests {
         // Trailing garbage must be rejected so a stats/input framing bug
         // is caught loudly instead of silently mis-parsed.
         assert!(InputPacket::decode(&[7, 0]).is_err());
+    }
+
+    #[test]
+    fn test_window_crop_roundtrip() {
+        let packet = InputPacket::WindowCrop {
+            x: Some(100),
+            y: Some(60),
+            width: Some(1280),
+            height: Some(720),
+        };
+        let data = packet.encode();
+        assert_eq!(data.len(), 17);
+        let decoded = InputPacket::decode(&data).unwrap();
+        assert_eq!(decoded.crop_rect(), Some((100, 60, 1280, 720)));
+    }
+
+    #[test]
+    fn test_window_crop_origin_and_clear() {
+        // x/y of 0 are legitimate positions: crop_rect must default them to 0.
+        let packet = InputPacket::WindowCrop {
+            x: None,
+            y: None,
+            width: Some(800),
+            height: Some(600),
+        };
+        let decoded = InputPacket::decode(&packet.encode()).unwrap();
+        assert_eq!(decoded.crop_rect(), Some((0, 0, 800, 600)));
+
+        // All-zero payload clears the crop.
+        let clear = InputPacket::WindowCrop {
+            x: None,
+            y: None,
+            width: None,
+            height: None,
+        };
+        let data = clear.encode();
+        assert_eq!(&data[1..], &[0u8; 16]);
+        assert_eq!(InputPacket::decode(&data).unwrap().crop_rect(), None);
+    }
+
+    #[test]
+    fn test_window_crop_bad_length() {
+        assert!(InputPacket::decode(&[8, 0, 1]).is_err());
+        let mut full = InputPacket::WindowCrop {
+            x: Some(1),
+            y: Some(2),
+            width: Some(3),
+            height: Some(4),
+        }
+        .encode();
+        full.push(0);
+        assert!(InputPacket::decode(&full).is_err());
+        assert_eq!(
+            InputPacket::decode(&full[..17]).unwrap().crop_rect(),
+            Some((1, 2, 3, 4))
+        );
+    }
+
+    #[test]
+    fn test_crop_rect_ignores_other_variants() {
+        assert_eq!(InputPacket::RequestKeyframe.crop_rect(), None);
     }
 
     #[test]

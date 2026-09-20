@@ -416,6 +416,9 @@ impl InputInjector {
             // Control-plane request, intercepted by the streaming server before
             // the input channel; nothing to inject.
             InputPacket::RequestKeyframe => Ok(()),
+            // Likewise: crop rects are consumed by the streaming pipeline, and
+            // the client pre-maps absolute input into desktop space itself.
+            InputPacket::WindowCrop { .. } => Ok(()),
             InputPacket::Gamepad { axes, buttons } => {
                 // Map gamepad axes/buttons to keyboard/mouse for broad compatibility.
                 // Left stick -> mouse movement
