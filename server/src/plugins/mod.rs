@@ -1,3 +1,4 @@
+pub mod audio_control;
 pub mod battery;
 pub mod clipboard;
 pub mod exec;
@@ -16,10 +17,10 @@ pub mod windows;
 
 use linux_link_core::protocol::kdeconnect::PluginRegistry;
 
-/// Shorthand for the full plugin registry type with all 15 plugins registered.
+/// Shorthand for the full plugin registry type with all 16 plugins registered.
 pub type PluginSet = PluginRegistry;
 
-/// Register all 15 KDE Connect plugins and return the registry.
+/// Register all 16 KDE Connect plugins and return the registry.
 pub fn register_all() -> PluginSet {
     let mut registry = PluginRegistry::new();
     registry.register(battery::BatteryPlugin::new());
@@ -36,6 +37,7 @@ pub fn register_all() -> PluginSet {
     registry.register(notification_reply::NotificationReplyPlugin::default());
     registry.register(wake_relay::WakeRelayPlugin::default());
     registry.register(privacy::PrivacyPlugin::default());
+    registry.register(audio_control::AudioControlPlugin::default());
     registry.register(pair::PairPlugin::default());
     registry
 }

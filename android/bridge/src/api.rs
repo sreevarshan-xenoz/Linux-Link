@@ -1595,6 +1595,53 @@ pub async fn desktop_privacy(
     }
 }
 
+/// Desktop audio control (Tier-3 #16): send a `kdeconnect.linuxlink.audio`
+/// request built from `body_json` (e.g. `{"action":"setVolume","volume":45}`)
+/// and wait for the plugin's reply, matched by packet type within the
+/// timeout. Same one-shot control-connection shape as [desktop_privacy].
+pub async fn audio_control(
+    address: String,
+    port: u16,
+    body_json: String,
+) -> Result<serde_json::Value, String> {
+    let body: serde_json::Value =
+        serde_json::from_str(&body_json).map_err(|e| format!("Bad request JSON: {e}"))?;
+    let conn_mgr = ConnectionManager::new(Duration::from_secs(5));
+    let identity = client_identity();
+    let stream = conn_mgr
+        .connect(&address, port, &identity)
+        .await
+        .map_err(|e| format!("Connection failed: {e}"))?;
+    let (reader, writer) = tokio::io::split(stream);
+    let sender = TcpDeviceSender::new(writer, address);
+    let request = NetworkPacket::new("kdeconnect.linuxlink.audio").with_body(body);
+    sender
+        .send_packet(&request)
+        .await
+        .map_err(|e| format!("Failed to send audio request: {e}"))?;
+
+    let mut lines = tokio::io::BufReader::new(reader).lines();
+    let deadline = tokio::time::sleep(Duration::from_secs(8));
+    tokio::pin!(deadline);
+    loop {
+        let line = tokio::select! {
+            _ = &mut deadline => return Err("Timeout waiting for audio response".to_string()),
+            l = lines.next_line() => l,
+        };
+        match line {
+            Ok(Some(line)) => {
+                if let Ok(packet) = NetworkPacket::from_wire(&line)
+                    && packet.packet_type == "kdeconnect.linuxlink.audio"
+                {
+                    return Ok(packet.body);
+                }
+            }
+            Ok(None) => return Err("Connection closed by peer".to_string()),
+            Err(e) => return Err(format!("Read error: {e}")),
+        }
+    }
+}
+
 /// A desktop window reported by the server's Hyprland windows plugin
 /// (R3#7 picker). `at`/`size` are global desktop coordinates; `local_at` is
 /// the window origin within its monitor — the space `InputPacket::WindowCrop`

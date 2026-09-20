@@ -83,6 +83,8 @@ fun RemoteScreen(
     var pairedServerId by remember(address) { mutableStateOf(HostStore.pairedDesktopId(context, address)) }
     var showPairing by remember { mutableStateOf(false) }
     var pairingMessage by remember { mutableStateOf<String?>(null) }
+    // Tier-3 #16: desktop audio control sheet (volume/mute/output routing).
+    var showAudio by remember { mutableStateOf(false) }
     // Tier-3 #14: decoded video frame size, used to pick the PiP aspect ratio.
     var videoSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
     // Tier-3 #15: desktop privacy mode. The server's input grab carries a
@@ -315,6 +317,9 @@ fun RemoteScreen(
                     ) {
                         Text("Ring PC", color = Color.White)
                     }
+                    TextButton(onClick = { showAudio = true }) {
+                        Text("Audio", color = Color.White)
+                    }
                     TextButton(onClick = { pairingMessage = null; showPairing = true }) {
                         val label = if (pairedServerId == null) "Pair…" else "Paired ✓"
                         Text(label, color = Color.White)
@@ -405,6 +410,14 @@ fun RemoteScreen(
                 pairedServerId = serverId
                 HostStore.savePairedDesktop(context, address, serverId)
             },
+        )
+    }
+
+    if (showAudio) {
+        AudioControlSheet(
+            address = address,
+            controlPort = controlPort,
+            onDismiss = { showAudio = false },
         )
     }
 

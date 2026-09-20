@@ -92,6 +92,11 @@ object RustCore {
         action: String,
         lock: Boolean,
     ): String
+    private external fun nativeAudioControl(
+        address: String,
+        port: Int,
+        bodyJson: String,
+    ): String
     private external fun nativeSendNotificationReply(
         address: String,
         port: Int,
@@ -387,6 +392,19 @@ object RustCore {
     /** Convenience: give the desktop's local keyboard+mouse back (Tier-3 #15). */
     fun releaseDesktopPrivacy(address: String, port: Int): Result<String> =
         desktopPrivacy(address, port, "release")
+
+    /**
+     * Desktop audio control (Tier-3 #16). [bodyJson] is the
+     * `kdeconnect.linuxlink.audio` request, e.g. `{"action":"status"}`,
+     * `{"action":"setVolume","volume":45}`, `{"action":"setMuted","muted":true}`,
+     * `{"action":"sinks"}`, `{"action":"selectSink","name":"..."}`.
+     * Returns the plugin reply JSON.
+     */
+    fun audioControl(
+        address: String,
+        port: Int,
+        bodyJson: String,
+    ): Result<String> = envelope(nativeAudioControl(address, port, bodyJson))
 
     /**
      * Consume the find-my-device siren latch (Tier-2 #11). Returns true once

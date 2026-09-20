@@ -1,0 +1,102 @@
+use linux_link_core::error::Result;
+use linux_link_core::protocol::kdeconnect::{DeviceSender, NetworkPacket, Plugin};
+use serde_json::json;
+
+use crate::audio_control;
+
+/// Desktop audio control (Tier-3 #16): volume sync + default-output routing
+/// for the phone, straight against the sound server (wpctl → pactl; Hyprland
+/// `dispatch setvolume` is unusable upstream — hyprwm/Hyprland#16224).
+///
+/// Answers `kdeconnect.linuxlink.audio`:
+/// - `{action: "status"}` → `{ok, volume, muted, sink?}`
+/// - `{action: "setVolume", volume: 0..100}`
+/// - `{action: "setMuted", muted: bool}`
+/// - `{action: "sinks"}` → `{ok, sinks: [{index, name, description, isDefault}], default}`
+/// - `{action: "selectSink", name}` → routes the default output
+#[derive(Debug, Default)]
+pub struct AudioControlPlugin;
+
+#[async_trait::async_trait]
+impl Plugin for AudioControlPlugin {
+    fn name(&self) -> &'static str {
+        "audio_control"
+    }
+
+    fn incoming_capabilities(&self) -> &'static [&'static str] {
+        &["kdeconnect.linuxlink.audio"]
+    }
+
+    fn outgoing_capabilities(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    async fn handle_packet(&self, packet: &NetworkPacket, sender: &dyn DeviceSender) -> Result<()> {
+        if packet.packet_type != "kdeconnect.linuxlink.audio" {
+            return Ok(());
+        }
+        let action = packet
+            .body
+            .get("action")
+            .and_then(|v| v.as_str())
+            .unwrap_or("status")
+            .to_string();
+        let volume = packet
+            .body
+            .get("volume")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32);
+        let muted = packet.body.get("muted").and_then(|v| v.as_bool());
+        let sink = packet
+            .body
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+
+        // All helpers spawn blocking CLI processes.
+        let action_owned = action.clone();
+        let outcome = tokio::task::spawn_blocking(move || match action_owned.as_str() {
+            "setVolume" => match volume {
+                Some(v) => audio_control::set_volume(v)
+                    .map(|_| json!({ "ok": true, "volume": v.min(100) })),
+                None => Err("setVolume requires {volume: 0..100}".to_string()),
+            },
+            "setMuted" => match muted {
+                Some(m) => audio_control::set_muted(m).map(|_| json!({ "ok": true, "muted": m })),
+                None => Err("setMuted requires {muted: bool}".to_string()),
+            },
+            "sinks" => audio_control::sinks(),
+            "selectSink" => match sink {
+                Some(name) => audio_control::select_sink(name).map(|_| json!({ "ok": true })),
+                None => Err("selectSink requires {name}".to_string()),
+            },
+            _ => audio_control::status(),
+        })
+        .await;
+
+        let body = match outcome {
+            Ok(Ok(v)) => v,
+            Ok(Err(e)) => {
+                tracing::warn!("audio-control: {action} failed: {e}");
+                json!({ "ok": false, "error": e })
+            }
+            Err(e) => json!({ "ok": false, "error": e.to_string() }),
+        };
+        let response = NetworkPacket::new("kdeconnect.linuxlink.audio").with_body(body);
+        sender.send_packet(&response).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plugin_declares_audio_capability() {
+        assert!(
+            AudioControlPlugin
+                .incoming_capabilities()
+                .contains(&"kdeconnect.linuxlink.audio")
+        );
+    }
+}

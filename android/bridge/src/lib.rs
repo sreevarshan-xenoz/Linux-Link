@@ -616,6 +616,22 @@ pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeDesktopP
     to_jstring(&mut env, json)
 }
 
+/// Desktop audio control (Tier-3 #16): `body_json` is the
+/// `kdeconnect.linuxlink.audio` request body; returns the plugin reply.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeAudioControl(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    address: JString<'_>,
+    port: jint,
+    body_json: JString<'_>,
+) -> jstring {
+    let address = jstring_to_string(&mut env, &address);
+    let body_json = jstring_to_string(&mut env, &body_json);
+    let json = envelope(RUNTIME.block_on(api::audio_control(address, port as u16, body_json)));
+    to_jstring(&mut env, json)
+}
+
 /// Consume the find-my-device siren latch — `{"ok":true}` once per desktop
 /// `kdeconnect.findmydevice` push (R3 Tier-2 #11).
 #[unsafe(no_mangle)]
