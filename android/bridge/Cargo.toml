@@ -8,7 +8,7 @@ license.workspace = true
 crate-type = ["cdylib"]
 
 [dependencies]
-linux-link-core = { path = "../../core", default-features = false, features = ["client"] }
+linux-link-core = { path = "../../core", default-features = false, features = ["client", "wan"] }
 jni = "0.21"
 anyhow.workspace = true
 tokio = { workspace = true, features = ["fs"] }

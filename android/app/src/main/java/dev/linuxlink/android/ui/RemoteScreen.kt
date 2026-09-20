@@ -15,6 +15,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -25,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import dev.linuxlink.android.HostStore
 import dev.linuxlink.android.bridge.RustCore
 import dev.linuxlink.android.service.SessionForegroundService
 import dev.linuxlink.android.stream.InputMode
@@ -32,7 +34,10 @@ import dev.linuxlink.android.stream.RemoteDesktopView
 import dev.linuxlink.android.stream.ShortcutBar
 import dev.linuxlink.android.stream.StatsHud
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Live remote-desktop session (Tier 1 #5 shell): video surface + input
@@ -58,6 +63,21 @@ fun RemoteScreen(
     var showPicker by remember { mutableStateOf(false) }
 
     ClipboardSyncEffect(address, controlPort, enabled = clipboardSync)
+
+    // R1 stage 3: cache the desktop's iroh WAN identity while the control
+    // channel is up (the server pushes it on register and re-announces every
+    // 30 s), so later sessions can dial it from off-LAN.
+    LaunchedEffect(address) {
+        var cached: String? = null
+        while (isActive) {
+            val identity = withContext(Dispatchers.IO) { RustCore.getWanIdentity() }
+            if (identity != null && identity != cached) {
+                cached = identity
+                HostStore.saveWanIdentity(context, address, identity)
+            }
+            delay(5_000)
+        }
+    }
 
     DisposableEffect(Unit) {
         val start = Intent(context, SessionForegroundService::class.java).apply {

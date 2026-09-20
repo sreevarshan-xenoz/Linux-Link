@@ -279,6 +279,15 @@ pub async fn connect_to_peer(address: String, port: u16) -> Result<ConnectionSta
                             }
                             let trimmed = line.trim().to_string();
                             if !trimmed.is_empty() {
+                                // Cache the server's iroh WAN identity as it is
+                                // announced, independent of Kotlin's poll loop.
+                                if trimmed.contains("linuxlink.endpoint")
+                                    && let Ok(pkt) = NetworkPacket::from_wire(&trimmed)
+                                    && pkt.packet_type == "kdeconnect.linuxlink.endpoint"
+                                {
+                                    let mut id = crate::WAN_IDENTITY.lock().await;
+                                    *id = Some(pkt.body.to_string());
+                                }
                                 let _ = packet_tx.send(trimmed);
                             }
                             line.clear();
@@ -290,6 +299,7 @@ pub async fn connect_to_peer(address: String, port: u16) -> Result<ConnectionSta
                         *writer_guard = None;
                         let mut incoming = crate::INCOMING_PACKETS.lock().await;
                         *incoming = None;
+                        *crate::WAN_IDENTITY.lock().await = None;
                     }
                     .instrument(tracing::debug_span!("control_reader")),
                 );
@@ -341,6 +351,12 @@ pub async fn poll_incoming_packets() -> Vec<String> {
         }
     }
     packets
+}
+
+/// The server's cached iroh WAN identity (raw `kdeconnect.linuxlink.endpoint`
+/// body JSON), or `None` if the connected desktop has not announced one.
+pub async fn get_wan_identity() -> Option<String> {
+    crate::WAN_IDENTITY.lock().await.clone()
 }
 
 /// Send clipboard content to peer using KDE Connect protocol.
@@ -603,17 +619,12 @@ pub async fn connect_streaming(
                 return Ok(());
             }
             tracing::info!(
-                "Stopping existing session for {} before connecting to {}",
-                handle.address,
-                address
+                "Stopping existing session for {} before connecting to {address}",
+                handle.address
             );
         }
-
         if let Some(handle) = handle_guard.take() {
-            // Cleanly stop existing session
-            handle.cancel.cancel();
-            let _ = handle.task.await;
-            let _ = handle.rtt_task.await;
+            teardown_streaming_handle(handle).await;
         }
     }
 
@@ -654,7 +665,7 @@ pub async fn connect_streaming(
         tracing::info!(peer = %peer_label, "Establishing new trust bond with peer (TOFU)");
     }
 
-    let (mut client, packet_rx, audio_rx) =
+    let (client, packet_rx, audio_rx) =
         StreamingClient::connect(&addr, cert_manager, monitor_index)
             .await
             .map_err(|e| {
@@ -668,6 +679,106 @@ pub async fn connect_streaming(
                 err_dto.message
             })?;
 
+    install_streaming(client, packet_rx, audio_rx, address, streaming_port, None).await
+}
+
+/// Request remote screen streaming over the iroh WAN path.
+///
+/// `identity_json` is the cached `kdeconnect.linuxlink.endpoint` body learned
+/// from the desktop over the trusted control channel (fields: endpointId,
+/// relayUrls, directAddrs). Relays are used for hole punching only — there is
+/// no pkarr discovery, so the identity must come from a prior LAN session.
+pub async fn connect_streaming_wan(
+    address: String,
+    identity_json: String,
+    monitor_index: Option<u32>,
+) -> Result<(), String> {
+    let identity: serde_json::Value =
+        serde_json::from_str(&identity_json).map_err(|e| format!("Invalid WAN identity: {e}"))?;
+    let endpoint_id = identity["endpointId"]
+        .as_str()
+        .ok_or_else(|| "WAN identity missing endpointId".to_string())?;
+    let read_list = |key: &str| -> Vec<String> {
+        identity[key]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let relay_urls = read_list("relayUrls");
+    let direct_addrs = read_list("directAddrs");
+
+    // WAN sessions are keyed by the desktop address with a 0 port sentinel
+    // (there is no TCP port on the iroh path).
+    {
+        let mut handle_guard = (*STREAMING_HANDLE).lock().await;
+        if let Some(handle) = &*handle_guard {
+            if handle.address == address && handle.port == 0 {
+                tracing::info!("WAN session already active for {address}, skipping connect");
+                return Ok(());
+            }
+            tracing::info!(
+                "Stopping existing session for {} before connecting to {address}",
+                handle.address
+            );
+        }
+        if let Some(handle) = handle_guard.take() {
+            teardown_streaming_handle(handle).await;
+        }
+    }
+
+    *crate::SESSION_STATUS.lock().unwrap() = SessionStatus::Connecting;
+    tracing::info!("Dialing {address} over iroh WAN (endpoint {endpoint_id})");
+
+    let dial = linux_link_core::streaming::IrohDial::dial(
+        endpoint_id,
+        &relay_urls,
+        &direct_addrs,
+        true,
+        Duration::from_secs(20),
+    )
+    .await
+    .map_err(|e| {
+        let err_dto = LinuxLinkErrorDto::from(linux_link_core::error::LinuxLinkError::from(e));
+        *crate::SESSION_STATUS.lock().unwrap() = SessionStatus::Error(LinuxLinkErrorDto {
+            code: err_dto.code,
+            message: err_dto.message.clone(),
+            is_retryable: err_dto.is_retryable,
+        });
+        err_dto.message
+    })?;
+
+    let (client, packet_rx, audio_rx) =
+        StreamingClient::attach(dial.connection(), monitor_index).await;
+
+    install_streaming(client, packet_rx, audio_rx, address, 0, Some(dial)).await
+}
+
+/// Cleanly stop a streaming session: cancel its tasks and close the WAN dial
+/// endpoint if it owns one (iroh endpoints must be closed, never dropped).
+async fn teardown_streaming_handle(handle: StreamingHandle) {
+    handle.cancel.cancel();
+    let _ = handle.task.await;
+    let _ = handle.rtt_task.await;
+    if let Some(dial) = handle.wan_dial {
+        dial.close().await;
+    }
+}
+
+/// Spawn the client start + RTT tasks and install the global streaming handle.
+/// Shared by the LAN (`connect_streaming`) and WAN (`connect_streaming_wan`)
+/// connect paths.
+async fn install_streaming(
+    mut client: StreamingClient,
+    packet_rx: tokio::sync::mpsc::Receiver<linux_link_core::streaming::EncodedPacket>,
+    audio_rx: tokio::sync::mpsc::Receiver<linux_link_core::streaming::AudioPacket>,
+    address: String,
+    port: u16,
+    wan_dial: Option<linux_link_core::streaming::IrohDial>,
+) -> Result<(), String> {
     let connection = client
         .connection()
         .ok_or_else(|| "Connection not available after connect".to_string())?
@@ -713,17 +824,18 @@ pub async fn connect_streaming(
 
     let mut handle = (*STREAMING_HANDLE).lock().await;
     *handle = Some(StreamingHandle {
-        address,
-        port: streaming_port,
+        address: address.clone(),
+        port,
         cancel: client_cancel,
         task,
         rtt_task,
         packet_rx,
         audio_rx,
         connection: connection.clone(),
+        wan_dial,
     });
 
-    tracing::info!("Streaming session connected to {addr}");
+    tracing::info!("Streaming session connected to {address}:{port}");
     Ok(())
 }
 
@@ -921,13 +1033,7 @@ pub async fn stop_streaming() -> Result<(), String> {
         guard.take()
     };
     if let Some(handle) = handle {
-        handle.cancel.cancel();
-        if let Err(e) = handle.task.await {
-            tracing::warn!("Streaming client task exited with error: {e}");
-        }
-        if let Err(e) = handle.rtt_task.await {
-            tracing::warn!("RTT polled task exited with error: {e}");
-        }
+        teardown_streaming_handle(handle).await;
         tracing::info!("Streaming session stopped");
     }
 

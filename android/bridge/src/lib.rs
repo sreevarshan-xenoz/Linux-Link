@@ -271,6 +271,40 @@ pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeConnectS
     to_jstring(&mut env, json)
 }
 
+/// Connect to the streaming server over the iroh WAN path using a cached
+/// endpoint identity (the `kdeconnect.linuxlink.endpoint` body JSON learned
+/// from the desktop over the control channel).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeConnectStreamingWan(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    address: JString<'_>,
+    identity_json: JString<'_>,
+    monitor_index: jint,
+) -> jstring {
+    let address = jstring_to_string(&mut env, &address);
+    let identity = jstring_to_string(&mut env, &identity_json);
+    let monitor = if monitor_index < 0 {
+        None
+    } else {
+        Some(monitor_index as u32)
+    };
+    let json =
+        envelope_unit(RUNTIME.block_on(api::connect_streaming_wan(address, identity, monitor)));
+    to_jstring(&mut env, json)
+}
+
+/// The connected desktop's cached iroh WAN identity, or `{"ok": null}` if it
+/// has not announced one.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeGetWanIdentity(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+) -> jstring {
+    let json = envelope(Ok(RUNTIME.block_on(api::get_wan_identity())));
+    to_jstring(&mut env, json)
+}
+
 /// Reconnect a dropped streaming session with backoff state.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeReconnectStreaming(

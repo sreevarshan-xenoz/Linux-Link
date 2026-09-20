@@ -22,6 +22,7 @@ import androidx.compose.ui.layout.layout
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.viewinterop.AndroidView
+import dev.linuxlink.android.HostStore
 import dev.linuxlink.android.bridge.RustCore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -189,6 +190,7 @@ fun RemoteDesktopView(
                                         port,
                                         width,
                                         height,
+                                        HostStore.wanIdentity(context, address),
                                     ) { w, h -> videoSize = IntSize(w, h) }
                                 }
 
@@ -456,6 +458,7 @@ private class DecoderHost {
         port: Int,
         width: Int,
         height: Int,
+        wanIdentity: String?,
         onVideoSize: (Int, Int) -> Unit,
     ) {
         if (thread != null) return
@@ -463,9 +466,13 @@ private class DecoderHost {
         decoder = active
         thread = Thread({
             // The Rust bridge blocks, so connect + drain share this thread.
-            if (RustCore.connectStreaming(address, port).isSuccess) {
-                active.start()
-            }
+            // LAN first; fall back to dialing the cached iroh WAN identity
+            // when the desktop is off-network (R1 stage 3).
+            val connected =
+                RustCore.connectStreaming(address, port).isSuccess ||
+                    (wanIdentity != null &&
+                        RustCore.connectStreamingWan(address, wanIdentity).isSuccess)
+            if (connected) active.start()
         }, "h264-decode").apply {
             isDaemon = true
             priority = Thread.MAX_PRIORITY

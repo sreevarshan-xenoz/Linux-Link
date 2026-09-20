@@ -92,6 +92,11 @@ pub(crate) static CERT_MANAGER: LazyLock<
 pub(crate) static INCOMING_PACKETS: LazyLock<TokioMutex<Option<broadcast::Sender<String>>>> =
     LazyLock::new(|| TokioMutex::new(None));
 
+/// The server's iroh WAN identity (`kdeconnect.linuxlink.endpoint` body JSON),
+/// cached by the control reader so WAN dialing survives the poll loop's absence.
+pub(crate) static WAN_IDENTITY: LazyLock<TokioMutex<Option<String>>> =
+    LazyLock::new(|| TokioMutex::new(None));
+
 /// Holds the live streaming client and its packet receiver.
 pub(crate) struct StreamingHandle {
     pub(crate) address: String,
@@ -111,6 +116,9 @@ pub(crate) struct StreamingHandle {
     /// The streaming connection (transport-agnostic handle), kept alive for
     /// sending input events.
     pub(crate) connection: linux_link_core::streaming::SharedConnection,
+    /// Live iroh dial for WAN sessions — owns the endpoint and must be
+    /// closed (not dropped) when the session ends.
+    pub(crate) wan_dial: Option<linux_link_core::streaming::IrohDial>,
 }
 
 /// Holds the unified v2 connection and its persistent control streams.

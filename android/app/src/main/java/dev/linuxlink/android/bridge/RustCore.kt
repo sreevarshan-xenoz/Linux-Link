@@ -38,6 +38,12 @@ object RustCore {
     private external fun nativeStopV2(): String
     private external fun nativeStopStreaming(): String
     private external fun nativeConnectStreaming(address: String, port: Int, monitorIndex: Int): String
+    private external fun nativeConnectStreamingWan(
+        address: String,
+        identityJson: String,
+        monitorIndex: Int,
+    ): String
+    private external fun nativeGetWanIdentity(): String
     private external fun nativeReconnectStreaming(
         address: String,
         port: Int,
@@ -166,6 +172,23 @@ object RustCore {
     /** `monitorIndex = -1` selects the server default. */
     fun connectStreaming(address: String, port: Int, monitorIndex: Int = -1): Result<Unit> =
         envelope(nativeConnectStreaming(address, port, monitorIndex)).map { }
+
+    /**
+     * Connect over the iroh WAN path using a cached endpoint identity — the
+     * `kdeconnect.linuxlink.endpoint` body JSON announced by the desktop on
+     * the control channel (see [getWanIdentity]).
+     */
+    fun connectStreamingWan(address: String, identityJson: String, monitorIndex: Int = -1): Result<Unit> =
+        envelope(nativeConnectStreamingWan(address, identityJson, monitorIndex)).map { }
+
+    /** The connected desktop's cached iroh WAN identity, or null if none announced. */
+    fun getWanIdentity(): String? = runCatching {
+        val obj = JSONObject(nativeGetWanIdentity())
+        when (val v = obj.opt("ok")) {
+            null, JSONObject.NULL -> null
+            else -> v.toString().takeIf { it.isNotBlank() }
+        }
+    }.getOrNull()
 
     fun reconnectStreaming(address: String, port: Int, attempt: Int, monitorIndex: Int = -1): Result<Unit> =
         envelope(nativeReconnectStreaming(address, port, monitorIndex, attempt)).map { }

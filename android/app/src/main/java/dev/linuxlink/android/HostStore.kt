@@ -41,4 +41,17 @@ object HostStore {
             .putBoolean(KEY_AUTO, enabled)
             .apply()
     }
+
+    /** Cached iroh WAN identity (`kdeconnect.linuxlink.endpoint` body) per desktop address. */
+    fun wanIdentity(ctx: Context, address: String): String? =
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString("$KEY_WAN_IDENTITY_PREFIX$address", null)?.takeIf { it.isNotBlank() }
+
+    fun saveWanIdentity(ctx: Context, address: String, identityJson: String) {
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString("$KEY_WAN_IDENTITY_PREFIX$address", identityJson)
+            .apply()
+    }
+
+    private const val KEY_WAN_IDENTITY_PREFIX = "wan_identity:"
 }
