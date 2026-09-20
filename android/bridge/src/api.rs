@@ -187,6 +187,36 @@ pub fn send_wol(mac_address: String, broadcast_addr: String) -> Result<(), Strin
         .map_err(|e| e.to_string())
 }
 
+/// Ask an always-on LAN peer (the relay) to emit the WoL magic packet for a
+/// sleeping target (R3 Tier-2 #12). Broadcast UDP can't cross the wire, so
+/// from WAN the phone wakes the desktop through this path instead. Fire-
+/// and-forget like find-my-device — not even the relay can confirm the
+/// target powered on. An empty `broadcast` uses the relay's default
+/// (`255.255.255.255`); pass the directed subnet broadcast for reliability.
+pub async fn wake_via_relay(
+    address: String,
+    port: u16,
+    mac: String,
+    broadcast: String,
+) -> Result<(), String> {
+    let conn_mgr = ConnectionManager::new(Duration::from_secs(5));
+    let identity = client_identity();
+    let stream = conn_mgr
+        .connect(&address, port, &identity)
+        .await
+        .map_err(|e| format!("Connection failed: {e}"))?;
+    let (_reader, writer) = tokio::io::split(stream);
+    let sender = TcpDeviceSender::new(writer, address);
+    let request = NetworkPacket::new("kdeconnect.linuxlink.wol").with_body(serde_json::json!({
+        "mac": mac,
+        "broadcast": broadcast,
+    }));
+    sender
+        .send_packet(&request)
+        .await
+        .map_err(|e| format!("Failed to send wake request: {e}"))
+}
+
 /// Check Tailscale status
 pub async fn check_tailscale_status() -> Result<bool, String> {
     let client = TailscaleClient::new().map_err(|e| e.to_string())?;

@@ -4,7 +4,11 @@ import android.content.Context
 
 /** Last-connected host + auto-connect toggle, persisted for Tier 1 #5. */
 object HostStore {
-    data class Host(val address: String, val port: Int, val controlPort: Int = DEFAULT_CONTROL_PORT)
+    data class Host(
+        val address: String,
+        val port: Int,
+        val controlPort: Int = DEFAULT_CONTROL_PORT,
+    )
 
     const val DEFAULT_CONTROL_PORT = 1716
     const val DEFAULT_STREAMING_PORT = 4716
@@ -32,6 +36,19 @@ object HostStore {
             .putInt(KEY_CONTROL_PORT, host.controlPort)
             .apply()
     }
+
+    /** WoL MAC of the sleeping desktop behind [address] (Tier-2 #12 relay). */
+    fun wolMac(ctx: Context, address: String): String =
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString("$KEY_WOL_MAC_PREFIX$address", "").orEmpty()
+
+    fun saveWolMac(ctx: Context, address: String, mac: String) {
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString("$KEY_WOL_MAC_PREFIX$address", mac)
+            .apply()
+    }
+
+    private const val KEY_WOL_MAC_PREFIX = "wol_mac:"
 
     fun autoConnect(ctx: Context): Boolean =
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_AUTO, false)

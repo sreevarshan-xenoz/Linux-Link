@@ -109,6 +109,13 @@ object RustCore {
 
     private external fun nativeSendWol(macAddress: String, broadcastAddr: String): String
 
+    private external fun nativeWakeViaRelay(
+        address: String,
+        port: Int,
+        mac: String,
+        broadcast: String,
+    ): String
+
     val version: String
         get() = nativeVersion()
 
@@ -462,6 +469,21 @@ object RustCore {
 
     fun sendWol(macAddress: String, broadcastAddr: String): Result<Unit> =
         envelope(nativeSendWol(macAddress, broadcastAddr)).map { }
+
+    /**
+     * Wake a sleeping desktop through an always-on LAN relay (Tier-2 #12):
+     * connect to [address] (the relay peer) and ask it to emit the WoL magic
+     * packet for [mac] on its LAN. [broadcast] empty = relay default
+     * (255.255.255.255); pass the directed subnet broadcast (e.g.
+     * 192.168.1.255) for reliability. Fire-and-forget — the packet leaves,
+     * whether the machine powers on is not confirmable.
+     */
+    fun wakeViaRelay(
+        address: String,
+        port: Int,
+        mac: String,
+        broadcast: String = "",
+    ): Result<Unit> = envelope(nativeWakeViaRelay(address, port, mac, broadcast)).map { }
 
     // ---- internals ----
 

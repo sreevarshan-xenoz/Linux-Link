@@ -763,3 +763,21 @@ pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeSendWol(
     let json = envelope_unit(api::send_wol(mac_address, broadcast_addr));
     to_jstring(&mut env, json)
 }
+
+/// Ask an always-on LAN relay to send the WoL magic packet (Tier-2 #12).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeWakeViaRelay(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    address: JString<'_>,
+    port: jint,
+    mac: JString<'_>,
+    broadcast: JString<'_>,
+) -> jstring {
+    let address = jstring_to_string(&mut env, &address);
+    let mac = jstring_to_string(&mut env, &mac);
+    let broadcast = jstring_to_string(&mut env, &broadcast);
+    let json =
+        envelope_unit(RUNTIME.block_on(api::wake_via_relay(address, port as u16, mac, broadcast)));
+    to_jstring(&mut env, json)
+}

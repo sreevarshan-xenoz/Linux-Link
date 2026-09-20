@@ -10,14 +10,15 @@ pub mod pair;
 pub mod power;
 pub mod share;
 pub mod siren;
+pub mod wake_relay;
 pub mod windows;
 
 use linux_link_core::protocol::kdeconnect::PluginRegistry;
 
-/// Shorthand for the full plugin registry type with all 13 plugins registered.
+/// Shorthand for the full plugin registry type with all 14 plugins registered.
 pub type PluginSet = PluginRegistry;
 
-/// Register all 13 KDE Connect plugins and return the registry.
+/// Register all 14 KDE Connect plugins and return the registry.
 pub fn register_all() -> PluginSet {
     let mut registry = PluginRegistry::new();
     registry.register(battery::BatteryPlugin::new());
@@ -32,6 +33,7 @@ pub fn register_all() -> PluginSet {
     registry.register(windows::WindowsPlugin);
     registry.register(siren::SirenPlugin::new());
     registry.register(notification_reply::NotificationReplyPlugin::default());
+    registry.register(wake_relay::WakeRelayPlugin::default());
     registry.register(pair::PairPlugin::default());
     registry
 }

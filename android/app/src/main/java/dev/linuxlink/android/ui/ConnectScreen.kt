@@ -12,26 +12,35 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.text.KeyboardOptions
 import dev.linuxlink.android.HostStore
 import dev.linuxlink.android.bridge.RustCore
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Landing screen: host address + streaming port, with the auto-connect
  * toggle. Pre-fills the last saved host; connecting is the caller's job
- * (see MainActivity's session state).
+ * (see MainActivity's session state). The optional WoL MAC turns the
+ * entered host into a wake *relay* (Tier-2 #12): it emits the magic
+ * packet for a sleeping desktop on its LAN.
  */
 @Composable
 fun ConnectScreen(
@@ -39,14 +48,21 @@ fun ConnectScreen(
     autoConnect: Boolean,
     onConnect: (address: String, port: Int, controlPort: Int, rememberHost: Boolean) -> Unit,
 ) {
+    val context = LocalContext.current
     var address by rememberSaveable { mutableStateOf(initial?.address.orEmpty()) }
     var port by rememberSaveable { mutableStateOf((initial?.port ?: HostStore.DEFAULT_STREAMING_PORT).toString()) }
     var controlPort by rememberSaveable {
         mutableStateOf((initial?.controlPort ?: HostStore.DEFAULT_CONTROL_PORT).toString())
     }
     var rememberHost by rememberSaveable { mutableStateOf(autoConnect) }
+    var wolMac by rememberSaveable {
+        mutableStateOf(HostStore.wolMac(context, initial?.address.orEmpty()))
+    }
+    var wakeStatus by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
     val portValue = port.toIntOrNull()
     val controlPortValue = controlPort.toIntOrNull()
+    val macValue = MAC_PATTERN.matchEntire(wolMac.trim())?.value
 
     Column(
         modifier = Modifier
@@ -88,6 +104,14 @@ fun ConnectScreen(
             modifier = Modifier.fillMaxWidth(),
         )
         Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = wolMac,
+            onValueChange = { wolMac = it },
+            label = { Text("Wake-on-LAN MAC (wake via this host as relay)") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(8.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Switch(checked = rememberHost, onCheckedChange = { rememberHost = it })
             Spacer(Modifier.height(0.dp))
@@ -97,6 +121,9 @@ fun ConnectScreen(
         Button(
             enabled = address.isNotBlank() && portValue != null && controlPortValue != null,
             onClick = {
+                if (rememberHost && macValue != null) {
+                    HostStore.saveWolMac(context, address.trim(), macValue)
+                }
                 onConnect(
                     address.trim(),
                     portValue ?: return@Button,
@@ -108,6 +135,36 @@ fun ConnectScreen(
         ) {
             Text("Connect")
         }
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(
+            enabled = address.isNotBlank() && controlPortValue != null && macValue != null,
+            onClick = {
+                val target = macValue ?: return@OutlinedButton
+                val relayPort = controlPortValue ?: return@OutlinedButton
+                HostStore.saveWolMac(context, address.trim(), target)
+                scope.launch {
+                    val result = withContext(Dispatchers.IO) {
+                        RustCore.wakeViaRelay(address.trim(), relayPort, target)
+                    }
+                    wakeStatus = if (result.isSuccess) {
+                        "Wake packet sent via ${address.trim()}."
+                    } else {
+                        "Wake failed: ${result.exceptionOrNull()?.message}"
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Send Wake-on-LAN")
+        }
+        if (wakeStatus != null) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                wakeStatus.orEmpty(),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         Spacer(Modifier.height(16.dp))
         Text(
             "Rust core v${RustCore.version}",
@@ -116,3 +173,5 @@ fun ConnectScreen(
         )
     }
 }
+
+private val MAC_PATTERN = Regex("^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$")
