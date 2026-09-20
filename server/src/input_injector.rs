@@ -6,8 +6,11 @@
 
 use anyhow::{Context, Result};
 use enigo::{Coordinate, Enigo, Key, Keyboard, Mouse, Settings};
-use evdev::uinput::VirtualDeviceBuilder;
-use evdev::{AttributeSet, InputEvent, KeyCode, RelativeAxisCode};
+use evdev::uinput::{VirtualDevice, VirtualDeviceBuilder};
+use evdev::{
+    AbsInfo, AbsoluteAxisCode, AttributeSet, InputEvent, KeyCode, PropType, RelativeAxisCode,
+    UinputAbsSetup,
+};
 use linux_link_core::streaming::input_packet::InputPacket;
 use std::path::Path;
 use std::sync::Mutex;
@@ -24,35 +27,35 @@ const SYN_REPORT: u16 = 0;
 /// `keycode_to_enigo` and `key_to_evdev` must both derive from this table.
 const KEYCODE_MAP: &[(u16, Key)] = &[
     // Functional keys
-    (1, Key::Escape),           // KEY_ESC
-    (14, Key::Backspace),       // KEY_BACKSPACE
-    (15, Key::Tab),             // KEY_TAB
-    (28, Key::Return),          // KEY_ENTER
-    (57, Key::Space),           // KEY_SPACE
+    (1, Key::Escape),     // KEY_ESC
+    (14, Key::Backspace), // KEY_BACKSPACE
+    (15, Key::Tab),       // KEY_TAB
+    (28, Key::Return),    // KEY_ENTER
+    (57, Key::Space),     // KEY_SPACE
     // Navigation
-    (102, Key::Home),           // KEY_HOME
-    (103, Key::UpArrow),        // KEY_UP
-    (104, Key::PageUp),         // KEY_PAGEUP
-    (105, Key::LeftArrow),      // KEY_LEFT
-    (106, Key::RightArrow),     // KEY_RIGHT
-    (107, Key::End),            // KEY_END
-    (108, Key::DownArrow),      // KEY_DOWN
-    (109, Key::PageDown),       // KEY_PAGEDOWN
-    (110, Key::Insert),         // KEY_INSERT
-    (111, Key::Delete),         // KEY_DELETE
+    (102, Key::Home),       // KEY_HOME
+    (103, Key::UpArrow),    // KEY_UP
+    (104, Key::PageUp),     // KEY_PAGEUP
+    (105, Key::LeftArrow),  // KEY_LEFT
+    (106, Key::RightArrow), // KEY_RIGHT
+    (107, Key::End),        // KEY_END
+    (108, Key::DownArrow),  // KEY_DOWN
+    (109, Key::PageDown),   // KEY_PAGEDOWN
+    (110, Key::Insert),     // KEY_INSERT
+    (111, Key::Delete),     // KEY_DELETE
     // Function keys
-    (59, Key::F1),              // KEY_F1
-    (60, Key::F2),              // KEY_F2
-    (61, Key::F3),              // KEY_F3
-    (62, Key::F4),              // KEY_F4
-    (63, Key::F5),              // KEY_F5
-    (64, Key::F6),              // KEY_F6
-    (65, Key::F7),              // KEY_F7
-    (66, Key::F8),              // KEY_F8
-    (67, Key::F9),              // KEY_F9
-    (68, Key::F10),             // KEY_F10
-    (87, Key::F11),             // KEY_F11
-    (88, Key::F12),             // KEY_F12
+    (59, Key::F1),  // KEY_F1
+    (60, Key::F2),  // KEY_F2
+    (61, Key::F3),  // KEY_F3
+    (62, Key::F4),  // KEY_F4
+    (63, Key::F5),  // KEY_F5
+    (64, Key::F6),  // KEY_F6
+    (65, Key::F7),  // KEY_F7
+    (66, Key::F8),  // KEY_F8
+    (67, Key::F9),  // KEY_F9
+    (68, Key::F10), // KEY_F10
+    (87, Key::F11), // KEY_F11
+    (88, Key::F12), // KEY_F12
 ];
 
 /// Backend for input injection.
@@ -61,8 +64,25 @@ enum InputBackend {
     /// enigo (X11/XWayland via XTEST)
     Enigo(Box<Mutex<Enigo>>),
     /// uinput (universal, kernel-level)
-    Uinput(Mutex<evdev::uinput::VirtualDevice>),
+    Uinput(Mutex<UinputState>),
 }
+
+/// Kernel-level backend state: the keyboard/mouse device plus an on-demand
+/// direct-touch device used for absolute (normalized) pointer injection.
+#[derive(Debug)]
+struct UinputState {
+    main: VirtualDevice,
+    /// Single-touch virtual device, created lazily on first absolute motion.
+    touch: Option<VirtualDevice>,
+    /// Whether the virtual finger is currently down.
+    touch_down: bool,
+}
+
+const EV_ABS: u16 = 0x03;
+const BTN_TOUCH: u16 = 330;
+const BTN_TOOL_DOUBLETAP: u16 = 333;
+/// Direct-touch axis range; normalized wire coordinates (0..=65535) map 1:1.
+const ABS_MAX_COORD: i32 = 65535;
 
 /// Cross-distro input injector.
 ///
@@ -139,7 +159,11 @@ impl InputInjector {
 
         info!("Input injector: using uinput (kernel-level, works on all compositors)");
         Ok(Self {
-            backend: InputBackend::Uinput(Mutex::new(device)),
+            backend: InputBackend::Uinput(Mutex::new(UinputState {
+                main: device,
+                touch: None,
+                touch_down: false,
+            })),
         })
     }
 
@@ -152,8 +176,8 @@ impl InputInjector {
                     .context("enigo mouse move failed")?;
                 Ok(())
             }
-            InputBackend::Uinput(device) => {
-                let dev = device.get_mut().unwrap();
+            InputBackend::Uinput(state) => {
+                let dev = &mut state.get_mut().unwrap().main;
                 let events = [
                     InputEvent::new(EV_REL, RelativeAxisCode::REL_X.0, dx),
                     InputEvent::new(EV_REL, RelativeAxisCode::REL_Y.0, dy),
@@ -165,26 +189,83 @@ impl InputInjector {
         }
     }
 
-    /// Move mouse to absolute position
-    #[allow(dead_code)]
-    pub fn move_mouse_absolute(&mut self, x: i32, y: i32) -> Result<()> {
+    /// Move the pointer to a normalized absolute position (0..=65535 per axis).
+    ///
+    /// uinput injects through a lazily-created direct-touch device, so no
+    /// display resolution is needed on either side of the wire.
+    pub fn move_mouse_normalized_abs(&mut self, x_norm: u16, y_norm: u16) -> Result<()> {
         match &mut self.backend {
             InputBackend::Enigo(enigo) => {
                 let e = enigo.get_mut().unwrap();
-                e.move_mouse(x, y, Coordinate::Abs)
-                    .context("enigo mouse move to absolute position failed")?;
+                let (w, h) = e.main_display().context("enigo main_display failed")?;
+                e.move_mouse(
+                    x_norm as i32 * w / ABS_MAX_COORD,
+                    y_norm as i32 * h / ABS_MAX_COORD,
+                    Coordinate::Abs,
+                )
+                .context("enigo absolute mouse move failed")?;
                 Ok(())
             }
-            InputBackend::Uinput(_device) => {
-                // uinput only supports relative movement for mice.
-                // Absolute positioning would require a virtual tablet device.
-                anyhow::bail!("uinput backend does not support absolute mouse positioning")
+            InputBackend::Uinput(state) => {
+                let mut state = state.get_mut().unwrap();
+                let mut events = Vec::with_capacity(7);
+                events.push(InputEvent::new(EV_ABS, AbsoluteAxisCode::ABS_MT_SLOT.0, 0));
+                if !state.touch_down {
+                    events.push(InputEvent::new(
+                        EV_ABS,
+                        AbsoluteAxisCode::ABS_MT_TRACKING_ID.0,
+                        0,
+                    ));
+                    events.push(InputEvent::new(EV_KEY, BTN_TOUCH, 1));
+                    events.push(InputEvent::new(EV_KEY, BTN_TOOL_DOUBLETAP, 1));
+                }
+                events.push(InputEvent::new(
+                    EV_ABS,
+                    AbsoluteAxisCode::ABS_MT_POSITION_X.0,
+                    x_norm as i32,
+                ));
+                events.push(InputEvent::new(
+                    EV_ABS,
+                    AbsoluteAxisCode::ABS_MT_POSITION_Y.0,
+                    y_norm as i32,
+                ));
+                events.push(InputEvent::new(EV_SYN, SYN_REPORT, 0));
+                emit_touch(&mut state, &events)?;
+                state.touch_down = true;
+                Ok(())
             }
         }
     }
 
+    /// Lift the virtual finger if a direct-touch sequence is in progress.
+    fn release_touch_if_down(&mut self) -> Result<()> {
+        if let InputBackend::Uinput(state) = &mut self.backend {
+            let mut state = state.get_mut().unwrap();
+            if state.touch_down {
+                let events = [
+                    InputEvent::new(EV_ABS, AbsoluteAxisCode::ABS_MT_SLOT.0, 0),
+                    InputEvent::new(
+                        EV_ABS,
+                        AbsoluteAxisCode::ABS_MT_TRACKING_ID.0,
+                        -1, // end of contact
+                    ),
+                    InputEvent::new(EV_KEY, BTN_TOUCH, 0),
+                    InputEvent::new(EV_KEY, BTN_TOOL_DOUBLETAP, 0),
+                    InputEvent::new(EV_SYN, SYN_REPORT, 0),
+                ];
+                emit_touch(&mut state, &events)?;
+                state.touch_down = false;
+            }
+        }
+        Ok(())
+    }
+
     /// Press or release a mouse button
     pub fn mouse_button(&mut self, button: MouseKey, pressed: bool) -> Result<()> {
+        // In direct-touch mode the client signals tap-end as a left release.
+        if matches!(button, MouseKey::Left) && !pressed {
+            self.release_touch_if_down()?;
+        }
         match &mut self.backend {
             InputBackend::Enigo(enigo) => {
                 let e = enigo.get_mut().unwrap();
@@ -197,8 +278,8 @@ impl InputInjector {
                 }
                 Ok(())
             }
-            InputBackend::Uinput(device) => {
-                let dev = device.get_mut().unwrap();
+            InputBackend::Uinput(state) => {
+                let dev = &mut state.get_mut().unwrap().main;
                 let key = button.as_evdev_key();
                 let value = if pressed { 1 } else { 0 };
                 let events = [
@@ -226,8 +307,8 @@ impl InputInjector {
                 }
                 Ok(())
             }
-            InputBackend::Uinput(device) => {
-                let dev = device.get_mut().unwrap();
+            InputBackend::Uinput(state) => {
+                let dev = &mut state.get_mut().unwrap().main;
                 let events = [
                     InputEvent::new(EV_REL, RelativeAxisCode::REL_WHEEL.0, y),
                     InputEvent::new(EV_REL, RelativeAxisCode::REL_HWHEEL.0, x),
@@ -253,8 +334,8 @@ impl InputInjector {
                 }
                 Ok(())
             }
-            InputBackend::Uinput(device) => {
-                let dev = device.get_mut().unwrap();
+            InputBackend::Uinput(state) => {
+                let dev = &mut state.get_mut().unwrap().main;
                 let evdev_key = key_to_evdev(key);
                 let value = if pressed { 1 } else { 0 };
                 let events = [
@@ -275,13 +356,13 @@ impl InputInjector {
                 e.text(text).context("enigo text input failed")?;
                 Ok(())
             }
-            InputBackend::Uinput(device) => {
+            InputBackend::Uinput(state) => {
                 // For uinput, fall back to keycode simulation for ASCII.
                 // This is a best-effort approach and does not handle Unicode.
                 for ch in text.chars() {
                     if let Some(keycode) = char_to_keycode(ch) {
                         let key = KeyCode(keycode);
-                        let dev = device.get_mut().unwrap();
+                        let dev = &mut state.get_mut().unwrap().main;
                         let events = [
                             InputEvent::new(EV_KEY, key.0, 1), // press
                             InputEvent::new(EV_SYN, SYN_REPORT, 0),
@@ -305,6 +386,9 @@ impl InputInjector {
     pub fn handle_input_packet(&mut self, packet: &InputPacket) -> Result<()> {
         match packet {
             InputPacket::MouseMove { dx, dy } => self.move_mouse_relative(*dx as i32, *dy as i32),
+            InputPacket::MouseMoveAbs { x_norm, y_norm } => {
+                self.move_mouse_normalized_abs(*x_norm, *y_norm)
+            }
             InputPacket::MouseClick { button, pressed } => {
                 let mouse_key = match button {
                     0 => MouseKey::Left,
@@ -317,10 +401,7 @@ impl InputInjector {
                 self.mouse_button(mouse_key, *pressed)
             }
             InputPacket::MouseScroll { dx, dy } => self.scroll(*dx as i32, *dy as i32),
-            InputPacket::KeyEvent {
-                key,
-                pressed,
-            } => {
+            InputPacket::KeyEvent { key, pressed } => {
                 // Key events arrive as Linux evdev keycodes over the QUIC channel.
                 // Map to enigo Key and delegate to self.key() which handles both backends.
                 let enigo_key = keycode_to_enigo(*key);
@@ -366,8 +447,8 @@ impl InputInjector {
                 }
 
                 // SYN_REPORT
-                if let InputBackend::Uinput(device) = &mut self.backend {
-                    let dev = device.get_mut().unwrap();
+                if let InputBackend::Uinput(state) = &mut self.backend {
+                    let dev = &mut state.get_mut().unwrap().main;
                     dev.emit(&[InputEvent::new(EV_SYN, SYN_REPORT, 0)])
                         .context("gamepad SYN_REPORT failed")?;
                 }
@@ -376,6 +457,70 @@ impl InputInjector {
             }
         }
     }
+}
+
+/// Emit events on the direct-touch device, creating it lazily on first use.
+fn emit_touch(state: &mut UinputState, events: &[InputEvent]) -> Result<()> {
+    if state.touch.is_none() {
+        state.touch = Some(build_touch_device()?);
+    }
+    state
+        .touch
+        .as_mut()
+        .unwrap()
+        .emit(events)
+        .context("uinput direct-touch emit failed")
+}
+
+/// Build a single-touch `MT` device. Coordinates arrive normalized
+/// 0..=65535 from the client, so the axis ranges map the wire values 1:1 and
+/// libinput scales them to the screen (DIRECT property).
+fn build_touch_device() -> Result<VirtualDevice> {
+    let mut keys = AttributeSet::<KeyCode>::new();
+    keys.insert(KeyCode(BTN_TOUCH));
+    keys.insert(KeyCode(BTN_TOOL_DOUBLETAP));
+
+    let mut props = AttributeSet::<PropType>::new();
+    props.insert(PropType::DIRECT);
+
+    let slot = UinputAbsSetup::new(
+        AbsoluteAxisCode::ABS_MT_SLOT,
+        AbsInfo::new(0, 0, 1, 0, 0, 0),
+    );
+    // Kernel requires TRACKING_ID minimum of -1 (release sentinel).
+    let tracking = UinputAbsSetup::new(
+        AbsoluteAxisCode::ABS_MT_TRACKING_ID,
+        AbsInfo::new(0, -1, 10, 0, 0, 0),
+    );
+    let abs_x = UinputAbsSetup::new(
+        AbsoluteAxisCode::ABS_MT_POSITION_X,
+        AbsInfo::new(0, 0, ABS_MAX_COORD, 0, 0, 0),
+    );
+    let abs_y = UinputAbsSetup::new(
+        AbsoluteAxisCode::ABS_MT_POSITION_Y,
+        AbsInfo::new(0, 0, ABS_MAX_COORD, 0, 0, 0),
+    );
+
+    #[allow(deprecated)]
+    let device = VirtualDeviceBuilder::new()
+        .context("Failed to create touch device builder")?
+        .with_keys(&keys)
+        .context("Failed to set up touch keys")?
+        .with_absolute_axis(&slot)
+        .context("Failed to set up ABS_MT_SLOT")?
+        .with_absolute_axis(&tracking)
+        .context("Failed to set up ABS_MT_TRACKING_ID")?
+        .with_absolute_axis(&abs_x)
+        .context("Failed to set up ABS_MT_POSITION_X")?
+        .with_absolute_axis(&abs_y)
+        .context("Failed to set up ABS_MT_POSITION_Y")?
+        .with_properties(&props)
+        .context("Failed to set up touch properties")?
+        .name(b"Linux Link Virtual Touch")
+        .build()
+        .context("Failed to build uinput direct-touch device")?;
+
+    Ok(device)
 }
 
 /// Mouse button mapping for enigo/uinput
@@ -444,7 +589,9 @@ fn key_to_evdev(key: Key) -> KeyCode {
     }
     // Fall back to character-based mapping for Unicode keys
     match key {
-        Key::Unicode(ch) => char_to_keycode(ch).map(KeyCode).unwrap_or(KeyCode::KEY_UNKNOWN),
+        Key::Unicode(ch) => char_to_keycode(ch)
+            .map(KeyCode)
+            .unwrap_or(KeyCode::KEY_UNKNOWN),
         _ => KeyCode::KEY_UNKNOWN,
     }
 }
@@ -626,25 +773,25 @@ mod tests {
 
     #[test]
     fn test_keycode_to_enigo_common() {
-        assert_eq!(keycode_to_enigo(28), Key::Return);  // KEY_ENTER
+        assert_eq!(keycode_to_enigo(28), Key::Return); // KEY_ENTER
         assert_eq!(keycode_to_enigo(14), Key::Backspace); // KEY_BACKSPACE
-        assert_eq!(keycode_to_enigo(57), Key::Space);     // KEY_SPACE
-        assert_eq!(keycode_to_enigo(15), Key::Tab);       // KEY_TAB
-        assert_eq!(keycode_to_enigo(1), Key::Escape);     // KEY_ESC
+        assert_eq!(keycode_to_enigo(57), Key::Space); // KEY_SPACE
+        assert_eq!(keycode_to_enigo(15), Key::Tab); // KEY_TAB
+        assert_eq!(keycode_to_enigo(1), Key::Escape); // KEY_ESC
     }
 
     #[test]
     fn test_keycode_to_enigo_navigation() {
-        assert_eq!(keycode_to_enigo(102), Key::Home);      // KEY_HOME
-        assert_eq!(keycode_to_enigo(103), Key::UpArrow);   // KEY_UP
-        assert_eq!(keycode_to_enigo(104), Key::PageUp);    // KEY_PAGEUP
+        assert_eq!(keycode_to_enigo(102), Key::Home); // KEY_HOME
+        assert_eq!(keycode_to_enigo(103), Key::UpArrow); // KEY_UP
+        assert_eq!(keycode_to_enigo(104), Key::PageUp); // KEY_PAGEUP
         assert_eq!(keycode_to_enigo(105), Key::LeftArrow); // KEY_LEFT
-        assert_eq!(keycode_to_enigo(106), Key::RightArrow);// KEY_RIGHT
-        assert_eq!(keycode_to_enigo(107), Key::End);       // KEY_END
+        assert_eq!(keycode_to_enigo(106), Key::RightArrow); // KEY_RIGHT
+        assert_eq!(keycode_to_enigo(107), Key::End); // KEY_END
         assert_eq!(keycode_to_enigo(108), Key::DownArrow); // KEY_DOWN
-        assert_eq!(keycode_to_enigo(109), Key::PageDown);  // KEY_PAGEDOWN
-        assert_eq!(keycode_to_enigo(110), Key::Insert);    // KEY_INSERT
-        assert_eq!(keycode_to_enigo(111), Key::Delete);    // KEY_DELETE
+        assert_eq!(keycode_to_enigo(109), Key::PageDown); // KEY_PAGEDOWN
+        assert_eq!(keycode_to_enigo(110), Key::Insert); // KEY_INSERT
+        assert_eq!(keycode_to_enigo(111), Key::Delete); // KEY_DELETE
     }
 
     #[test]
@@ -691,10 +838,20 @@ mod tests {
         // Verify keycode_to_enigo and key_to_evdev are inverses
         // for all entries in KEYCODE_MAP
         for &(evdev_code, enigo_key) in KEYCODE_MAP {
-            assert_eq!(keycode_to_enigo(evdev_code), enigo_key,
-                "keycode_to_enigo({}) should be {:?}", evdev_code, enigo_key);
-            assert_eq!(key_to_evdev(enigo_key), KeyCode(evdev_code),
-                "key_to_evdev({:?}) should be KeyCode({})", enigo_key, evdev_code);
+            assert_eq!(
+                keycode_to_enigo(evdev_code),
+                enigo_key,
+                "keycode_to_enigo({}) should be {:?}",
+                evdev_code,
+                enigo_key
+            );
+            assert_eq!(
+                key_to_evdev(enigo_key),
+                KeyCode(evdev_code),
+                "key_to_evdev({:?}) should be KeyCode({})",
+                enigo_key,
+                evdev_code
+            );
         }
     }
 }

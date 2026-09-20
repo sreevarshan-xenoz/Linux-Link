@@ -4,6 +4,7 @@ import org.json.JSONObject
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import kotlin.math.roundToInt
 
 /**
  * Kotlin facade over the Rust JNI bridge (`liblinux_link_android_bridge.so`).
@@ -56,6 +57,8 @@ object RustCore {
         button: Int,
         isPressed: Boolean,
     ): String
+
+    private external fun nativeSendMouseAbs(xNorm: Int, yNorm: Int): String
 
     private external fun nativeSendKeyboardEvent(
         address: String,
@@ -220,6 +223,35 @@ object RustCore {
         isPressed: Boolean,
     ): Result<Unit> = envelope(nativeSendMouseEvent(address, port, x, y, button, isPressed)).map { }
 
+    /**
+     * Normalized absolute pointer position for direct-touch input. Both axes
+     * are 0..=65535, independent of display resolution; compute with
+     * [normalizedCoord]. Requires an active QUIC streaming connection.
+     */
+    fun sendMouseAbs(xNorm: Int, yNorm: Int): Result<Unit> =
+        envelope(nativeSendMouseAbs(xNorm, yNorm)).map { }
+
+    /** Map a view-local pixel offset to the 0..=65535 normalized axis range. */
+    fun normalizedCoord(offset: Float, size: Int): Int =
+        (offset / size.coerceAtLeast(1) * NORM_COORD_MAX).roundToInt().coerceIn(0, NORM_COORD_MAX)
+
+    /**
+     * Direct-touch tap: absolute move to the normalized point, then a
+     * press/release pair the server interprets as finger down + lift.
+     */
+    fun tapAbsolute(
+        address: String,
+        port: Int,
+        xNorm: Int,
+        yNorm: Int,
+    ): Result<Unit> {
+        val moved = sendMouseAbs(xNorm, yNorm)
+        if (moved.isFailure) return moved
+        val down = sendMouseEvent(address, port, 0f, 0f, 0, true)
+        if (down.isFailure) return down
+        return sendMouseEvent(address, port, 0f, 0f, 0, false)
+    }
+
     fun sendKeyboardEvent(address: String, port: Int, keyCode: Int, text: String): Result<Unit> =
         envelope(nativeSendKeyboardEvent(address, port, keyCode, text)).map { }
 
@@ -288,6 +320,9 @@ object RustCore {
     // keyCode + 50000 = modifier press, keyCode + 100000 = modifier release.
     private const val MOD_PRESS_OFFSET = 50_000
     private const val MOD_RELEASE_OFFSET = 100_000
+
+    // Upper bound of the normalized absolute-axis range on the wire.
+    private const val NORM_COORD_MAX = 65535
 
     /** One Annex-B H.264 access unit plus its keyframe flag and sequence number. */
     data class EncodedFrame(

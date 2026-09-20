@@ -13,6 +13,7 @@ const TAG_MOUSE_SCROLL: u8 = 2;
 const TAG_KEY_EVENT: u8 = 3;
 const TAG_TEXT: u8 = 4;
 const TAG_GAMEPAD: u8 = 5;
+const TAG_MOUSE_MOVE_ABS: u8 = 6;
 
 /// A compact binary input event for real-time remote control.
 ///
@@ -22,6 +23,10 @@ const TAG_GAMEPAD: u8 = 5;
 pub enum InputPacket {
     /// Relative mouse movement.
     MouseMove { dx: i16, dy: i16 },
+    /// Absolute pointer position, normalized to the remote screen:
+    /// 0..=65535 maps to the full width/height (resolution-independent,
+    /// so the client never needs the pixel dimensions).
+    MouseMoveAbs { x_norm: u16, y_norm: u16 },
     /// Mouse button press or release.
     MouseClick {
         button: u8, // 0=Left, 1=Middle, 2=Right, 3=Back, 4=Forward
@@ -58,6 +63,12 @@ impl InputPacket {
                 let mut buf = vec![TAG_MOUSE_MOVE];
                 buf.extend_from_slice(&dx.to_le_bytes());
                 buf.extend_from_slice(&dy.to_le_bytes());
+                buf
+            }
+            InputPacket::MouseMoveAbs { x_norm, y_norm } => {
+                let mut buf = vec![TAG_MOUSE_MOVE_ABS];
+                buf.extend_from_slice(&x_norm.to_le_bytes());
+                buf.extend_from_slice(&y_norm.to_le_bytes());
                 buf
             }
             InputPacket::MouseClick { button, pressed } => {
@@ -111,6 +122,12 @@ impl InputPacket {
                 let dx = i16::from_le_bytes(data[1..3].try_into().unwrap());
                 let dy = i16::from_le_bytes(data[3..5].try_into().unwrap());
                 Ok(InputPacket::MouseMove { dx, dy })
+            }
+            TAG_MOUSE_MOVE_ABS => {
+                anyhow::ensure!(data.len() >= 5, "MouseMoveAbs packet too short");
+                let x_norm = u16::from_le_bytes(data[1..3].try_into().unwrap());
+                let y_norm = u16::from_le_bytes(data[3..5].try_into().unwrap());
+                Ok(InputPacket::MouseMoveAbs { x_norm, y_norm })
             }
             TAG_MOUSE_CLICK => {
                 anyhow::ensure!(data.len() >= 3, "MouseClick packet too short");
@@ -177,6 +194,29 @@ mod tests {
             }
             _ => panic!("Wrong variant"),
         }
+    }
+
+    #[test]
+    fn test_mouse_move_abs_roundtrip() {
+        let packet = InputPacket::MouseMoveAbs {
+            x_norm: 0,
+            y_norm: 65535,
+        };
+        let data = packet.encode();
+        assert_eq!(data.len(), 5);
+        let decoded = InputPacket::decode(&data).unwrap();
+        match decoded {
+            InputPacket::MouseMoveAbs { x_norm, y_norm } => {
+                assert_eq!(x_norm, 0);
+                assert_eq!(y_norm, 65535);
+            }
+            _ => panic!("Wrong variant"),
+        }
+    }
+
+    #[test]
+    fn test_mouse_move_abs_truncated() {
+        assert!(InputPacket::decode(&[6, 0, 1]).is_err());
     }
 
     #[test]

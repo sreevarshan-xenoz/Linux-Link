@@ -1315,6 +1315,39 @@ pub async fn send_mouse_event(
     Ok(())
 }
 
+/// Send a normalized absolute pointer position (direct-touch mode).
+///
+/// Coordinates are 0..=65535 on both axes, resolution-independent. QUIC-only:
+/// the legacy KDE Connect TCP protocol has no absolute-position concept.
+pub async fn send_mouse_abs(x_norm: u16, y_norm: u16) -> Result<(), String> {
+    let quic_conn = {
+        let guard = (*STREAMING_HANDLE).lock().await;
+        if let Some(h) = guard.as_ref() {
+            Some(h.connection.clone())
+        } else {
+            let v2_guard = (*crate::V2_HANDLE).lock().await;
+            v2_guard.as_ref().map(|h| h.connection.clone())
+        }
+    };
+
+    let conn = quic_conn
+        .ok_or_else(|| "Absolute input requires an active QUIC streaming connection".to_string())?;
+
+    let data = InputPacket::MouseMoveAbs { x_norm, y_norm }.encode();
+    let mut send_stream = conn
+        .open_uni()
+        .await
+        .map_err(|e| format!("QUIC open stream: {e}"))?;
+    send_stream
+        .write_all(&data)
+        .await
+        .map_err(|e| format!("QUIC write: {e}"))?;
+    send_stream
+        .finish()
+        .map_err(|e| format!("QUIC finish: {e}"))?;
+    Ok(())
+}
+
 /// Send keyboard event to remote, preferring the low-latency QUIC streaming channel.
 ///
 /// Falls back to KDE Connect TCP protocol if streaming is not active.

@@ -393,6 +393,19 @@ pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeSendMous
     to_jstring(&mut env, json)
 }
 
+/// Send a normalized absolute pointer position (0..=65535 per axis).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeSendMouseAbs(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    x_norm: jint,
+    y_norm: jint,
+) -> jstring {
+    let clamp = |v: jint| v.clamp(0, u16::MAX as i32) as u16;
+    let json = envelope_unit(RUNTIME.block_on(api::send_mouse_abs(clamp(x_norm), clamp(y_norm))));
+    to_jstring(&mut env, json)
+}
+
 /// Send a keyboard event. `key_code` is an Android KeyCode; the bridge maps
 /// it to evdev internally. `text` carries the char for UTF-8 input paths.
 #[unsafe(no_mangle)]
