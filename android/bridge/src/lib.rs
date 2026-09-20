@@ -593,6 +593,30 @@ pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeGetBatte
     to_jstring(&mut env, json)
 }
 
+/// Consume the find-my-device siren latch — `{"ok":true}` once per desktop
+/// `kdeconnect.findmydevice` push (R3 Tier-2 #11).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeCheckSiren(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+) -> jstring {
+    let json = envelope(Ok(api::check_siren()));
+    to_jstring(&mut env, json)
+}
+
+/// Make the remote desktop ring (find-my-device siren, phone → desktop).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeSendFindMyDevice(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    address: JString<'_>,
+    port: jint,
+) -> jstring {
+    let address = jstring_to_string(&mut env, &address);
+    let json = envelope_unit(RUNTIME.block_on(api::send_findmydevice(address, port as u16)));
+    to_jstring(&mut env, json)
+}
+
 /// Hyprland window list (R3#7 picker):
 /// `{"ok": [[WindowInfoDto, ...], activeAddress, screenBoxOrNull]}` where
 /// `screenBoxOrNull` is the monitor layout `[x, y, w, h]` in desktop coords.

@@ -79,6 +79,8 @@ object RustCore {
     private external fun nativeListRemoteFiles(address: String, port: Int, remotePath: String): String
     private external fun nativeGetMonitors(address: String, port: Int): String
     private external fun nativeGetBattery(address: String, port: Int): String
+    private external fun nativeCheckSiren(): String
+    private external fun nativeSendFindMyDevice(address: String, port: Int): String
     private external fun nativeGetMonitorCount(address: String, port: Int): String
     private external fun nativeGetWindows(address: String, port: Int): String
     private external fun nativeSendWindowCrop(
@@ -344,6 +346,17 @@ object RustCore {
 
     fun getMonitorCount(address: String, port: Int): Result<String> =
         envelope(nativeGetMonitorCount(address, port))
+
+    /**
+     * Consume the find-my-device siren latch (Tier-2 #11). Returns true once
+     * per `kdeconnect.findmydevice` `{ring:true}` pushed by the desktop.
+     */
+    fun checkSiren(): Boolean =
+        envelope(nativeCheckSiren()).getOrNull()?.toBooleanStrictOrNull() == true
+
+    /** Make the remote desktop ring (find-my-device siren, phone → desktop). */
+    fun sendFindMyDevice(address: String, port: Int): Result<Unit> =
+        envelope(nativeSendFindMyDevice(address, port)).map { }
 
     /**
      * Hyprland window list (R3#7 picker). Payload JSON:

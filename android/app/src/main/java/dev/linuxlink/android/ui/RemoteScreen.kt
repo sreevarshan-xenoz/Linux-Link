@@ -86,6 +86,7 @@ fun RemoteScreen(
     }
 
     ClipboardSyncEffect(address, controlPort, enabled = clipboardSync)
+    SirenWatcher(context)
 
     // R1 stage 3: cache the desktop's iroh WAN identity while the control
     // channel is up (the server pushes it on register and re-announces every
@@ -187,6 +188,15 @@ fun RemoteScreen(
                     val label =
                         if (monitorIndex == -1) "Monitor: auto" else "Monitor: #$monitorIndex"
                     Text(label, color = Color.White)
+                }
+                TextButton(
+                    onClick = {
+                        scope.launch(Dispatchers.IO) {
+                            RustCore.sendFindMyDevice(address, controlPort)
+                        }
+                    },
+                ) {
+                    Text("Ring PC", color = Color.White)
                 }
             }
             ShortcutBar(

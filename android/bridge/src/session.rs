@@ -97,6 +97,10 @@ pub(crate) static INCOMING_PACKETS: LazyLock<TokioMutex<Option<broadcast::Sender
 pub(crate) static WAN_IDENTITY: LazyLock<TokioMutex<Option<String>>> =
     LazyLock::new(|| TokioMutex::new(None));
 
+/// Latch set when the desktop pushes `kdeconnect.findmydevice` `{ring:true}`
+/// (R3 Tier-2 #11 siren). Kotlin consumes-and-clears it via `checkSiren`.
+pub(crate) static SIREN_RINGING: AtomicBool = AtomicBool::new(false);
+
 /// Holds the live streaming client and its packet receiver.
 pub(crate) struct StreamingHandle {
     pub(crate) address: String,

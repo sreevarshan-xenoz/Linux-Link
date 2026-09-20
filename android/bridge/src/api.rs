@@ -288,6 +288,20 @@ pub async fn connect_to_peer(address: String, port: u16) -> Result<ConnectionSta
                                     let mut id = crate::WAN_IDENTITY.lock().await;
                                     *id = Some(pkt.body.to_string());
                                 }
+                                // Find-my-device siren: latch so the UI can ring
+                                // even if the poll loop misses the packet.
+                                if trimmed.contains("findmydevice")
+                                    && let Ok(pkt) = NetworkPacket::from_wire(&trimmed)
+                                    && pkt.packet_type == "kdeconnect.findmydevice"
+                                    && pkt
+                                        .body
+                                        .get("ring")
+                                        .and_then(|v| v.as_bool())
+                                        .unwrap_or(true)
+                                {
+                                    crate::SIREN_RINGING
+                                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                                }
                                 let _ = packet_tx.send(trimmed);
                             }
                             line.clear();
@@ -300,6 +314,7 @@ pub async fn connect_to_peer(address: String, port: u16) -> Result<ConnectionSta
                         let mut incoming = crate::INCOMING_PACKETS.lock().await;
                         *incoming = None;
                         *crate::WAN_IDENTITY.lock().await = None;
+                        crate::SIREN_RINGING.store(false, std::sync::atomic::Ordering::SeqCst);
                     }
                     .instrument(tracing::debug_span!("control_reader")),
                 );
@@ -357,6 +372,31 @@ pub async fn poll_incoming_packets() -> Vec<String> {
 /// body JSON), or `None` if the connected desktop has not announced one.
 pub async fn get_wan_identity() -> Option<String> {
     crate::WAN_IDENTITY.lock().await.clone()
+}
+
+/// Consume the find-my-device siren latch (R3 Tier-2 #11). Returns `true`
+/// once per `kdeconnect.findmydevice` `{ring:true}` pushed by the desktop.
+pub fn check_siren() -> bool {
+    crate::SIREN_RINGING.swap(false, std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Make the remote desktop ring (find-my-device). Opens a control connection
+/// like the other one-shot queries and pushes `{ring: true}`.
+pub async fn send_findmydevice(address: String, port: u16) -> Result<(), String> {
+    let conn_mgr = ConnectionManager::new(Duration::from_secs(5));
+    let identity = client_identity();
+    let stream = conn_mgr
+        .connect(&address, port, &identity)
+        .await
+        .map_err(|e| format!("Connection failed: {e}"))?;
+    let (_reader, writer) = tokio::io::split(stream);
+    let sender = TcpDeviceSender::new(writer, address);
+    let request = NetworkPacket::new("kdeconnect.findmydevice")
+        .with_body(serde_json::json!({ "ring": true }));
+    sender
+        .send_packet(&request)
+        .await
+        .map_err(|e| format!("Failed to send findmydevice: {e}"))
 }
 
 /// Send clipboard content to peer using KDE Connect protocol.
