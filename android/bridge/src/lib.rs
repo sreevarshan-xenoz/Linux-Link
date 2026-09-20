@@ -580,6 +580,19 @@ pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeGetMonit
     to_jstring(&mut env, json)
 }
 
+/// Desktop battery state JSON (`{currentCharge, isCharging}` / `{noBattery}`).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeGetBattery(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    address: JString<'_>,
+    port: jint,
+) -> jstring {
+    let address = jstring_to_string(&mut env, &address);
+    let json = envelope(RUNTIME.block_on(api::get_battery(address, port as u16)));
+    to_jstring(&mut env, json)
+}
+
 /// Hyprland window list (R3#7 picker):
 /// `{"ok": [[WindowInfoDto, ...], activeAddress, screenBoxOrNull]}` where
 /// `screenBoxOrNull` is the monitor layout `[x, y, w, h]` in desktop coords.

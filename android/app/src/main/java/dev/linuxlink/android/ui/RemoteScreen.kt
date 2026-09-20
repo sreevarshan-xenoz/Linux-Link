@@ -142,7 +142,7 @@ fun RemoteScreen(
                 .align(Alignment.TopStart)
                 .padding(8.dp),
         ) {
-            StatsHud()
+            StatsHud(address = address, controlPort = controlPort)
             WorkspaceHud(
                 address = address,
                 port = port,

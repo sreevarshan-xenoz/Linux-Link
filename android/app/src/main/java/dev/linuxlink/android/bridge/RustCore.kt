@@ -78,6 +78,7 @@ object RustCore {
     private external fun nativeSendFile(address: String, port: Int, filePath: String): String
     private external fun nativeListRemoteFiles(address: String, port: Int, remotePath: String): String
     private external fun nativeGetMonitors(address: String, port: Int): String
+    private external fun nativeGetBattery(address: String, port: Int): String
     private external fun nativeGetMonitorCount(address: String, port: Int): String
     private external fun nativeGetWindows(address: String, port: Int): String
     private external fun nativeSendWindowCrop(
@@ -336,6 +337,10 @@ object RustCore {
 
     fun getMonitors(address: String, port: Int): Result<String> =
         envelope(nativeGetMonitors(address, port))
+
+    /** Desktop battery as `{currentCharge, isCharging}` or `{noBattery}` (Tier-2 #11). */
+    fun getBattery(address: String, port: Int): Result<String> =
+        envelope(nativeGetBattery(address, port))
 
     fun getMonitorCount(address: String, port: Int): Result<String> =
         envelope(nativeGetMonitorCount(address, port))

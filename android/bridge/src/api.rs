@@ -1189,6 +1189,39 @@ pub async fn get_monitor_count(address: String, port: u16) -> Result<u32, String
     get_monitors(address, port).await.map(|m| m.len() as u32)
 }
 
+/// Desktop battery state as `{currentCharge, isCharging}`, or `noBattery` on
+/// desktops without one (KDE Connect parity, Tier-2 #11).
+pub async fn get_battery(address: String, port: u16) -> Result<serde_json::Value, String> {
+    let conn_mgr = ConnectionManager::new(Duration::from_secs(5));
+    let identity = client_identity();
+    let stream = conn_mgr
+        .connect(&address, port, &identity)
+        .await
+        .map_err(|e| format!("Connection failed: {e}"))?;
+    let (reader, writer) = tokio::io::split(stream);
+    let sender = TcpDeviceSender::new(writer, address);
+    let request = NetworkPacket::new("kdeconnect.battery.request").with_body(serde_json::json!({}));
+    sender
+        .send_packet(&request)
+        .await
+        .map_err(|e| format!("Failed to send battery query: {e}"))?;
+
+    let mut lines = tokio::io::BufReader::new(reader).lines();
+    match tokio::time::timeout(Duration::from_secs(5), lines.next_line()).await {
+        Ok(Ok(Some(line))) => match NetworkPacket::from_wire(&line) {
+            Ok(packet) if packet.packet_type == "kdeconnect.battery" => Ok(packet.body),
+            Ok(packet) => Err(format!(
+                "Unexpected response packet type {}",
+                packet.packet_type
+            )),
+            Err(e) => Err(format!("Failed to parse battery response: {e}")),
+        },
+        Ok(Ok(None)) => Err("Connection closed by peer".to_string()),
+        Ok(Err(e)) => Err(format!("Read error: {e}")),
+        Err(_) => Err("Timeout waiting for battery response".to_string()),
+    }
+}
+
 /// A desktop window reported by the server's Hyprland windows plugin
 /// (R3#7 picker). `at`/`size` are global desktop coordinates; `local_at` is
 /// the window origin within its monitor — the space `InputPacket::WindowCrop`
