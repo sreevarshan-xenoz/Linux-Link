@@ -130,6 +130,7 @@ fun RemoteDesktopView(
     inputMode: InputMode = InputMode.DirectTouch,
     mapping: DesktopMapping? = null,
     monitorIndex: Int = -1,
+    onStatus: (StreamStatus) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val decoderHost = remember { DecoderHost() }
@@ -193,6 +194,7 @@ fun RemoteDesktopView(
                                         height,
                                         HostStore.wanIdentity(context, address),
                                         monitorIndex,
+                                        onStatus,
                                     ) { w, h -> videoSize = IntSize(w, h) }
                                 }
 
@@ -447,6 +449,18 @@ private fun declareFrameRate(holder: android.view.SurfaceHolder, display: androi
     }
 }
 
+/** Which link a live video session came up over (session UI status chip). */
+enum class StreamTransportKind { Lan, Wan }
+
+/** Lifecycle of the video connect attempt, reported to the session UI. */
+sealed interface StreamStatus {
+    data object Connecting : StreamStatus
+
+    data class Up(val kind: StreamTransportKind) : StreamStatus
+
+    data class Down(val reason: String) : StreamStatus
+}
+
 /** Owns the decoder thread; start/stop are idempotent. */
 private class DecoderHost {
     @Volatile
@@ -462,19 +476,42 @@ private class DecoderHost {
         height: Int,
         wanIdentity: String?,
         monitorIndex: Int = -1,
+        onStatus: (StreamStatus) -> Unit = {},
         onVideoSize: (Int, Int) -> Unit,
     ) {
         if (thread != null) return
         val active = H264Decoder(surface, width, height, onVideoSize)
         decoder = active
+        // Stale reports from a stopped generation must not clobber a newer
+        // attempt's status.
+        val report: (StreamStatus) -> Unit = { if (decoder === active) onStatus(it) }
+        report(StreamStatus.Connecting)
         thread = Thread({
             // The Rust bridge blocks, so connect + drain share this thread.
             // LAN first; fall back to dialing the cached iroh WAN identity
             // when the desktop is off-network (R1 stage 3).
-            val connected =
-                RustCore.connectStreaming(address, port, monitorIndex).isSuccess ||
-                    (wanIdentity != null &&
-                        RustCore.connectStreamingWan(address, wanIdentity, monitorIndex).isSuccess)
+            val lan = RustCore.connectStreaming(address, port, monitorIndex)
+            var connected = lan.isSuccess
+            val status = when {
+                connected -> StreamStatus.Up(StreamTransportKind.Lan)
+                wanIdentity == null -> StreamStatus.Down(
+                    "LAN connect failed (${lan.exceptionOrNull()?.message ?: "no error"}); " +
+                        "no cached WAN identity for $address — pair/connect on LAN first.",
+                )
+                else -> {
+                    val wan = RustCore.connectStreamingWan(address, wanIdentity, monitorIndex)
+                    connected = wan.isSuccess
+                    if (wan.isSuccess) {
+                        StreamStatus.Up(StreamTransportKind.Wan)
+                    } else {
+                        StreamStatus.Down(
+                            "LAN: ${lan.exceptionOrNull()?.message ?: "?"} · " +
+                                "WAN: ${wan.exceptionOrNull()?.message ?: "?"}",
+                        )
+                    }
+                }
+            }
+            report(status)
             if (connected) active.start()
         }, "h264-decode").apply {
             isDaemon = true

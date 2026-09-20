@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -33,6 +34,8 @@ import dev.linuxlink.android.stream.InputMode
 import dev.linuxlink.android.stream.RemoteDesktopView
 import dev.linuxlink.android.stream.ShortcutBar
 import dev.linuxlink.android.stream.StatsHud
+import dev.linuxlink.android.stream.StreamStatus
+import dev.linuxlink.android.stream.StreamTransportKind
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -70,6 +73,10 @@ fun RemoteScreen(
     }
     var showStream by remember { mutableStateOf(true) }
     var showMonitorPicker by remember { mutableStateOf(false) }
+    // Video-link status (LAN/WAN/failed) for the current stream generation.
+    var streamStatus by remember {
+        mutableStateOf<StreamStatus>(StreamStatus.Connecting)
+    }
     // Tier-2 #11b: PIN pairing state. Unpaired sessions open the sheet —
     // with pairing enforced, the control channel only answers the handshake.
     var pairedServerId by remember(address) { mutableStateOf(HostStore.pairedDesktopId(context, address)) }
@@ -86,6 +93,15 @@ fun RemoteScreen(
         }
     }
 
+    fun retryStream() {
+        showStream = false
+        streamStatus = StreamStatus.Connecting
+        scope.launch {
+            withContext(Dispatchers.IO) { RustCore.stopStreaming() }
+            showStream = true
+        }
+    }
+
     fun switchMonitor(index: Int) {
         showMonitorPicker = false
         if (index == monitorIndex) return
@@ -93,6 +109,7 @@ fun RemoteScreen(
         cropWindow = null
         cropScreen = null
         monitorIndex = index
+        streamStatus = StreamStatus.Connecting
         showStream = false
         scope.launch {
             withContext(Dispatchers.IO) { RustCore.stopStreaming() }
@@ -150,8 +167,54 @@ fun RemoteScreen(
                 inputMode = mode,
                 mapping = cropWindow?.desktopMapping(cropScreen),
                 monitorIndex = monitorIndex,
+                onStatus = { streamStatus = it },
                 modifier = Modifier.fillMaxSize(),
             )
+        }
+
+        // Connect-status chip: shown until the video link is up (and again
+        // if it fails, with the LAN/WAN reasons + a retry). A live WAN link
+        // keeps a small badge so the user knows the video is off-LAN.
+        val status = streamStatus
+        if (status is StreamStatus.Up && status.kind == StreamTransportKind.Wan) {
+            Text(
+                "WAN link (iroh)",
+                color = Color.White,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 4.dp),
+            )
+        }
+        if (status !is StreamStatus.Up) {
+            Column(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(horizontal = 32.dp, vertical = 64.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                val label = when (status) {
+                    is StreamStatus.Connecting -> "Connecting…"
+                    is StreamStatus.Down -> status.reason
+                    else -> ""
+                }
+                Text(
+                    label,
+                    color = Color.White,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier
+                        .background(
+                            androidx.compose.ui.graphics.Color(0xCC000000),
+                            androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                        )
+                        .padding(10.dp),
+                )
+                if (status is StreamStatus.Down) {
+                    TextButton(onClick = ::retryStream) {
+                        Text("Retry", color = Color.White)
+                    }
+                }
+            }
         }
 
         Column(
