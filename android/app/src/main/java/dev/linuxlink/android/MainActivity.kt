@@ -26,6 +26,9 @@ class MainActivity : ComponentActivity() {
     companion object {
         /** Set by the notification's Disconnect action (Tier 1 #5). */
         const val EXTRA_DISCONNECT = "dev.linuxlink.android.DISCONNECT"
+
+        /** Set by the notification's Lock-desktop action (Tier-3 #15). */
+        const val EXTRA_LOCK_DESKTOP = "dev.linuxlink.android.LOCK_DESKTOP"
     }
 
     private val disconnectSignal = mutableIntStateOf(0)
@@ -121,6 +124,20 @@ class MainActivity : ComponentActivity() {
         if (intent.getBooleanExtra(EXTRA_DISCONNECT, false)) {
             Thread { runCatching { RustCore.stopStreaming() } }.start()
             disconnectSignal.intValue += 1
+        }
+        if (intent.getBooleanExtra(EXTRA_LOCK_DESKTOP, false)) {
+            val address = intent.getStringExtra(
+                dev.linuxlink.android.service.SessionForegroundService.EXTRA_ADDRESS,
+            )
+            val controlPort = intent.getIntExtra(
+                dev.linuxlink.android.service.SessionForegroundService.EXTRA_CONTROL_PORT,
+                HostStore.DEFAULT_CONTROL_PORT,
+            )
+            if (!address.isNullOrBlank()) {
+                Thread {
+                    runCatching { RustCore.desktopPrivacy(address, controlPort, "status", lock = true) }
+                }.start()
+            }
         }
     }
 

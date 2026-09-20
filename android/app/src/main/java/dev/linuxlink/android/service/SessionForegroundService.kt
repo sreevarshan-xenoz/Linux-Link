@@ -31,6 +31,7 @@ class SessionForegroundService : Service() {
         const val ACTION_STOP = "dev.linuxlink.android.action.STOP_SESSION"
         const val EXTRA_ADDRESS = "address"
         const val EXTRA_PORT = "port"
+        const val EXTRA_CONTROL_PORT = "controlPort"
 
         private const val CHANNEL_ID = "linux-link-session"
         private const val NOTIFICATION_ID = 1
@@ -38,6 +39,9 @@ class SessionForegroundService : Service() {
         /** Safety bound for the session wake lock: 6 h, extended on restart. */
         private const val WAKE_LOCK_TIMEOUT_MS = 6L * 60 * 60 * 1000
     }
+
+    private var sessionAddress = "remote host"
+    private var sessionControlPort = 1716
 
     override fun onDestroy() {
         if (wakeLock.isHeld) wakeLock.release()
@@ -65,8 +69,11 @@ class SessionForegroundService : Service() {
         }
         wakeLock.acquire(WAKE_LOCK_TIMEOUT_MS)
         createChannel()
-        val address = intent?.getStringExtra(EXTRA_ADDRESS) ?: "remote host"
-        val notification = buildNotification(address)
+        sessionAddress = intent?.getStringExtra(EXTRA_ADDRESS) ?: sessionAddress
+        intent?.getIntExtra(EXTRA_CONTROL_PORT, 0)?.takeIf { it > 0 }?.let {
+            sessionControlPort = it
+        }
+        val notification = buildNotification(sessionAddress)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(
                 NOTIFICATION_ID,
@@ -111,6 +118,19 @@ class SessionForegroundService : Service() {
                 .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
+        // Tier-3 #15 carry-over from Tier 1 #5: lock the *desktop* straight
+        // from the notification — MainActivity routes it to the privacy
+        // plugin without disturbing the open session.
+        val lockDesktop = PendingIntent.getActivity(
+            this,
+            2,
+            Intent(this, MainActivity::class.java)
+                .putExtra(MainActivity.EXTRA_LOCK_DESKTOP, true)
+                .putExtra(EXTRA_ADDRESS, sessionAddress)
+                .putExtra(EXTRA_CONTROL_PORT, sessionControlPort)
+                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
         return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_menu_view)
             .setContentTitle("Linux Link")
@@ -122,6 +142,13 @@ class SessionForegroundService : Service() {
                     null,
                     "Disconnect",
                     disconnect,
+                ).build(),
+            )
+            .addAction(
+                Notification.Action.Builder(
+                    null,
+                    "Lock desktop",
+                    lockDesktop,
                 ).build(),
             )
             .build()

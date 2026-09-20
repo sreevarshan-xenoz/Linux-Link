@@ -384,6 +384,10 @@ object RustCore {
         lock: Boolean = false,
     ): Result<String> = envelope(nativeDesktopPrivacy(address, port, action, lock))
 
+    /** Convenience: give the desktop's local keyboard+mouse back (Tier-3 #15). */
+    fun releaseDesktopPrivacy(address: String, port: Int): Result<String> =
+        desktopPrivacy(address, port, "release")
+
     /**
      * Consume the find-my-device siren latch (Tier-2 #11). Returns true once
      * per `kdeconnect.findmydevice` `{ring:true}` pushed by the desktop.

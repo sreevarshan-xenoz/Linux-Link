@@ -172,6 +172,7 @@ fun RemoteScreen(
             action = SessionForegroundService.ACTION_START
             putExtra(SessionForegroundService.EXTRA_ADDRESS, address)
             putExtra(SessionForegroundService.EXTRA_PORT, port)
+            putExtra(SessionForegroundService.EXTRA_CONTROL_PORT, controlPort)
         }
         context.startForegroundService(start)
         val window = context.findActivity()?.window
