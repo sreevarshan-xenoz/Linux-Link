@@ -59,6 +59,7 @@ Linux Link is a **pure Rust** remote desktop solution built specifically for Lin
 - **Connection screen** with peer discovery over Tailscale
 - **Remote desktop** with tap/drag/double-tap gesture input
 - **Link status** — connecting/LAN/WAN indicator on the video surface, with failure reasons and one-tap retry
+- **Session resilience** — QUIC keepalive + bounded idle timeout hold the link through NAT stalls; a wake-locked foreground service keeps screen-off sessions alive
 - **File browser** with local and remote file tabs
 - **Settings** with DataStore persistence
 

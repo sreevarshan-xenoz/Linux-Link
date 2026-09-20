@@ -9,6 +9,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import dev.linuxlink.android.MainActivity
 import dev.linuxlink.android.bridge.RustCore
 
@@ -33,9 +34,28 @@ class SessionForegroundService : Service() {
 
         private const val CHANNEL_ID = "linux-link-session"
         private const val NOTIFICATION_ID = 1
+
+        /** Safety bound for the session wake lock: 6 h, extended on restart. */
+        private const val WAKE_LOCK_TIMEOUT_MS = 6L * 60 * 60 * 1000
+    }
+
+    override fun onDestroy() {
+        if (wakeLock.isHeld) wakeLock.release()
+        super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    /// Partial wake lock (Tier-3 #13 Doze strategy): an unattended screen-off
+    /// session must keep draining frames and answering the QUIC keepalive —
+    /// Doze would otherwise suspend the CPU and let the idle timeout kill a
+    /// perfectly healthy link. Bounded timeout so a stuck service can never
+    /// hold the device awake forever; re-acquired (extended) on every start.
+    private val wakeLock: PowerManager.WakeLock by lazy {
+        (getSystemService(POWER_SERVICE) as PowerManager)
+            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "linux-link:session")
+            .apply { setReferenceCounted(false) }
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
@@ -43,6 +63,7 @@ class SessionForegroundService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
+        wakeLock.acquire(WAKE_LOCK_TIMEOUT_MS)
         createChannel()
         val address = intent?.getStringExtra(EXTRA_ADDRESS) ?: "remote host"
         val notification = buildNotification(address)

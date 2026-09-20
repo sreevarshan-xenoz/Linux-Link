@@ -47,12 +47,27 @@ impl Default for StreamTransportConfig {
 /// congestion controller is selectable for A/B testing via the
 /// `LINUX_LINK_CC` environment variable: `bbr`, `cubic`, or `new_reno`
 /// (the default, matching quinn's own default).
+///
+/// Roaming hardening (Tier-3 #13): a bounded idle timeout makes dead peers
+/// detectable instead of lingering forever, and a keepalive well below half
+/// of it holds NAT bindings through video stalls and brief radio sleeps.
+/// Address migration (Wi-Fi → LTE mid-session, keeping the live connection
+/// via QUIC path validation) is accepted by the server automatically —
+/// quinn's `ServerConfig::migration` defaults to `true`.
 pub fn configured_transport() -> quinn::TransportConfig {
+    const KEEPALIVE_SECS: u64 = 15;
+    const IDLE_TIMEOUT_SECS: u64 = 45;
     let mut transport = quinn::TransportConfig::default();
     transport.datagram_send_buffer_size(16 * 1024 * 1024);
     transport.datagram_receive_buffer_size(Some(16 * 1024 * 1024));
     transport.max_concurrent_uni_streams(1024u32.into());
     transport.max_concurrent_bidi_streams(128u32.into());
+    transport.keep_alive_interval(Some(std::time::Duration::from_secs(KEEPALIVE_SECS)));
+    transport.max_idle_timeout(Some(
+        std::time::Duration::from_secs(IDLE_TIMEOUT_SECS)
+            .try_into()
+            .expect("idle timeout fits TransportDuration"),
+    ));
     apply_congestion_controller(&mut transport);
     transport
 }
@@ -640,5 +655,20 @@ mod tests {
             let _ = configured_transport();
         }
         unsafe { std::env::remove_var("LINUX_LINK_CC") };
+    }
+
+    #[test]
+    fn roaming_hardening_settings() {
+        // TransportConfig has no public getters; its Debug dumps every field.
+        let transport = configured_transport();
+        let rendered = format!("{transport:?}");
+        assert!(
+            rendered.contains("keep_alive_interval: Some(15s)"),
+            "keepalive missing: {rendered}"
+        );
+        assert!(
+            rendered.contains("max_idle_timeout: Some(45000)"),
+            "idle timeout missing: {rendered}"
+        );
     }
 }
