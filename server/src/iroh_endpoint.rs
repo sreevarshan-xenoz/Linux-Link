@@ -109,12 +109,15 @@ pub async fn push_endpoint_to(sender: &Arc<dyn DeviceSender>, endpoint: &Endpoin
 ///
 /// Each accepted connection runs one v1 streaming session — identical to the
 /// quinn LAN arm in `service.rs`, just over iroh/noq and reachable from
-/// outside the LAN. Errors are logged per-connection; the loop lives until the
-/// endpoint is closed.
+/// outside the LAN. With `pairing_required` the session is gated on the
+/// deviceId the client announces in-band, exactly like the LAN arm.
+/// Errors are logged per-connection; the loop lives until the endpoint is
+/// closed.
 pub async fn spawn_wan_endpoint(
     config: StreamingConfig,
     input_tx: broadcast::Sender<InputPacket>,
     cert_manager: Arc<CertManager>,
+    pairing_required: bool,
 ) -> Result<Endpoint> {
     let secret_key =
         load_or_create_secret_key(&key_path()?).context("failed to load iroh identity key")?;
@@ -166,6 +169,13 @@ pub async fn spawn_wan_endpoint(
                 let mut streaming_server =
                     StreamingServer::new(config, StreamTransportConfig::default(), cert_manager);
                 streaming_server.set_input_channel(input_tx);
+                if pairing_required {
+                    streaming_server.set_pairing_gate(|device_id| {
+                        device_id
+                            .as_deref()
+                            .is_some_and(crate::plugins::pair::is_paired_device)
+                    });
+                }
                 if let Err(e) = streaming_server
                     .run_on_connection(IrohConnection::shared(conn))
                     .await

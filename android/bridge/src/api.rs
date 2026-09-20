@@ -990,19 +990,22 @@ pub async fn connect_streaming(
         tracing::info!(peer = %peer_label, "Establishing new trust bond with peer (TOFU)");
     }
 
-    let (client, packet_rx, audio_rx) =
-        StreamingClient::connect(&addr, cert_manager, monitor_index)
-            .await
-            .map_err(|e| {
-                let err_dto =
-                    LinuxLinkErrorDto::from(linux_link_core::error::LinuxLinkError::from(e));
-                *crate::SESSION_STATUS.lock().unwrap() = SessionStatus::Error(LinuxLinkErrorDto {
-                    code: err_dto.code,
-                    message: err_dto.message.clone(),
-                    is_retryable: err_dto.is_retryable,
-                });
-                err_dto.message
-            })?;
+    let (client, packet_rx, audio_rx) = StreamingClient::connect(
+        &addr,
+        cert_manager,
+        monitor_index,
+        Some(&client_identity().device_id),
+    )
+    .await
+    .map_err(|e| {
+        let err_dto = LinuxLinkErrorDto::from(linux_link_core::error::LinuxLinkError::from(e));
+        *crate::SESSION_STATUS.lock().unwrap() = SessionStatus::Error(LinuxLinkErrorDto {
+            code: err_dto.code,
+            message: err_dto.message.clone(),
+            is_retryable: err_dto.is_retryable,
+        });
+        err_dto.message
+    })?;
 
     install_streaming(client, packet_rx, audio_rx, address, streaming_port, None).await
 }
@@ -1076,8 +1079,12 @@ pub async fn connect_streaming_wan(
         err_dto.message
     })?;
 
-    let (client, packet_rx, audio_rx) =
-        StreamingClient::attach(dial.connection(), monitor_index).await;
+    let (client, packet_rx, audio_rx) = StreamingClient::attach(
+        dial.connection(),
+        monitor_index,
+        Some(&client_identity().device_id),
+    )
+    .await;
 
     install_streaming(client, packet_rx, audio_rx, address, 0, Some(dial)).await
 }

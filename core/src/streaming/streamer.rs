@@ -36,6 +36,10 @@ pub struct StreamingServer {
     adaptive_bitrate: Option<AdaptiveBitrate>,
     /// Channel for routing input events received from client over this QUIC connection
     input_tx: Option<tokio::sync::broadcast::Sender<InputPacket>>,
+    /// Optional pairing enforcement: called with the device id the client
+    /// announced in-band (None if it sent none); returning false rejects the
+    /// session before capture starts. See `set_pairing_gate`.
+    pairing_gate: Option<std::sync::Arc<dyn Fn(Option<String>) -> bool + Send + Sync + 'static>>,
 }
 
 impl StreamingServer {
@@ -55,6 +59,7 @@ impl StreamingServer {
             bitrate_tx,
             adaptive_bitrate: None,
             input_tx: None,
+            pairing_gate: None,
         }
     }
 
@@ -71,6 +76,19 @@ impl StreamingServer {
     /// values and forward them through this channel for injection on the host system.
     pub fn set_input_channel(&mut self, tx: tokio::sync::broadcast::Sender<InputPacket>) {
         self.input_tx = Some(tx);
+    }
+
+    /// Require pairing before any video/input pipeline starts.
+    ///
+    /// The QUIC transport authenticates the *endpoint*, not the device (both
+    /// TLS configs use `with_no_client_auth`), so the gate judges the device
+    /// id the client announces in-band. A client that announces nothing (an
+    /// older build) fails the gate while one is set.
+    pub fn set_pairing_gate<F>(&mut self, gate: F)
+    where
+        F: Fn(Option<String>) -> bool + Send + Sync + 'static,
+    {
+        self.pairing_gate = Some(std::sync::Arc::new(gate));
     }
 
     /// Update the target bitrate dynamically (for adaptive bitrate control)
@@ -174,8 +192,21 @@ impl StreamingServer {
 
     /// Run the full streaming pipeline for a single connection
     async fn run_pipeline(&mut self, connection: SharedConnection) -> Result<()> {
-        // Read optional client config stream before starting the pipeline.
-        read_client_config(&connection, &mut self.config).await;
+        // Read optional client config streams before starting the pipeline.
+        let device_id = read_client_config(&connection, &mut self.config).await;
+
+        if let Some(gate) = &self.pairing_gate
+            && !gate(device_id.clone())
+        {
+            warn!(
+                device_id = device_id.as_deref().unwrap_or("<none announced>"),
+                "Streaming session rejected: device not paired"
+            );
+            connection.close(0u32, b"pairing required");
+            return Err(anyhow::anyhow!(
+                "pairing required: this device must pair over the control channel first"
+            ));
+        }
 
         let cancel = self.cancel.clone();
         let (frame_tx, mut frame_rx) = mpsc::channel::<VideoFrame>(2);
@@ -659,54 +690,73 @@ fn trace_packet_stats(packet: &EncodedPacket) {
     );
 }
 
-/// Read an optional client config stream from the QUIC connection.
+/// Read the client's pre-pipeline config streams from the QUIC connection.
 ///
-/// The client may send a small config packet (6 bytes) immediately after
-/// establishing the connection to request a specific monitor index.
-/// This is read with a short timeout so the pipeline is not blocked if
-/// no config is sent.
-async fn read_client_config(connection: &SharedConnection, config: &mut StreamingConfig) {
-    tokio::select! {
-        biased;
-        result = connection.accept_uni() => {
-            match result {
-                Ok(mut stream) => {
-                    let mut buf = [0u8; 6];
-                    match tokio::time::timeout(Duration::from_millis(500), stream.read_exact(&mut buf)).await {
-                        Ok(Ok(())) => {
-                            if buf[0..2] == [0xFF, 0x00] {
-                                let monitor_index = u32::from_le_bytes(
-                                    buf[2..6].try_into().unwrap_or([0u8; 4]),
-                                );
-                                config.monitor_index = monitor_index;
-                                info!(
-                                    "Client config: monitor_index={}",
-                                    monitor_index
-                                );
-                            } else {
-                                debug!(
-                                    "Unknown config marker: {:02X?}",
-                                    &buf[0..2]
-                                );
-                            }
-                        }
-                        Ok(Err(e)) => {
-                            debug!("Config stream read error: {e}");
-                        }
-                        Err(_) => {
-                            debug!("Config stream timeout — no client config");
-                        }
-                    }
-                }
-                Err(e) => {
-                    debug!("No config stream from client: {e}");
-                }
+/// The client may send up to two small uni-streams immediately after
+/// connecting: a monitor-index config (`[0xFF, 0x00] + u32 LE`) and a device
+/// identity (`[0xFE, 0x00] + len u8 + utf8`, see `client::DEVICE_ID_MARKER`).
+/// Each read is bounded by a short timeout so the pipeline is not blocked
+/// when a stream (or the whole handshake, for older clients) is absent.
+/// Returns the announced device id, if any.
+async fn read_client_config(
+    connection: &SharedConnection,
+    config: &mut StreamingConfig,
+) -> Option<String> {
+    use super::client::{DEVICE_ID_MARKER, MONITOR_CONFIG_MARKER};
+
+    let mut device_id: Option<String> = None;
+    for _ in 0..2 {
+        let stream = tokio::select! {
+            biased;
+            result = connection.accept_uni() => result,
+            _ = tokio::time::sleep(Duration::from_millis(200)) => {
+                debug!("No further client config streams within 200ms");
+                break;
             }
+        };
+        let Ok(mut stream) = stream else { break };
+
+        let mut marker = [0u8; 2];
+        if !read_with_timeout(&mut *stream, &mut marker).await {
+            break;
         }
-        _ = tokio::time::sleep(Duration::from_millis(200)) => {
-            debug!("No client config stream within 200ms");
+        if marker == MONITOR_CONFIG_MARKER {
+            let mut buf = [0u8; 4];
+            if !read_with_timeout(&mut *stream, &mut buf).await {
+                break;
+            }
+            let monitor_index = u32::from_le_bytes(buf);
+            config.monitor_index = monitor_index;
+            info!("Client config: monitor_index={}", monitor_index);
+        } else if marker == DEVICE_ID_MARKER {
+            let mut len = [0u8; 1];
+            if !read_with_timeout(&mut *stream, &mut len).await {
+                break;
+            }
+            let mut id = vec![0u8; len[0] as usize];
+            if !read_with_timeout(&mut *stream, &mut id).await {
+                break;
+            }
+            match String::from_utf8(id) {
+                Ok(id) => {
+                    info!("Client identity: deviceId={}", id);
+                    device_id = Some(id);
+                }
+                Err(e) => debug!("Malformed device identity stream: {e}"),
+            }
+        } else {
+            debug!("Unknown config marker: {:02X?}", &marker);
         }
     }
+    device_id
+}
+
+/// `read_exact` bounded by a short timeout; false on timeout or error.
+async fn read_with_timeout(stream: &mut dyn super::connection::InStream, buf: &mut [u8]) -> bool {
+    matches!(
+        tokio::time::timeout(Duration::from_millis(500), stream.read_exact(buf)).await,
+        Ok(Ok(()))
+    )
 }
 
 /// Monitors QUIC connection stats and feeds RTT to the adaptive bitrate controller

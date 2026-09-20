@@ -38,7 +38,8 @@ async fn test_reconnect_storm_kills_stale_sessions() -> anyhow::Result<()> {
                     max_version: 1,
                     capabilities: vec![],
                 };
-                let _ = handle_v2_session(conn, local_identity, registry_c).await;
+                // pairing_required=false: these mock clients never paired.
+                let _ = handle_v2_session(conn, local_identity, registry_c, false).await;
             });
         }
     });

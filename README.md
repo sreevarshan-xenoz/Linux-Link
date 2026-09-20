@@ -47,7 +47,7 @@ Linux Link is a **pure Rust** remote desktop solution built specifically for Lin
 - **Notifications** — receive Android notifications on your Linux desktop
 - **Notification reply** — answer desktop notifications from the phone; the desktop records the reply, copies it to the clipboard and shows a confirmation
 - **Find my device** — ring the desktop from the phone, or ring the phone from the desktop
-- **PIN pairing** — 6-digit PIN pairing (shown on the desktop or printed by `linux-link pair`); unpaired control connections are locked out unless `pairing_required = false`
+- **PIN pairing** — 6-digit PIN pairing (shown on the desktop or printed by `linux-link pair`); unpaired connections are locked out — the control channel (TCP and v2/QUIC) and the video/input stream all enforce it — unless `pairing_required = false`
 - **Privacy mode** — block the desktop's physical keyboard+mouse while remote (EVIOCGRAB with a 10-min auto-release TTL), lock the desktop from the phone or its session notification; uinput remote input keeps flowing
 - **Desktop audio control** — adjust the desktop's volume, mute, and default output device (headphones/speakers) from the phone (wpctl/pactl under the hood)
 - **Wake-on-LAN relay** — wake a sleeping desktop from WAN by asking an always-on Linux peer on its LAN to emit the magic packet ("Send Wake-on-LAN" in the app)
@@ -184,7 +184,7 @@ control_port = 1716        # KDE Connect compatible
 streaming_port = 4716      # QUIC streaming port
 log_level = "info"         # trace/debug/info/warn/error
 video_quality = "balanced" # low/balanced/high
-pairing_required = true    # PIN-pair devices before the control channel serves requests
+pairing_required = true    # PIN-pair devices before the control channel or streaming serves requests
 ```
 
 ### systemd Service

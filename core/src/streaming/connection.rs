@@ -72,6 +72,10 @@ pub trait Connection: Send + Sync {
     async fn accept_uni(&self) -> Result<Box<dyn InStream>, ConnectionError>;
     fn remote_address(&self) -> SocketAddr;
     fn stats(&self) -> ConnectionStats;
+    /// Immediately tear down the connection with an application error code
+    /// and reason (e.g. rejecting an unpaired session), instead of letting
+    /// the peer sit on a live-but-dead connection until the idle timeout.
+    fn close(&self, error_code: u32, reason: &[u8]);
 }
 
 /// Shared handle passed around pipeline tasks (quinn::Connection itself is
@@ -151,6 +155,10 @@ impl Connection for QuinnConnection {
             rtt: s.path.rtt,
             lost_packets: s.path.lost_packets,
         }
+    }
+
+    fn close(&self, error_code: u32, reason: &[u8]) {
+        self.inner.close(error_code.into(), reason);
     }
 }
 

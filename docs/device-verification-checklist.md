@@ -31,6 +31,10 @@ place.
 - [ ] Manual flow: `linux-link pair` on desktop → type 6-digit PIN on phone → paired.
 - [ ] Wrong/expired PIN → clear error, retry works.
 - [ ] With an *unpaired* second phone: control features (clipboard, monitors) must stay locked out.
+- [ ] QUIC gate (v2 + video): before pairing completes, video must not flow — desktop log shows
+      "Streaming session rejected: device not paired" (or "Unpaired device … on v2 QUIC") and the
+      phone's status chip goes Down; after pairing, video works with no app restart beyond Retry.
+- [ ] QUIC gate over WAN (iroh): unpaired dial is rejected the same way (desktop log + no frames).
 
 ## 2. Session shell + video (Tier 1 #5, R2#2, R2#5)
 

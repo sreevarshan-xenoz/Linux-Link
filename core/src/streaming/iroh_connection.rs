@@ -117,6 +117,11 @@ impl Connection for IrohConnection {
             lost_packets: self.inner.stats().lost_packets,
         }
     }
+
+    fn close(&self, error_code: u32, reason: &[u8]) {
+        self.inner
+            .close(iroh::endpoint::VarInt::from_u32(error_code), reason);
+    }
 }
 
 /// Client-side WAN dial (R1 stage 3).

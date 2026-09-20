@@ -21,7 +21,13 @@ pub const DEFAULT_STREAMING_PORT: u16 = 4716;
 
 /// Marker bytes for a client-to-server config QUIC stream.
 /// Used to transmit settings (e.g. monitor index) before the pipeline starts.
-const MONITOR_CONFIG_MARKER: [u8; 2] = [0xFF, 0x00];
+pub(crate) const MONITOR_CONFIG_MARKER: [u8; 2] = [0xFF, 0x00];
+
+/// Marker bytes for a client-to-server identity QUIC stream:
+/// `[0xFE, 0x00, len:u8, utf8 deviceId]`. The QUIC TLS layer is anonymous
+/// (`with_no_client_auth` on both ends), so this is how the server binds a
+/// video session to the device that paired over the control channel.
+pub(crate) const DEVICE_ID_MARKER: [u8; 2] = [0xFE, 0x00];
 
 /// QUIC Stream Client — connects to a StreamingServer and receives H.264 video frames.
 ///
@@ -29,7 +35,7 @@ const MONITOR_CONFIG_MARKER: [u8; 2] = [0xFF, 0x00];
 ///
 /// ```ignore
 /// let cert_manager = std::sync::Arc::new(CertManager::new().unwrap());
-/// let (mut client, packet_rx) = StreamingClient::connect("100.64.0.1:4716", cert_manager).await?;
+/// let (mut client, packet_rx) = StreamingClient::connect("100.64.0.1:4716", cert_manager, None, None).await?;
 /// // Spawn a task to consume packets from packet_rx
 /// tokio::spawn(consume_packets(packet_rx));
 /// client.start().await; // runs until cancelled
@@ -73,11 +79,13 @@ impl StreamingClient {
     ///
     /// The address should be in the form `"host:port"`, e.g. `"100.64.0.1:4716"`.
     /// Optionally sends a `monitor_index` to the server for multi-monitor selection.
+    /// `device_id` is announced in-band so the server can apply its pairing gate.
     /// Returns the client and receiver channels for consuming video frames and audio packets.
     pub async fn connect(
         addr: &str,
         cert_manager: std::sync::Arc<CertManager>,
         monitor_index: Option<u32>,
+        device_id: Option<&str>,
     ) -> Result<(
         Self,
         mpsc::Receiver<EncodedPacket>,
@@ -120,6 +128,7 @@ impl StreamingClient {
             let (client, frame_rx, audio_rx) = Self::attach_with_session(
                 QuinnConnection::shared(quic_connection),
                 monitor_index,
+                device_id,
                 session_id,
             )
             .await;
@@ -137,17 +146,25 @@ impl StreamingClient {
     pub async fn attach(
         connection: SharedConnection,
         monitor_index: Option<u32>,
+        device_id: Option<&str>,
     ) -> (
         Self,
         mpsc::Receiver<EncodedPacket>,
         mpsc::Receiver<AudioPacket>,
     ) {
-        Self::attach_with_session(connection, monitor_index, uuid::Uuid::new_v4().to_string()).await
+        Self::attach_with_session(
+            connection,
+            monitor_index,
+            device_id,
+            uuid::Uuid::new_v4().to_string(),
+        )
+        .await
     }
 
     async fn attach_with_session(
         connection: SharedConnection,
         monitor_index: Option<u32>,
+        device_id: Option<&str>,
         session_id: String,
     ) -> (
         Self,
@@ -177,6 +194,33 @@ impl StreamingClient {
                 Err(e) => {
                     warn!(error = %e, "Failed to open config stream");
                 }
+            }
+        }
+
+        // Announce our device id so the server's pairing gate can bind this
+        // video session to the device that paired over the control channel.
+        if let Some(id) = device_id {
+            let id_bytes = id.as_bytes();
+            if id_bytes.len() <= u8::MAX as usize {
+                match connection.open_uni().await {
+                    Ok(mut identity_stream) => {
+                        let mut buf = Vec::with_capacity(3 + id_bytes.len());
+                        buf.extend_from_slice(&DEVICE_ID_MARKER);
+                        buf.push(id_bytes.len() as u8);
+                        buf.extend_from_slice(id_bytes);
+                        if let Err(e) = identity_stream.write_all(&buf).await {
+                            warn!(error = %e, "Failed to send device identity");
+                        }
+                        if let Err(e) = identity_stream.finish() {
+                            warn!(error = %e, "Failed to finish identity stream");
+                        }
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Failed to open identity stream");
+                    }
+                }
+            } else {
+                warn!("Device id too long to announce — pairing gate will reject");
             }
         }
 

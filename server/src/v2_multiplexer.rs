@@ -13,10 +13,16 @@ use linux_link_core::protocol::v2::{
 use crate::state;
 
 /// Handles a v2 multiplexed QUIC session.
+///
+/// With `pairing_required`, the control channel mirrors the TCP gate in
+/// `handle_connection_with_kde`: until the peer's deviceId is in the
+/// persisted TrustStore, only the pairing handshake packets are dispatched
+/// and everything else from this device is dropped.
 pub async fn handle_v2_session(
     conn: Connection,
     local_identity: IdentityPacketV2,
     registry: Arc<PluginRegistry>,
+    pairing_required: bool,
 ) -> anyhow::Result<()> {
     let peer_addr = conn.remote_address();
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -58,11 +64,38 @@ pub async fn handle_v2_session(
         // Spawn a dedicated task for the control stream (Stream 0) to ensure cancellation safety
         let control_registry = Arc::clone(&registry);
         let control_sender = Arc::clone(&sender);
+        let control_pairing_required = pairing_required;
+        let control_device_id = peer_identity.device_id.clone();
         let control_task = tokio::spawn(async move {
             loop {
                 match read_framed_json::<NetworkPacket>(&mut recv0).await {
                     Ok(p) => {
                          let packet_type = p.packet_type.clone();
+
+                         // PIN pairing enforcement (mirrors the TCP dispatch gate
+                         // in handle_connection_with_kde): until this device is in
+                         // the TrustStore, only the pairing handshake itself is
+                         // dispatched — every other plugin packet is dropped. The
+                         // v2 handshake already exchanged real device ids, so the
+                         // persisted TrustStore is the source of truth here.
+                         let pairing_packet = matches!(
+                             packet_type.as_str(),
+                             "kdeconnect.identity"
+                                 | "kdeconnect.pair"
+                                 | "kdeconnect.linuxlink.pair"
+                         );
+                         if control_pairing_required
+                             && !pairing_packet
+                             && !crate::plugins::pair::is_paired_device(&control_device_id)
+                         {
+                             debug!(
+                                 "Blocking {packet_type} from unpaired {} \
+                                  (set pairing_required = false to disable)",
+                                 control_device_id
+                             );
+                             continue;
+                         }
+
                          let packet_span = tracing::debug_span!("packet", type = %packet_type);
                          let registry = Arc::clone(&control_registry);
                          let sender = Arc::clone(&control_sender);

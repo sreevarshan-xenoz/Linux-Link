@@ -248,6 +248,7 @@ pub async fn run(config: Config) -> Result<()> {
         streaming_config.clone(),
         input_tx.clone(),
         Arc::clone(&cert_manager),
+        config.pairing_required,
     )
     .await
     {
@@ -345,6 +346,7 @@ pub async fn run(config: Config) -> Result<()> {
                     let local_v2_identity = local_v2_identity.clone();
                     let streaming_config = streaming_config.clone();
                     let input_tx = input_tx.clone();
+                    let pairing_required = config.pairing_required;
 
                     tokio::spawn(async move {
                         let conn = match incoming.await {
@@ -364,7 +366,7 @@ pub async fn run(config: Config) -> Result<()> {
 
                         match alpn.as_deref() {
                             Some(b"linux-link-v2") => {
-                                if let Err(e) = handle_v2_session(conn, local_v2_identity, registry_clone).await {
+                                if let Err(e) = handle_v2_session(conn, local_v2_identity, registry_clone, pairing_required).await {
                                     tracing::error!("v2 session error: {}", e);
                                 }
                             }
@@ -375,6 +377,16 @@ pub async fn run(config: Config) -> Result<()> {
                                     cert_manager_clone
                                 );
                                 streaming_server.set_input_channel(input_tx);
+                                if pairing_required {
+                                    // The stream transport's TLS is anonymous — the
+                                    // gate judges the deviceId the client announces
+                                    // in-band (see core client.rs DEVICE_ID_MARKER).
+                                    streaming_server.set_pairing_gate(|device_id| {
+                                        device_id
+                                            .as_deref()
+                                            .is_some_and(crate::plugins::pair::is_paired_device)
+                                    });
+                                }
                                 if let Err(e) = streaming_server
                                     .run_on_connection(QuinnConnection::shared(conn))
                                     .await

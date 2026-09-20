@@ -21,7 +21,9 @@ use crate::state;
 /// On success the phone's deviceId (learned from its `kdeconnect.identity`)
 /// is persisted to the TrustStore and the response carries the desktop's own
 /// deviceId so the phone can trust *us* back. Enforcement lives in the
-/// service dispatch loop, which gates plugin packets on [`is_trusted`].
+/// service dispatch loop, which gates plugin packets on [`is_trusted`], and
+/// on the QUIC paths, which gate on [`is_paired_device`] (the v2 handshake /
+/// in-band identity carry the real deviceId directly).
 
 /// How long a generated/CLI PIN stays valid.
 const PIN_TTL: Duration = Duration::from_secs(300);
@@ -73,6 +75,22 @@ pub fn is_trusted(conn_key: &str) -> bool {
         .lock()
         .expect("pair state")
         .contains_key(conn_key)
+}
+
+/// Is this deviceId in the persisted [`TrustStore`]?
+///
+/// Used by the QUIC paths (v2 multiplexer + video stream pipeline), which
+/// cannot key on a TCP connection: the stream transport's TLS is anonymous,
+/// so those paths bind sessions to the deviceId presented in-band (the v2
+/// handshake packet / the identity config stream) — the same id pairing
+/// stored here.
+pub fn is_paired_device(device_id: &str) -> bool {
+    let Ok(path) = state::trust_store_path() else {
+        return false;
+    };
+    TrustStore::load_or_create(path)
+        .map(|store| store.is_trusted(device_id))
+        .unwrap_or(false)
 }
 
 /// The desktop's own device id, for phone-side trust persistence.
@@ -203,7 +221,7 @@ async fn handle_pair(conn: &str, packet: &NetworkPacket, sender: &dyn DeviceSend
         return;
     };
     let Some(phone_id) = phone_ids().lock().expect("pair state").get(conn).cloned() else {
-        respond_pair(sender, false, "");
+        respond_pair(sender, false, "").await;
         return;
     };
 
@@ -313,5 +331,11 @@ mod tests {
         let caps = PairPlugin::default().incoming_capabilities();
         assert!(caps.contains(&"kdeconnect.pair"));
         assert!(caps.contains(&"kdeconnect.linuxlink.pair"));
+    }
+
+    #[test]
+    fn unknown_device_is_not_paired() {
+        // QUIC paths lean on this being a strict deny-by-default lookup.
+        assert!(!is_paired_device("00000000-0000-0000-0000-00000000dead"));
     }
 }
