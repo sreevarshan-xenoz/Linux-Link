@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -25,6 +26,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import dev.linuxlink.android.HostStore
@@ -116,15 +118,46 @@ fun RemoteScreen(
         }
     }
 
+    // Tier-3 #15 remainder: phone-side blackout / pocket mode. The session
+    // keeps streaming underneath; the phone shows a black, touch-consuming
+    // overlay, its window + video surface go secure (no screenshots,
+    // Recents, or screen-record leakage), and brightness drops. Double-tap
+    // or back unlocks. (True screen-off is not app-possible without key
+    // injection; the FGS partial wake lock keeps the link alive if the user
+    // powers down the panel themselves.)
+    var blackout by remember { mutableStateOf(false) }
+
+    LaunchedEffect(inPictureInPicture) {
+        if (inPictureInPicture) blackout = false
+    }
+
+    DisposableEffect(blackout) {
+        val window = context.findActivity()?.window
+        fun applySecure(secure: Boolean) {
+            if (window == null) return
+            if (secure) {
+                window.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+            } else {
+                window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+            }
+            val lp = window.attributes
+            lp.screenBrightness = if (secure) 0.01f else -1f
+            window.attributes = lp
+        }
+        applySecure(blackout)
+        onDispose { applySecure(false) }
+    }
+
     // Tier-3 #17: system back / predictive back gesture ends the session
     // cleanly (same path as "Exit" → recompose to ConnectScreen → disposal
     // stops streaming) instead of killing the whole activity. Sheets sit
     // above this in the back stack and consume back themselves; in PiP the
     // system gesture closes the float window, so the handler stands down.
-    androidx.activity.compose.BackHandler(
-        enabled = !inPictureInPicture,
-        onBack = onExit,
-    )
+    // Tier-3 #15 remainder: while blackout is on, back just uncovers the
+    // phone — it must never drop a session the user can't currently see.
+    androidx.activity.compose.BackHandler(enabled = !inPictureInPicture) {
+        if (blackout) blackout = false else onExit()
+    }
 
     LaunchedEffect(address) {
         val serverId = withContext(Dispatchers.IO) { RustCore.checkPairResult(1L) }
@@ -213,6 +246,7 @@ fun RemoteScreen(
                 monitorIndex = monitorIndex,
                 onStatus = { streamStatus = it },
                 onVideoSizeChanged = { w, h -> videoSize = androidx.compose.ui.unit.IntSize(w, h) },
+                secure = blackout,
                 modifier = Modifier.fillMaxSize(),
             )
         }
@@ -366,6 +400,9 @@ fun RemoteScreen(
                     ) {
                         Text("Lock PC", color = Color.White)
                     }
+                    TextButton(onClick = { blackout = true }) {
+                        Text("Blackout", color = Color.White)
+                    }
                     TextButton(
                         onClick = {
                             (context.findActivity() as? dev.linuxlink.android.MainActivity)
@@ -382,6 +419,28 @@ fun RemoteScreen(
                     address = address,
                     port = port,
                     modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+
+        // Blackout overlay: last child = topmost. Opaque black covers the
+        // (already secure) video surface, the tap detector consumes every
+        // gesture so nothing reaches the remote input layer, and a
+        // double-tap is the unlock.
+        if (blackout && !inPictureInPicture) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black)
+                    .pointerInput(Unit) {
+                        detectTapGestures(onDoubleTap = { blackout = false })
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    "Blackout — double-tap to unlock",
+                    color = Color.White.copy(alpha = 0.35f),
+                    style = MaterialTheme.typography.bodyMedium,
                 )
             }
         }

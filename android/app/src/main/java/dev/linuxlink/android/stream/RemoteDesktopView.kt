@@ -132,6 +132,9 @@ fun RemoteDesktopView(
     monitorIndex: Int = -1,
     onStatus: (StreamStatus) -> Unit = {},
     onVideoSizeChanged: (Int, Int) -> Unit = { _, _ -> },
+    /** Mark the video surface secure (Tier-3 #15 blackout mode) so decoded
+     * frames never appear in screenshots, recordings, or Recents. */
+    secure: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val decoderHost = remember { DecoderHost() }
@@ -217,6 +220,7 @@ fun RemoteDesktopView(
                         )
                     }
                 },
+                update = { view -> (view as SurfaceView).setSecure(secure) },
                 modifier = Modifier.matchParentSize(),
             )
         }
