@@ -13,7 +13,6 @@ use std::time::Duration;
 use linux_link_core::protocol::kdeconnect::{DeviceSender, NetworkPacket};
 
 use crate::hyprland::{HyprEvent, HyprlandIpc};
-use crate::state;
 
 /// Packet type for a single Hyprland event (body: `{event, data}`).
 pub const EVENT_PACKET: &str = "kdeconnect.linuxlink.hyprland.event";

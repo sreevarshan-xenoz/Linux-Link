@@ -13,7 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
-linux-link-core = { path = "../core" }
+linux-link-core = { path = "../core", features = ["wan"] }
 serde.workspace = true
 tokio = { workspace = true, features = ["fs"] }
 tracing.workspace = true
@@ -35,6 +35,8 @@ evdev.workspace = true
 
 # QUIC streaming
 quinn.workspace = true
+# WAN (iroh) streaming endpoint — R1 stage 3
+iroh = "1.2"
 
 # Cancellation tokens and utilities
 tokio-util.workspace = true

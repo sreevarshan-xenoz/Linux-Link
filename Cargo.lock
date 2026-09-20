@@ -2625,6 +2625,7 @@ dependencies = [
  "dirs",
  "enigo",
  "evdev",
+ "iroh",
  "linux-link-core",
  "quinn",
  "rustls",

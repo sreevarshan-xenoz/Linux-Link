@@ -7,6 +7,7 @@ pub mod config;
 pub mod hypr_events;
 pub mod hyprland;
 pub mod input_injector;
+pub mod iroh_endpoint;
 pub mod kde;
 pub mod notification_monitor;
 pub mod plugins;

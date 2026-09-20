@@ -2,6 +2,7 @@ use crate::config::Config;
 use crate::hypr_events;
 use crate::hyprland::HyprlandIpc;
 use crate::input_injector::InputInjector;
+use crate::iroh_endpoint;
 use crate::kde;
 use crate::notification_monitor::start_notification_monitor;
 use crate::state;
@@ -240,6 +241,41 @@ pub async fn run(config: Config) -> Result<()> {
     let (input_tx, mut input_rx) = tokio::sync::broadcast::channel::<InputPacket>(16);
     let streaming_config = config.video_quality.to_streaming_config();
 
+    // R1 stage 3: WAN (iroh) endpoint alongside the quinn LAN listener.
+    // A bind failure (no network, relays unreachable) must not take the LAN
+    // experience down, so the endpoint is optional at runtime.
+    let wan_endpoint = match iroh_endpoint::spawn_wan_endpoint(
+        streaming_config.clone(),
+        input_tx.clone(),
+        Arc::clone(&cert_manager),
+    )
+    .await
+    {
+        Ok(endpoint) => Some(endpoint),
+        Err(e) => {
+            tracing::warn!("WAN (iroh) endpoint unavailable: {e:#}");
+            None
+        }
+    };
+    if let Some(endpoint) = wan_endpoint.as_ref() {
+        // Relay URLs and direct addresses drift (relay reconnects, DHCP), and
+        // the phone only ever dials its cached EndpointAddr — periodic
+        // snapshots let that cache self-heal.
+        let endpoint = endpoint.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(30));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tick.tick().await;
+                let packet = iroh_endpoint::endpoint_packet(&endpoint.addr(), endpoint.id());
+                let clients = state::clone_clients().await;
+                for sender in clients.iter() {
+                    let _ = sender.send_packet(&packet).await;
+                }
+            }
+        });
+    }
+
     // Spawn input injection task — receives InputPacket from the QUIC
     // streaming channel and injects them into the host system.
     tokio::spawn(async move {
@@ -282,12 +318,14 @@ pub async fn run(config: Config) -> Result<()> {
                         let identity_packet = kde_service.identity_packet().clone();
                         let registry_clone = Arc::clone(&registry);
                         let hypr = hypr_ipc.clone();
+                        let wan = wan_endpoint.clone();
                         tokio::spawn(async move {
                             if let Err(error) = handle_connection_with_kde(
                                 stream,
                                 identity_packet,
                                 &registry_clone,
                                 hypr.as_deref(),
+                                wan.as_ref(),
                             )
                             .await
                             {
@@ -516,6 +554,7 @@ async fn handle_connection_with_kde(
     identity_packet: Option<NetworkPacket>,
     registry: &Arc<PluginRegistry>,
     hypr_ipc: Option<&HyprlandIpc>,
+    wan_endpoint: Option<&iroh::Endpoint>,
 ) -> Result<()> {
     use tokio::io::AsyncWriteExt;
     use tracing::Instrument;
@@ -602,6 +641,11 @@ async fn handle_connection_with_kde(
         // Seed the Workspace HUD with the current compositor state (R3#8)
         if let Some(ipc) = hypr_ipc {
             hypr_events::push_state_to(&sender, ipc).await;
+        }
+
+        // Seed the WAN identity so the phone can cache it for iroh dialing (R1 stage 3)
+        if let Some(endpoint) = wan_endpoint {
+            iroh_endpoint::push_endpoint_to(&sender, endpoint).await;
         }
 
         tracing::info!("Entering main packet loop");
