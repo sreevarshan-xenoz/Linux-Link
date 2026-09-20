@@ -12,3 +12,7 @@ log_level = "info"
 
 # Video quality preset: low, balanced, high
 video_quality = "balanced"
+
+# Require PIN pairing before the control channel serves plugin requests.
+# Set false to let any device on the trusted network connect without pairing.
+# pairing_required = true

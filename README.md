@@ -173,6 +173,7 @@ control_port = 1716        # KDE Connect compatible
 streaming_port = 4716      # QUIC streaming port
 log_level = "info"         # trace/debug/info/warn/error
 video_quality = "balanced" # low/balanced/high
+pairing_required = true    # PIN-pair devices before the control channel serves requests
 ```
 
 ### systemd Service
@@ -193,7 +194,8 @@ journalctl -u linux-link -f
 | `linux-link list` | List available peers on tailnet |
 | `linux-link watch` | Watch for peer discovery events |
 | `linux-link connect <peer>` | Connect to a specific peer |
-| `linux-link pair <pin>` | Pair with a new device |
+| `linux-link pair [pin]` | Print a 5-minute pairing PIN for the phone (generate or set) |
+| `linux-link unpair [device-id]` | Remove a paired device from the trust store (all if omitted) |
 | `linux-link capabilities` | Show KDE Connect capabilities |
 
 ### Man Page

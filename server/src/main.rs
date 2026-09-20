@@ -39,5 +39,6 @@ async fn main() -> Result<()> {
             service::connect_peer(peer, port, &identity).await
         }
         cli::Commands::Pair { pin } => service::pair(pin).await,
+        cli::Commands::Unpair { device_id } => service::unpair(device_id).await,
     }
 }

@@ -70,6 +70,21 @@ fun RemoteScreen(
     }
     var showStream by remember { mutableStateOf(true) }
     var showMonitorPicker by remember { mutableStateOf(false) }
+    // Tier-2 #11b: PIN pairing state. Unpaired sessions open the sheet —
+    // with pairing enforced, the control channel only answers the handshake.
+    var pairedServerId by remember(address) { mutableStateOf(HostStore.pairedDesktopId(context, address)) }
+    var showPairing by remember { mutableStateOf(false) }
+    var pairingMessage by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(address) {
+        val serverId = withContext(Dispatchers.IO) { RustCore.checkPairResult(1L) }
+        if (serverId != null) {
+            pairedServerId = serverId
+            HostStore.savePairedDesktop(context, address, serverId)
+        } else if (pairedServerId == null) {
+            showPairing = true
+        }
+    }
 
     fun switchMonitor(index: Int) {
         showMonitorPicker = false
@@ -198,6 +213,10 @@ fun RemoteScreen(
                 ) {
                     Text("Ring PC", color = Color.White)
                 }
+                TextButton(onClick = { pairingMessage = null; showPairing = true }) {
+                    val label = if (pairedServerId == null) "Pair…" else "Paired ✓"
+                    Text(label, color = Color.White)
+                }
             }
             ShortcutBar(
                 address = address,
@@ -227,6 +246,19 @@ fun RemoteScreen(
             selected = monitorIndex,
             onDismiss = { showMonitorPicker = false },
             onPick = { index -> switchMonitor(index) },
+        )
+    }
+
+    if (showPairing) {
+        PairingSheet(
+            address = address,
+            controlPort = controlPort,
+            message = pairingMessage,
+            onDismiss = { showPairing = false },
+            onPaired = { serverId ->
+                pairedServerId = serverId
+                HostStore.savePairedDesktop(context, address, serverId)
+            },
         )
     }
 

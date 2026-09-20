@@ -10,7 +10,7 @@ use crate::v2_multiplexer::handle_v2_session;
 use anyhow::{Context, Result, bail};
 use linux_link_core::protocol::connection::ConnectionManager;
 use linux_link_core::protocol::kdeconnect::{
-    DeviceIdentity, DeviceSender, NetworkPacket, PluginRegistry, TcpDeviceSender,
+    DeviceIdentity, DeviceSender, NetworkPacket, PluginRegistry, TcpDeviceSender, TrustStore,
 };
 use linux_link_core::protocol::v2::{ALPN_V2, IdentityPacketV2};
 use linux_link_core::protocol::{HANDSHAKE_HELLO, HANDSHAKE_OK};
@@ -319,6 +319,7 @@ pub async fn run(config: Config) -> Result<()> {
                         let registry_clone = Arc::clone(&registry);
                         let hypr = hypr_ipc.clone();
                         let wan = wan_endpoint.clone();
+                        let pairing_required = config.pairing_required;
                         tokio::spawn(async move {
                             if let Err(error) = handle_connection_with_kde(
                                 stream,
@@ -326,6 +327,7 @@ pub async fn run(config: Config) -> Result<()> {
                                 &registry_clone,
                                 hypr.as_deref(),
                                 wan.as_ref(),
+                                pairing_required,
                             )
                             .await
                             {
@@ -555,6 +557,7 @@ async fn handle_connection_with_kde(
     registry: &Arc<PluginRegistry>,
     hypr_ipc: Option<&HyprlandIpc>,
     wan_endpoint: Option<&iroh::Endpoint>,
+    pairing_required: bool,
 ) -> Result<()> {
     use tokio::io::AsyncWriteExt;
     use tracing::Instrument;
@@ -667,6 +670,25 @@ async fn handle_connection_with_kde(
                     match NetworkPacket::from_wire(trimmed) {
                         Ok(packet) => {
                             let packet_type = packet.packet_type.clone();
+                            // PIN pairing enforcement (Tier-2 #11b): before a
+                            // connection is paired, only the pairing handshake
+                            // itself and the identity announcement run.
+                            let pairing_packet = matches!(
+                                packet_type.as_str(),
+                                "kdeconnect.identity"
+                                    | "kdeconnect.pair"
+                                    | "kdeconnect.linuxlink.pair"
+                            );
+                            if pairing_required
+                                && !pairing_packet
+                                && !crate::plugins::pair::is_trusted(&device_id)
+                            {
+                                tracing::debug!(
+                                    "Blocking {packet_type} from unpaired {device_id} \
+                                     (set pairing_required = false to disable)"
+                                );
+                                continue;
+                            }
                             let packet_span = tracing::debug_span!("packet", type = %packet_type);
                             async {
                                 tracing::debug!("Processing packet");
@@ -751,11 +773,39 @@ pub async fn pair(pin: Option<String>) -> Result<()> {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
-    std::fs::write(&path, format!("{}\n", pin_value))
+    let stamp = cli_pin_timestamp();
+    std::fs::write(&path, format!("{pin_value}\n{stamp}\n"))
         .with_context(|| format!("failed to write {}", path.display()))?;
 
     println!("Pairing PIN: {}", pin_value);
-    println!("Stored at {}", path.display());
+    println!("Stored at {} (valid 5 minutes)", path.display());
+    Ok(())
+}
+
+/// Unix seconds stamp paired with a CLI PIN file, so the daemon's
+/// PairPlugin can expire it (Tier-2 #11b).
+fn cli_pin_timestamp() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Remove devices from the persistent trust store (`linux-link unpair`).
+pub async fn unpair(device_id: Option<String>) -> Result<()> {
+    let mut store = TrustStore::load_or_create(state::trust_store_path()?)?;
+    let targets: Vec<String> = match device_id {
+        Some(id) => vec![id],
+        None => store.trusted_devices(),
+    };
+    if targets.is_empty() {
+        println!("No trusted devices.");
+        return Ok(());
+    }
+    for id in &targets {
+        store.untrust_device(id)?;
+        println!("Untrusted {id}");
+    }
     Ok(())
 }
 
@@ -800,11 +850,11 @@ async fn resolve_peer_address(client: &TailscaleClient, peer_hint: &str) -> Resu
     bail!("peer not found on tailnet: {}", peer_hint)
 }
 
-fn is_valid_pin(pin: &str) -> bool {
+pub(crate) fn is_valid_pin(pin: &str) -> bool {
     pin.len() == 6 && pin.chars().all(|c| c.is_ascii_digit())
 }
 
-fn generate_pin() -> String {
+pub(crate) fn generate_pin() -> String {
     use std::io::Read;
     // Use OS-level CSPRNG for secure PIN generation.
     // Falls back to nanosecond entropy if /dev/urandom is unavailable.

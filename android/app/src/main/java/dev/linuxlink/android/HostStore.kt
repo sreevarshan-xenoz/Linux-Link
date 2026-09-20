@@ -67,4 +67,17 @@ object HostStore {
     }
 
     private const val KEY_MONITOR_PREFIX = "monitor:"
+
+    /** Device id of the desktop this phone paired with at [address] (Tier-2 #11b). */
+    fun pairedDesktopId(ctx: Context, address: String): String? =
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString("$KEY_PAIRED_PREFIX$address", null)?.takeIf { it.isNotBlank() }
+
+    fun savePairedDesktop(ctx: Context, address: String, serverId: String) {
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString("$KEY_PAIRED_PREFIX$address", serverId)
+            .apply()
+    }
+
+    private const val KEY_PAIRED_PREFIX = "paired_desktop:"
 }

@@ -42,4 +42,9 @@ pub enum Commands {
         /// Optional 6-digit PIN
         pin: Option<String>,
     },
+    /// Remove a paired device from the trust store (all if no id is given)
+    Unpair {
+        /// Device id to untrust (omit to untrust all devices)
+        device_id: Option<String>,
+    },
 }

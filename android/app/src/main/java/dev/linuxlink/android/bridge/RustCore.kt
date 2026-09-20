@@ -81,6 +81,10 @@ object RustCore {
     private external fun nativeGetBattery(address: String, port: Int): String
     private external fun nativeCheckSiren(): String
     private external fun nativeSendFindMyDevice(address: String, port: Int): String
+    private external fun nativeRequestPairPin(address: String, port: Int): String
+    private external fun nativePairWithPin(address: String, port: Int, pin: String): String
+    private external fun nativeCheckPairResult(waitSecs: Long): String
+    private external fun nativePairedServers(): String
     private external fun nativeGetMonitorCount(address: String, port: Int): String
     private external fun nativeGetWindows(address: String, port: Int): String
     private external fun nativeSendWindowCrop(
@@ -357,6 +361,38 @@ object RustCore {
     /** Make the remote desktop ring (find-my-device siren, phone → desktop). */
     fun sendFindMyDevice(address: String, port: Int): Result<Unit> =
         envelope(nativeSendFindMyDevice(address, port)).map { }
+
+    // ---- PIN pairing (Tier-2 #11b) ----
+
+    /** Ask the desktop to display a pairing PIN: "pinSent" (read it off the
+     *  desktop) or "pinReady" (a PIN is up from `linux-link pair`). */
+    fun requestPairPin(address: String, port: Int): Result<String> =
+        envelope(nativeRequestPairPin(address, port))
+
+    /** Submit an externally-entered PIN; non-null = the desktop's deviceId once paired. */
+    fun pairWithPin(address: String, port: Int, pin: String): Result<String?> =
+        envelope(nativePairWithPin(address, port, pin)).map {
+            it.takeIf { s -> s.isNotBlank() && s != "null" }
+        }
+
+    /**
+     * Wait up to [waitSecs] for a pairing decision pushed by the desktop on
+     * the control channel. Returns the desktop's deviceId once paired, null
+     * while still waiting.
+     */
+    fun checkPairResult(waitSecs: Long = 0): String? = runCatching {
+        val obj = JSONObject(nativeCheckPairResult(waitSecs))
+        when (val v = obj.opt("ok")) {
+            null, JSONObject.NULL -> null
+            else -> v.toString().takeIf { it.isNotBlank() }
+        }
+    }.getOrNull()
+
+    /** Device ids of desktops this phone has paired with (bridge-persisted). */
+    fun pairedServers(): List<String> = runCatching {
+        val arr = org.json.JSONArray(envelope(nativePairedServers()).getOrThrow())
+        List(arr.length()) { arr.getString(it) }
+    }.getOrDefault(emptyList())
 
     /**
      * Hyprland window list (R3#7 picker). Payload JSON:

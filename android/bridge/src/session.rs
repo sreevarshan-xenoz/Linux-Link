@@ -101,6 +101,12 @@ pub(crate) static WAN_IDENTITY: LazyLock<TokioMutex<Option<String>>> =
 /// (R3 Tier-2 #11 siren). Kotlin consumes-and-clears it via `checkSiren`.
 pub(crate) static SIREN_RINGING: AtomicBool = AtomicBool::new(false);
 
+/// Last `kdeconnect.pair` decision body pushed by the desktop on the
+/// persistent control connection (R3 Tier-2 #11b). Consumed-and-cleared by
+/// `check_pair_result`.
+pub(crate) static PAIR_RESULT: LazyLock<TokioMutex<Option<serde_json::Value>>> =
+    LazyLock::new(|| TokioMutex::new(None));
+
 /// Holds the live streaming client and its packet receiver.
 pub(crate) struct StreamingHandle {
     pub(crate) address: String,

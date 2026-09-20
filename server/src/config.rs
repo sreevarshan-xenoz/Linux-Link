@@ -15,6 +15,14 @@ pub struct Config {
     pub log_level: String,
     #[serde(default)]
     pub video_quality: VideoQualityPreset,
+    /// Require PIN pairing on the control channel before plugin packets are
+    /// dispatched (R3 Tier-2 #11b). Set false in config.toml for open-LAN use.
+    #[serde(default = "default_pairing_required")]
+    pub pairing_required: bool,
+}
+
+fn default_pairing_required() -> bool {
+    true
 }
 
 impl Default for Config {
@@ -24,6 +32,7 @@ impl Default for Config {
             streaming_port: DEFAULT_STREAMING_PORT,
             log_level: "info".to_string(),
             video_quality: VideoQualityPreset::Balanced,
+            pairing_required: true,
         }
     }
 }

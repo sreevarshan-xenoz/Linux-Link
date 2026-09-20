@@ -12,7 +12,7 @@ pub(crate) use session::*;
 
 use jni::JNIEnv;
 use jni::objects::{JClass, JIntArray, JObject, JString, ReleaseMode};
-use jni::sys::{jboolean, jbyteArray, jfloat, jint, jstring};
+use jni::sys::{jboolean, jbyteArray, jfloat, jint, jlong, jstring};
 use std::sync::LazyLock;
 
 /// Shared Tokio runtime used to `block_on` the async client API.
@@ -614,6 +614,59 @@ pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeSendFind
 ) -> jstring {
     let address = jstring_to_string(&mut env, &address);
     let json = envelope_unit(RUNTIME.block_on(api::send_findmydevice(address, port as u16)));
+    to_jstring(&mut env, json)
+}
+
+/// Ask the desktop to show a pairing PIN — `{"ok":"pinSent"|"pinReady"}`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeRequestPairPin(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    address: JString<'_>,
+    port: jint,
+) -> jstring {
+    let address = jstring_to_string(&mut env, &address);
+    let json = envelope(api::request_pair_pin(&address, port as u16));
+    to_jstring(&mut env, json)
+}
+
+/// Submit a pairing PIN; `{"ok":"<deviceId>"}` when the desktop paired us,
+/// `{"ok":null}` for a wrong/expired PIN.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativePairWithPin(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    address: JString<'_>,
+    port: jint,
+    pin: JString<'_>,
+) -> jstring {
+    let address = jstring_to_string(&mut env, &address);
+    let pin = jstring_to_string(&mut env, &pin);
+    let json = envelope(api::pair_with_pin(&address, port as u16, &pin));
+    to_jstring(&mut env, json)
+}
+
+/// Wait for a pushed pairing decision: `{"ok":"<deviceId>"}` when paired,
+/// `{"ok":null}` while still waiting.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeCheckPairResult(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    wait_secs: jlong,
+) -> jstring {
+    let json = envelope(Ok(RUNTIME
+        .block_on(api::check_pair_result(wait_secs as u64))
+        .map(|id| id.to_string())));
+    to_jstring(&mut env, json)
+}
+
+/// JSON array of desktop device ids this phone is paired with.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativePairedServers(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+) -> jstring {
+    let json = envelope(Ok(api::paired_servers_json()));
     to_jstring(&mut env, json)
 }
 
