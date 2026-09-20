@@ -9,7 +9,7 @@ default = ["server"]
 # Linux server features
 server = ["capture", "encode", "injection", "opus"]
 capture = ["dep:ashpd", "dep:pipewire", "dep:libspa", "dep:x11rb", "dep:xcap", "wayland-portal"]
-encode = ["dep:ffmpeg-sidecar"]
+encode = ["dep:ffmpeg-sidecar", "dep:ffmpeg-next"]
 injection = ["dep:evdev"]
 wayland-portal = ["ashpd?/screencast"]
 x11-capture = ["dep:xcap"]
@@ -40,6 +40,7 @@ opus = { workspace = true, optional = true }
 
 # Video encoding (Linux-only, optional)
 ffmpeg-sidecar = { workspace = true, optional = true }
+ffmpeg-next = { workspace = true, optional = true }
 
 # mDNS service discovery
 mdns-sd = "0.13"

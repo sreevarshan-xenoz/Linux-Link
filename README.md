@@ -295,7 +295,8 @@ Linux Link is actively developed and looking for contributors!
 - Rust 1.80+ (edition 2024)
 - JDK 17+ and Android SDK/NDK (for the Kotlin client)
 - Tailscale (for testing)
-- FFmpeg, PipeWire, xdg-desktop-portal (for streaming)
+- FFmpeg (runtime **and** dev libraries — the server encodes in-process via
+  `ffmpeg-next`), PipeWire, xdg-desktop-portal (for streaming)
 
 ### Development Workflow
 

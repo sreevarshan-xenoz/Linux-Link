@@ -206,7 +206,7 @@ impl StreamingServer {
         let mut encoder =
             VideoEncoder::new(encoder_config).context("Failed to create video encoder")?;
 
-        info!("Video encoder started (FFmpeg process spawned)");
+        info!("Video encoder started");
 
         // Spawn encoding task — reads frames, produces packets
         let encode_cancel = cancel.clone();

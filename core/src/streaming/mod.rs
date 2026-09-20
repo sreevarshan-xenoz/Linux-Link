@@ -5,10 +5,10 @@
 
 pub mod audio;
 pub mod bitrate;
+pub mod chaos;
 pub mod client;
 pub mod encoder_detect;
 pub mod input_packet;
-pub mod chaos;
 pub mod session;
 pub mod transport;
 
@@ -21,12 +21,14 @@ pub mod capture;
 pub mod capture_x11;
 #[cfg(feature = "encode")]
 pub mod encoder;
+#[cfg(feature = "encode")]
+pub mod encoder_inproc;
 #[cfg(feature = "server")]
 pub mod streamer;
 
-pub use audio::{AudioConfig, AudioPacket};
 #[cfg(feature = "opus")]
 pub use audio::AudioEncoder;
+pub use audio::{AudioConfig, AudioPacket};
 pub use bitrate::AdaptiveBitrate;
 #[cfg(feature = "capture")]
 pub use capture::start_capture_auto;

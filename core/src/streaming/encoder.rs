@@ -1,7 +1,12 @@
-//! H.264 video encoder using FFmpeg
+//! H.264/H.265 video encoding facade
 //!
-//! Encodes raw BGRA frames to H.264 NAL units via a persistent FFmpeg sidecar process.
-//! Frames are submitted via stdin (pipe:0) and encoded packets are read from stdout (pipe:1).
+//! Two backends: `InProcess` (R2#3, software path via `ffmpeg-next` — no
+//! child process, no stdio pipe) and `Sidecar` (persistent FFmpeg process
+//! reading raw BGRA on stdin and emitting NAL units on stdout), the latter
+//! still serving the VAAPI/NVENC hardware paths.
+//!
+//! `VideoEncoder::new` picks the backend from the resolved encoder choice
+//! and falls back to the sidecar if the in-process path cannot open.
 
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::unix::io::AsRawFd;
@@ -13,6 +18,7 @@ use ffmpeg_sidecar::command::FfmpegCommand;
 use tracing::{debug, error, info, trace, warn};
 
 use super::encoder_detect::HardwareEncoder;
+use super::encoder_inproc::InProcessEncoder;
 use super::{EncodedPacket, EncoderPreset, H264Profile, StreamingConfig, VideoCodec, VideoFrame};
 
 /// Set a file descriptor to non-blocking mode.
@@ -39,11 +45,86 @@ const NAL_TYPE_IDR: u8 = 5;
 /// Mask to extract NAL unit type from the first byte.
 const NAL_TYPE_MASK: u8 = 0x1F;
 
+/// Video encoder facade over the two FFmpeg backends.
+pub enum VideoEncoder {
+    /// Persistent FFmpeg child process over stdio pipes (VAAPI/NVENC).
+    Sidecar(SidecarEncoder),
+    /// In-process libx264/libx265 via `ffmpeg-next` (software path).
+    InProcess(InProcessEncoder),
+}
+
+impl VideoEncoder {
+    /// Create the encoder, preferring the in-process software backend.
+    pub fn new(config: StreamingConfig) -> anyhow::Result<Self> {
+        use super::encoder_detect::{probe_encoders, resolve_encoder};
+
+        let resolved = if config.hardware_encoder == HardwareEncoder::Auto {
+            resolve_encoder(HardwareEncoder::Auto, &probe_encoders())
+        } else {
+            config.hardware_encoder
+        };
+
+        if matches!(resolved, HardwareEncoder::Software) {
+            match InProcessEncoder::new(config.clone()) {
+                Ok(encoder) => {
+                    info!("Video encoder: in-process FFmpeg (software)");
+                    return Ok(Self::InProcess(encoder));
+                }
+                Err(e) => {
+                    warn!("In-process encoder unavailable ({e:#}); using FFmpeg sidecar");
+                }
+            }
+        }
+
+        Ok(Self::Sidecar(SidecarEncoder::new(config)?))
+    }
+
+    /// Encode a single raw frame; `None` means the encoder has no output yet.
+    pub fn encode_frame(&mut self, frame: &VideoFrame) -> anyhow::Result<Option<EncodedPacket>> {
+        match self {
+            Self::Sidecar(e) => e.encode_frame(frame),
+            Self::InProcess(e) => e.encode_frame(frame),
+        }
+    }
+
+    /// Flush the encoder and return all remaining packets.
+    pub fn drain(&mut self) -> anyhow::Result<Vec<EncodedPacket>> {
+        match self {
+            Self::Sidecar(e) => e.drain(),
+            Self::InProcess(e) => e.drain(),
+        }
+    }
+
+    /// Request a keyframe on the next encode.
+    pub fn request_keyframe(&mut self) {
+        match self {
+            Self::Sidecar(e) => e.request_keyframe(),
+            Self::InProcess(e) => e.request_keyframe(),
+        }
+    }
+
+    /// Number of frames submitted so far.
+    pub fn sequence(&self) -> u64 {
+        match self {
+            Self::Sidecar(e) => e.sequence(),
+            Self::InProcess(e) => e.sequence(),
+        }
+    }
+
+    /// The encoding configuration.
+    pub fn config(&self) -> &StreamingConfig {
+        match self {
+            Self::Sidecar(e) => e.config(),
+            Self::InProcess(e) => e.config(),
+        }
+    }
+}
+
 /// H.264 encoder wrapper using a persistent FFmpeg sidecar process.
 ///
 /// The encoder spawns a single long-running FFmpeg process on creation.
 /// Raw BGRA frames are written to stdin and H.264 NAL units are read from stdout.
-pub struct VideoEncoder {
+pub struct SidecarEncoder {
     config: StreamingConfig,
     sequence: u64,
     keyframe_interval: u64,
@@ -60,7 +141,7 @@ pub struct VideoEncoder {
     output_buffer: Vec<u8>,
 }
 
-impl VideoEncoder {
+impl SidecarEncoder {
     /// Create a new encoder with the given configuration.
     ///
     /// Spawns a persistent FFmpeg process that accepts raw BGRA frames on stdin
@@ -360,7 +441,7 @@ impl VideoEncoder {
     }
 }
 
-impl Drop for VideoEncoder {
+impl Drop for SidecarEncoder {
     fn drop(&mut self) {
         info!("Shutting down FFmpeg encoder process");
 
@@ -404,7 +485,7 @@ impl Drop for VideoEncoder {
 /// Detect if the encoded data contains an IDR (keyframe) NAL unit.
 ///
 /// Scans for start codes and checks if any following NAL unit has type 5.
-fn detect_keyframe(data: &[u8]) -> bool {
+pub(crate) fn detect_keyframe(data: &[u8]) -> bool {
     let mut pos = 0;
     while pos < data.len() {
         if let Some((start_pos, start_len)) = find_start_code(data, pos) {
@@ -430,7 +511,7 @@ fn detect_keyframe(data: &[u8]) -> bool {
 /// Returns `Some((position, length))` where position is the offset of the start
 /// code and length is either 4 (for 00 00 00 01) or 3 (for 00 00 01).
 /// Returns `None` if no start code is found.
-fn find_start_code(data: &[u8], from: usize) -> Option<(usize, usize)> {
+pub(crate) fn find_start_code(data: &[u8], from: usize) -> Option<(usize, usize)> {
     if from >= data.len() || from + 2 >= data.len() {
         return None;
     }
@@ -466,7 +547,7 @@ fn find_start_code(data: &[u8], from: usize) -> Option<(usize, usize)> {
 ///
 /// Buffer sized for ~2 frames so the encoder must smooth spikes instead of
 /// building a burst queue that adds frame delay on top of network latency.
-fn vbv_kbit_bounds(bitrate_bps: u32, fps: u32) -> (u64, u64) {
+pub(crate) fn vbv_kbit_bounds(bitrate_bps: u32, fps: u32) -> (u64, u64) {
     let bitrate = bitrate_bps as u64;
     let maxrate_kbps = (bitrate / 1000).max(1);
     let bufsize_kbits = (bitrate * 2 / fps as u64 / 1000).clamp(128, 50_000);

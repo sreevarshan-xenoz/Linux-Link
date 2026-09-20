@@ -7,6 +7,10 @@ This guide covers the Rust workspace and the native Android (Kotlin) client.
 - Rust toolchain (stable, edition 2024) + `cargo-ndk`
 - JDK 17+ and Android SDK/NDK (for the Android client)
 - FFmpeg, PipeWire, xdg-desktop-portal (for the server/streaming)
+- FFmpeg **development** libraries (server build now links `ffmpeg-next`
+  in-process): on Debian/Ubuntu `libavcodec-dev libavdevice-dev
+  libavfilter-dev libavformat-dev libavutil-dev libswresample-dev
+  libswscale-dev`; on Arch, the `ffmpeg` package ships them.
 
 ## 2. Rust Workspace Validation
 
