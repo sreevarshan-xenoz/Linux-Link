@@ -2610,6 +2610,8 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+ "wayland-client",
+ "wayland-protocols-wlr",
  "x11rb",
  "xcap",
 ]

@@ -8,7 +8,16 @@ default = ["server"]
 
 # Linux server features
 server = ["capture", "encode", "injection", "opus"]
-capture = ["dep:ashpd", "dep:pipewire", "dep:libspa", "dep:x11rb", "dep:xcap", "wayland-portal"]
+capture = [
+    "dep:ashpd",
+    "dep:pipewire",
+    "dep:libspa",
+    "dep:x11rb",
+    "dep:xcap",
+    "dep:wayland-client",
+    "dep:wayland-protocols-wlr",
+    "wayland-portal",
+]
 encode = ["dep:ffmpeg-sidecar", "dep:ffmpeg-next"]
 injection = ["dep:evdev"]
 wayland-portal = ["ashpd?/screencast"]
@@ -38,6 +47,10 @@ ashpd = { workspace = true, optional = true }
 pipewire = { workspace = true, optional = true }
 libspa = { workspace = true, optional = true }
 x11rb = { version = "0.13", features = ["shm"], optional = true }
+wayland-client = { version = "0.31", optional = true }
+wayland-protocols-wlr = { version = "0.3", default-features = false, features = [
+    "client",
+], optional = true }
 tokio-util.workspace = true
 
 # Audio encoding (server-only — Android client only decodes raw Opus packets)

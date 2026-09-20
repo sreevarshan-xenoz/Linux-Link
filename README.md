@@ -14,7 +14,7 @@
 
 Linux Link is a **pure Rust** remote desktop solution built specifically for Linux (Wayland/Hyprland). It combines:
 
-- **Low-latency screen streaming** — PipeWire capture → FFmpeg H.264 encoding → QUIC transport → Android MediaCodec decode
+- **Low-latency screen streaming** — wlroots/PipeWire capture → FFmpeg H.264 encoding → QUIC transport → Android MediaCodec decode
 - **Full KDE Connect feature parity** — clipboard sync, file transfer, notifications, input control, battery info, remote file browsing
 - **Tailscale-native connectivity** — No manual port forwarding or NAT traversal; just pair and connect
 
@@ -33,7 +33,7 @@ Linux Link is a **pure Rust** remote desktop solution built specifically for Lin
 ## Features
 
 ### Screen Streaming
-- **PipeWire capture** via XDG Desktop Portal — works on any Wayland compositor
+- **Native wlroots capture** — direct `zwlr_screencopy` on Hyprland (no portal grant dialog), damage-driven variable frame rate; automatic fallback to **PipeWire capture** via XDG Desktop Portal on any other Wayland compositor, X11 grab last
 - **FFmpeg H.264 encoding** with persistent sidecar process for low latency
 - **QUIC transport** (datagram mode) with self-signed TLS certificates
 - **Adaptive bitrate** — 3 presets (LAN/internet/low-bandwidth) with RTT-based congestion control

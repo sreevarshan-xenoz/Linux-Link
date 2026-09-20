@@ -43,6 +43,16 @@ place.
 - [ ] Screen-off for 1 min, wake → stream still live (wake lock + keepalive; plan #13).
 - [ ] Drop phone far from AP / saturate link → frames stall, then recover; drops counter rises but no permanent freeze (gap-driven keyframe request, R2#5).
 - [ ] Status chip: kill the server → "Down: <reason>" chip + Retry rebuilds after restarting the server.
+- [ ] R4 B1 screencopy backend (desktop-observable): starting a stream on
+      Hyprland must NOT raise the portal screen-share grant dialog; server log shows
+      "Starting Wayland screencopy capture (no portal)". If it shows "Screencopy unavailable (…);
+      using Wayland/PipeWire portal capture" instead, the reason is in the line — that's the
+      fallback working, but note it as a finding. `LINUX_LINK_SCREENCOPY=0` forces the portal path.
+- [ ] R4 B1 idle pacing + freshness: keep the desktop static → `src` fps drops to ≤10
+      (damage-driven VFR); move a window → back to target fps within a frame or two, no tearing
+      or upside-down frames (YInvert handling).
+- [ ] R4 B1 multi-monitor: pick monitor N in the picker → log line "Screencopy capture: output at
+      (x,y)" shows that monitor's wl_output origin and frames are its size.
 
 ## 3. Input paths (R2#4, Tier 1 #2)
 

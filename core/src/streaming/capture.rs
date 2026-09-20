@@ -41,7 +41,7 @@ pub struct CaptureSession {
 
 impl CaptureSession {
     /// Create a new capture session.
-    fn new(config: StreamingConfig, cancel: CancellationToken) -> Self {
+    pub(crate) fn new(config: StreamingConfig, cancel: CancellationToken) -> Self {
         Self { config, cancel }
     }
 
@@ -529,8 +529,24 @@ pub async fn start_capture_auto(
 ) -> Result<CaptureSession> {
     match detect_display_server() {
         DisplayServer::Wayland => {
-            info!("Starting Wayland/PipeWire capture");
-            start_capture(config, frame_tx, cancel).await
+            // R4 B1: on wlroots compositors (Hyprland) the screencopy
+            // protocol captures natively — no portal grant dialog. Any
+            // setup failure (including non-wlroots Wayland) is reported
+            // before the first frame, so falling back here is clean.
+            match super::capture_screencopy::start_screencopy_capture(
+                config.clone(),
+                frame_tx.clone(),
+                cancel.clone(),
+            ) {
+                Ok(session) => {
+                    info!("Starting Wayland screencopy capture (no portal)");
+                    Ok(session)
+                }
+                Err(e) => {
+                    info!("Screencopy unavailable ({e:#}); using Wayland/PipeWire portal capture");
+                    start_capture(config, frame_tx, cancel).await
+                }
+            }
         }
         DisplayServer::X11 => {
             info!("Starting X11 capture");

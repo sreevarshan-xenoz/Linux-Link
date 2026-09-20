@@ -133,12 +133,21 @@ From **scrcpy** (code-level OK, Apache-2.0):
   override; direct upgrade re-raises it.
 
 ### Phase B — Hyprland-native capture (M) — *testable live on this box*
-- **B1 · `zwlr_screencopy` backend.** Third capture path in
-  `core/src/streaming/capture.rs`: bind `zwlr_screencopy-manager-v1`,
-  per-monitor frames, DMABUF → (initially) mmap/BGRA conversion reusing the
-  existing crop/encode pipeline; damage-event-driven like the portal path.
-  Accept: on Hyprland, capture starts with **no portal grant dialog**,
-  frames verified vs portal path (size/tearing), idle back-off still works.
+- **B1 · `zwlr_screencopy` backend.** ✅ **Landed 2026-09-20** (verified live
+  on this box's Hyprland — real frame, no portal grant, multi-cycle idle
+  loop). New third capture path `core/src/streaming/capture_screencopy.rs`
+  (wayland-client + wayland-protocols-wlr behind `capture`; libwayshot
+  BSD-2-Clause patterns, no libwayshot dependency): binds
+  `zwlr_screencopy_manager_v1` ≥3, `copy_with_damage` with overlay cursor,
+  persistent memfd backing + per-frame pool/buffer (the compositor destroys
+  the buffer with the frame), ARGB shm repacked to the BGRA pipeline layout
+  (YInvert row-flip, stride compaction). Damage-driven VFR + 10 fps idle
+  back-off. Auto-selected ahead of the portal on any Wayland session with a
+  5 s first-frame handshake; any setup failure (or `LINUX_LINK_SCREENCOPY=0`)
+  falls back to the portal path unchanged. Monitor index resolved via
+  wl_output geometry vs the xcap enumeration (same space as the picker).
+  Remaining ideas from the original bullet (dmabuf zero-copy) deferred —
+  shm copies are already the portal path's cost model.
 - **B2 · Window-granular screencopy.** Hyprland's screencopy supports
   window-mode capture; wire it to the R3#7 crop path so a window pick
   becomes compositor-crop'd frames (no server-side BGRA crop) — cheaper and

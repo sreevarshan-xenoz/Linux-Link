@@ -22,6 +22,8 @@ pub mod audio_capture;
 #[cfg(feature = "capture")]
 pub mod capture;
 #[cfg(feature = "capture")]
+pub mod capture_screencopy;
+#[cfg(feature = "capture")]
 pub mod capture_x11;
 #[cfg(feature = "encode")]
 pub mod encoder;
