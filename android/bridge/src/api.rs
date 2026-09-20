@@ -2156,6 +2156,42 @@ pub async fn send_window_crop(x: u32, y: u32, width: u32, height: u32) -> Result
     Ok(())
 }
 
+/// Toggle R4 D1 view-only mode on the server: while enabled, the server
+/// drops every injectable input packet from this session (mouse, keyboard,
+/// gamepad, text) — video keeps streaming. Enforcement is server-side, so
+/// a lagging or buggy client cannot inject while latched. The state is
+/// per-session: a new stream starts interactive.
+pub async fn send_view_only(enabled: bool) -> Result<(), String> {
+    let quic_conn = {
+        let guard = (*STREAMING_HANDLE).lock().await;
+        if let Some(h) = guard.as_ref() {
+            Some(h.connection.clone())
+        } else {
+            let v2_guard = (*crate::V2_HANDLE).lock().await;
+            v2_guard
+                .as_ref()
+                .map(|h| QuinnConnection::shared(h.connection.clone()))
+        }
+    };
+
+    let conn = quic_conn
+        .ok_or_else(|| "View-only requires an active QUIC streaming connection".to_string())?;
+
+    let data = InputPacket::ViewOnly { enabled }.encode();
+    let mut send_stream = conn
+        .open_uni()
+        .await
+        .map_err(|e| format!("QUIC open stream: {e}"))?;
+    send_stream
+        .write_all(&data)
+        .await
+        .map_err(|e| format!("QUIC write: {e}"))?;
+    send_stream
+        .finish()
+        .map_err(|e| format!("QUIC finish: {e}"))?;
+    Ok(())
+}
+
 /// Send keyboard event to remote, preferring the low-latency QUIC streaming channel.
 ///
 /// Falls back to KDE Connect TCP protocol if streaming is not active.

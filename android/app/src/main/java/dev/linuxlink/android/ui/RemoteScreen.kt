@@ -110,6 +110,27 @@ fun RemoteScreen(
     var pairingMessage by remember { mutableStateOf<String?>(null) }
     // Tier-3 #16: desktop audio control sheet (volume/mute/output routing).
     var showAudio by remember { mutableStateOf(false) }
+    // R4 D1: server-enforced view-only mode — while latched the server drops
+    // every injectable input packet from this session, video keeps flowing.
+    // The flag is per-session server state, so it is re-armed whenever the
+    // stream (re)comes up (retry, monitor switch → fresh pipeline).
+    var viewOnly by remember { mutableStateOf(false) }
+    var viewOnlyError by remember { mutableStateOf<String?>(null) }
+    val viewOnlyErrorMessage =
+        viewOnlyError?.let { stringResource(R.string.view_only_error, it) }
+    LaunchedEffect(viewOnlyErrorMessage) {
+        if (viewOnlyErrorMessage != null) {
+            android.widget.Toast
+                .makeText(context, viewOnlyErrorMessage, android.widget.Toast.LENGTH_SHORT)
+                .show()
+            viewOnlyError = null
+        }
+    }
+    LaunchedEffect(status) {
+        if (viewOnly && status is StreamStatus.Up) {
+            withContext(Dispatchers.IO) { RustCore.setViewOnly(true) }
+        }
+    }
     // Tier-3 #14: decoded video frame size, used to pick the PiP aspect ratio.
     var videoSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
     // Tier-3 #15: desktop privacy mode. The server's input grab carries a
@@ -495,6 +516,25 @@ fun RemoteScreen(
                         val label =
                             if (privacyGrab) stringResource(R.string.privacy_on) else stringResource(R.string.privacy_off)
                         Text(label, color = if (privacyGrab) Color(0xFF80FFB0) else Color.White)
+                    }
+                    TextButton(
+                        onClick = {
+                            scope.launch(Dispatchers.IO) {
+                                val next = !viewOnly
+                                val result = RustCore.setViewOnly(next)
+                                withContext(Dispatchers.Main) {
+                                    if (result.isSuccess) {
+                                        viewOnly = next
+                                    } else {
+                                        viewOnlyError = result.exceptionOrNull()?.message
+                                    }
+                                }
+                            }
+                        },
+                    ) {
+                        val label =
+                            if (viewOnly) stringResource(R.string.view_only_on) else stringResource(R.string.view_only_off)
+                        Text(label, color = if (viewOnly) Color(0xFFFFC080) else Color.White)
                     }
                     TextButton(
                         onClick = {

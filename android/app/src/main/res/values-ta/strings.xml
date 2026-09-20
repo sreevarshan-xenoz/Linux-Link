@@ -40,6 +40,9 @@
     <string name="privacy_on">தனியுரிமை: இயக்கம்</string>
     <string name="privacy_off">தனியுரிமை: முடக்கம்</string>
     <string name="privacy_error">தனியுரிமை: %1$s</string>
+    <string name="view_only_on">பார்வை மட்டும்: இயக்கம்</string>
+    <string name="view_only_off">பார்வை மட்டும்: முடக்கம்</string>
+    <string name="view_only_error">பார்வை மட்டும்: %1$s</string>
     <string name="lock_pc">PC பூட்டு</string>
     <string name="blackout">கருப்புத் திரை</string>
     <string name="pip">PiP</string>

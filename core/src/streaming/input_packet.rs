@@ -16,6 +16,7 @@ const TAG_GAMEPAD: u8 = 5;
 const TAG_MOUSE_MOVE_ABS: u8 = 6;
 const TAG_REQUEST_KEYFRAME: u8 = 7;
 const TAG_WINDOW_CROP: u8 = 8;
+const TAG_VIEW_ONLY: u8 = 9;
 
 /// A compact binary input event for real-time remote control.
 ///
@@ -58,6 +59,11 @@ pub enum InputPacket {
         width: Option<u32>,
         height: Option<u32>,
     },
+    /// R4 D1 view-only mode: while enabled the **server** drops every
+    /// injected-input packet from this session (mouse, keyboard, gamepad,
+    /// text). Control packets (keyframe requests, crops, further view-only
+    /// toggles) keep flowing, and video is unaffected.
+    ViewOnly { enabled: bool },
     /// Gamepad state: 6 analog axes + 16-bit button bitmask.
     Gamepad {
         /// Left stick X, Left stick Y, Right stick X, Right stick Y, L2, R2.
@@ -121,6 +127,9 @@ impl InputPacket {
                 buf
             }
             InputPacket::RequestKeyframe => vec![TAG_REQUEST_KEYFRAME],
+            InputPacket::ViewOnly { enabled } => {
+                vec![TAG_VIEW_ONLY, if *enabled { 1 } else { 0 }]
+            }
             InputPacket::WindowCrop {
                 x,
                 y,
@@ -216,6 +225,12 @@ impl InputPacket {
             TAG_REQUEST_KEYFRAME => {
                 anyhow::ensure!(data.len() == 1, "RequestKeyframe packet must be 1 byte");
                 Ok(InputPacket::RequestKeyframe)
+            }
+            TAG_VIEW_ONLY => {
+                anyhow::ensure!(data.len() == 2, "ViewOnly packet must be 2 bytes");
+                Ok(InputPacket::ViewOnly {
+                    enabled: data[1] != 0,
+                })
             }
             TAG_WINDOW_CROP => {
                 anyhow::ensure!(
@@ -468,6 +483,22 @@ mod tests {
     #[test]
     fn test_crop_rect_ignores_other_variants() {
         assert_eq!(InputPacket::RequestKeyframe.crop_rect(), None);
+    }
+
+    #[test]
+    fn test_view_only_roundtrip() {
+        for enabled in [true, false] {
+            let data = InputPacket::ViewOnly { enabled }.encode();
+            assert_eq!(data.len(), 2);
+            let decoded = InputPacket::decode(&data).unwrap();
+            assert!(
+                matches!(decoded, InputPacket::ViewOnly { enabled: e } if e == enabled),
+                "wrong variant for {enabled}"
+            );
+        }
+        // Framing is strict like RequestKeyframe: payload size must be exact.
+        assert!(InputPacket::decode(&[9]).is_err());
+        assert!(InputPacket::decode(&[9, 1, 0]).is_err());
     }
 
     #[test]

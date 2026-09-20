@@ -419,6 +419,9 @@ impl InputInjector {
             // Likewise: crop rects are consumed by the streaming pipeline, and
             // the client pre-maps absolute input into desktop space itself.
             InputPacket::WindowCrop { .. } => Ok(()),
+            // View-only toggles are enforced in the streaming server's input
+            // relay (which simply stops forwarding); nothing to inject.
+            InputPacket::ViewOnly { .. } => Ok(()),
             InputPacket::Gamepad { axes, buttons } => {
                 // Map gamepad axes/buttons to keyboard/mouse for broad compatibility.
                 // Left stick -> mouse movement

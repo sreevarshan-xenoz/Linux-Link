@@ -477,6 +477,18 @@ pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeSendWind
     to_jstring(&mut env, json)
 }
 
+/// Toggle server-enforced view-only mode (R4 D1): while enabled the server
+/// drops all injected input from this session; video keeps flowing.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeSetViewOnly(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    enabled: jboolean,
+) -> jstring {
+    let json = envelope_unit(RUNTIME.block_on(api::send_view_only(enabled != 0)));
+    to_jstring(&mut env, json)
+}
+
 /// Send a keyboard event. `key_code` is an Android KeyCode; the bridge maps
 /// it to evdev internally. `text` carries the char for UTF-8 input paths.
 #[unsafe(no_mangle)]

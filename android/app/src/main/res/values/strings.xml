@@ -47,6 +47,9 @@
     <string name="privacy_on">Privacy: on</string>
     <string name="privacy_off">Privacy: off</string>
     <string name="privacy_error">Privacy: %1$s</string>
+    <string name="view_only_on">View-only: on</string>
+    <string name="view_only_off">View-only: off</string>
+    <string name="view_only_error">View-only: %1$s</string>
     <string name="lock_pc">Lock PC</string>
     <string name="blackout">Blackout</string>
     <string name="pip">PiP</string>

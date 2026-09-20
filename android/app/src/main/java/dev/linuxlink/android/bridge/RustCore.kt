@@ -111,6 +111,7 @@ object RustCore {
         width: Int,
         height: Int,
     ): String
+    private external fun nativeSetViewOnly(enabled: Boolean): String
     private external fun nativeSendPowerCommand(address: String, port: Int, action: String): String
     private external fun nativeExecuteRemoteCommand(
         address: String,
@@ -504,6 +505,17 @@ object RustCore {
     ): Result<Unit> = envelope(nativeSendWindowCrop(x, y, width, height)).map { }
 
     fun clearWindowCrop(): Result<Unit> = sendWindowCrop(0, 0, 0, 0)
+
+    /**
+     * R4 D1 view-only mode: while enabled the **server** drops every input
+     * packet from this session (mouse, keyboard, gamepad, text) — video and
+     * control-plane packets keep flowing. Server-side enforcement means a
+     * forgotten tap can't leak through a stale client queue. Per-session: a
+     * reconnect starts interactive again, so callers re-send on reconnect if
+     * the toggle is still on. QUIC-only.
+     */
+    fun setViewOnly(enabled: Boolean): Result<Unit> =
+        envelope(nativeSetViewOnly(enabled)).map { }
 
     fun sendPowerCommand(address: String, port: Int, action: String): Result<Unit> =
         envelope(nativeSendPowerCommand(address, port, action)).map { }

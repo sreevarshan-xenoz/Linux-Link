@@ -40,6 +40,9 @@
     <string name="privacy_on">Privacidad: activada</string>
     <string name="privacy_off">Privacidad: desactivada</string>
     <string name="privacy_error">Privacidad: %1$s</string>
+    <string name="view_only_on">Solo lectura: activado</string>
+    <string name="view_only_off">Solo lectura: desactivado</string>
+    <string name="view_only_error">Solo lectura: %1$s</string>
     <string name="lock_pc">Bloquear PC</string>
     <string name="blackout">Pantalla negra</string>
     <string name="pip">PiP</string>

@@ -62,6 +62,13 @@ place.
 - [ ] Mode toggle switches behavior live, no session restart.
 - [ ] Keyboard: type letters/digits/modifiers via on-screen shortcuts + remote input — check against `evtest`: Super, Alt+Tab, Ctrl+Alt+Del, PrtSc, Esc, Super+1..9 work (ShortcutBar).
 - [ ] holdKey/repeat (e.g. hold an arrow key) behaves.
+- [ ] R4 D1 view-only: tap "View-only: off" on the session bar → label flips
+      ("View-only: on", amber), desktop log shows "View-only mode changed" (enabled=true), and
+      EVERY remote input goes dead on the desktop (taps, shortcuts, workspace chips) while video,
+      StatsHud, clipboard sync and monitor/window pickers keep working. Toggle back → input restored
+      without reconnect. Re-arm check: while view-only is ON, trigger a stream Retry / monitor switch
+      (fresh server pipeline starts interactive) — the phone must re-send the latch once the stream
+      is Up again; verify input stays blocked across that rebuild.
 
 ## 4. Zoom + display mapping (Tier 1 #6, R3#7)
 

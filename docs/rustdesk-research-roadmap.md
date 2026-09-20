@@ -175,9 +175,15 @@ From **scrcpy** (code-level OK, Apache-2.0):
   matrix says the architecture is sound. Device + desktop gated.
 
 ### Phase D — RustDesk-class session UX, re-implemented (S–M each)
-- **D1 · View-only & input-lock modes.** `PrivacyPlugin`-adjacent: a
-  `{viewOnly}` flag on the stream session; server drops injected input while
-  set. Client toggle in the shortcut bar. (RustDesk parity, trivial for us.)
+- **D1 · View-only & input-lock modes.** ✅ **Landed 2026-09-20** (device
+  behavior unverified). New `InputPacket::ViewOnly` (tag 9, 1-byte bool)
+  latches a per-session `AtomicBool` in the streaming server's input relay
+  (`streamer.rs` monitor task): while set, *every* injectable packet
+  (mouse/keyboard/gamepad/text) is dropped **server-side** — control-plane
+  packets (keyframe, window crop, further toggles) and video are unaffected,
+  so enforcement can't be defeated by a stale client queue. Phone toggle on
+  the session bar (amber while on), re-armed automatically after any stream
+  rebuild (new pipeline starts interactive). 53 JNI exports.
 - **D2 · Desktop-side session consent & tray HUD.** Optional
   "phone is watching" indicator (waybar module doc / `notify-send` on start +
   a `linux-link status` line), and `linux-link kick <device>` to drop a

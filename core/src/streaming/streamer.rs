@@ -45,6 +45,10 @@ pub struct StreamingServer {
     /// Record per-session outcome telemetry (R4 A2) through the sink
     /// registered in `session_telemetry`. Off by default.
     telemetry: bool,
+    /// R4 D1 view-only latch (per session — a `StreamingServer` instance is
+    /// built per connection). Set by `InputPacket::ViewOnly`; while true the
+    /// monitor task forwards no injectable input, only control packets.
+    view_only: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl StreamingServer {
@@ -66,6 +70,7 @@ impl StreamingServer {
             input_tx: None,
             pairing_gate: None,
             telemetry: false,
+            view_only: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -563,6 +568,7 @@ impl StreamingServer {
         let input_tx = self.input_tx.clone();
         let keyframe_req_tx = keyframe_tx.clone();
         let monitor_crop_tx = crop_tx;
+        let monitor_view_only = self.view_only.clone();
         let monitor_span = tracing::info_span!("connection_monitor");
         tasks.spawn(async move {
             info!("Connection monitor started");
@@ -609,6 +615,21 @@ impl StreamingServer {
                                                     let rect = packet.crop_rect();
                                                     info!(?rect, "Client set window crop");
                                                     let _ = monitor_crop_tx.send(rect);
+                                                    continue;
+                                                }
+                                                // View-only is server-enforced input
+                                                // lockdown (R4 D1): latch the flag;
+                                                // nothing is injected either way.
+                                                if let InputPacket::ViewOnly { enabled } = packet {
+                                                    monitor_view_only
+                                                        .store(enabled, Ordering::Relaxed);
+                                                    info!(enabled, "View-only mode changed");
+                                                    continue;
+                                                }
+                                                if monitor_view_only
+                                                    .load(Ordering::Relaxed)
+                                                {
+                                                    debug!("View-only: dropping input packet");
                                                     continue;
                                                 }
                                                 // Forward to input injector via channel
