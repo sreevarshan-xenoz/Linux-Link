@@ -2592,6 +2592,7 @@ dependencies = [
  "evdev",
  "ffmpeg-next",
  "ffmpeg-sidecar",
+ "iroh",
  "libc",
  "libspa",
  "mdns-sd",
