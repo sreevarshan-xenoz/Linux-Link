@@ -18,17 +18,21 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import dev.linuxlink.android.bridge.RustCore
 import dev.linuxlink.android.service.SessionForegroundService
 import dev.linuxlink.android.stream.InputMode
 import dev.linuxlink.android.stream.RemoteDesktopView
 import dev.linuxlink.android.stream.ShortcutBar
 import dev.linuxlink.android.stream.StatsHud
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 /**
  * Live remote-desktop session (Tier 1 #5 shell): video surface + input
@@ -39,10 +43,16 @@ import dev.linuxlink.android.stream.StatsHud
 fun RemoteScreen(
     address: String,
     port: Int,
+    controlPort: Int,
     onExit: () -> Unit,
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var mode by remember { mutableStateOf(InputMode.DirectTouch) }
+    var clipboardSync by remember { mutableStateOf(true) }
+    var showHistory by remember { mutableStateOf(false) }
+
+    ClipboardSyncEffect(address, controlPort, enabled = clipboardSync)
 
     DisposableEffect(Unit) {
         val start = Intent(context, SessionForegroundService::class.java).apply {
@@ -102,6 +112,13 @@ fun RemoteScreen(
                         if (mode == InputMode.DirectTouch) "Mode: direct touch" else "Mode: trackpad"
                     Text(label, color = Color.White)
                 }
+                TextButton(onClick = { clipboardSync = !clipboardSync }) {
+                    val label = if (clipboardSync) "Clip: on" else "Clip: off"
+                    Text(label, color = Color.White)
+                }
+                TextButton(onClick = { showHistory = true }) {
+                    Text("History", color = Color.White)
+                }
             }
             ShortcutBar(
                 address = address,
@@ -109,6 +126,19 @@ fun RemoteScreen(
                 modifier = Modifier.fillMaxWidth(),
             )
         }
+    }
+
+    if (showHistory) {
+        ClipboardHistorySheet(
+            onDismiss = { showHistory = false },
+            onPick = { text ->
+                writeLocalClipboard(context, text)
+                scope.launch(Dispatchers.IO) {
+                    RustCore.sendClipboard(address, controlPort, text)
+                }
+                showHistory = false
+            },
+        )
     }
 }
 

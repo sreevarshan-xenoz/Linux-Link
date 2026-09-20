@@ -48,7 +48,7 @@ class MainActivity : ComponentActivity() {
                             HostStore.autoConnect(this@MainActivity)
                         ) {
                             HostStore.lastHost(this@MainActivity)?.let {
-                                sessionKey = "${it.address}|${it.port}"
+                                sessionKey = "${it.address}|${it.port}|${it.controlPort}"
                             }
                         }
                     }
@@ -63,16 +63,20 @@ class MainActivity : ComponentActivity() {
                         null -> ConnectScreen(
                             initial = HostStore.lastHost(this@MainActivity),
                             autoConnect = HostStore.autoConnect(this@MainActivity),
-                        ) { address, port, rememberHost ->
-                            HostStore.save(this@MainActivity, HostStore.Host(address, port))
+                        ) { address, port, controlPort, rememberHost ->
+                            HostStore.save(
+                                this@MainActivity,
+                                HostStore.Host(address, port, controlPort),
+                            )
                             HostStore.setAutoConnect(this@MainActivity, rememberHost)
                             maybeRequestNotificationPermission()
-                            sessionKey = "$address|$port"
+                            sessionKey = "$address|$port|$controlPort"
                         }
 
                         else -> RemoteScreen(
                             address = session.first,
                             port = session.second,
+                            controlPort = session.third,
                             onExit = { sessionKey = null },
                         )
                     }
@@ -100,10 +104,16 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-/** Session state travels as "address|port" so it survives process save/restore. */
-private fun parseSession(key: String?): Pair<String, Int>? {
+/** Session state travels as "address|streamingPort|controlPort" so it survives process save/restore. */
+private fun parseSession(key: String?): Triple<String, Int, Int>? {
     val parts = key?.split('|') ?: return null
-    if (parts.size != 2 || parts[0].isBlank()) return null
+    if (parts.size !in 2..3 || parts[0].isBlank()) return null
     val port = parts[1].toIntOrNull() ?: return null
-    return parts[0] to port
+    val controlPort =
+        if (parts.size == 3) {
+            parts[2].toIntOrNull() ?: return null
+        } else {
+            HostStore.DEFAULT_CONTROL_PORT
+        }
+    return Triple(parts[0], port, controlPort)
 }

@@ -37,12 +37,16 @@ import dev.linuxlink.android.bridge.RustCore
 fun ConnectScreen(
     initial: HostStore.Host?,
     autoConnect: Boolean,
-    onConnect: (address: String, port: Int, rememberHost: Boolean) -> Unit,
+    onConnect: (address: String, port: Int, controlPort: Int, rememberHost: Boolean) -> Unit,
 ) {
     var address by rememberSaveable { mutableStateOf(initial?.address.orEmpty()) }
-    var port by rememberSaveable { mutableStateOf((initial?.port ?: 4716).toString()) }
+    var port by rememberSaveable { mutableStateOf((initial?.port ?: HostStore.DEFAULT_STREAMING_PORT).toString()) }
+    var controlPort by rememberSaveable {
+        mutableStateOf((initial?.controlPort ?: HostStore.DEFAULT_CONTROL_PORT).toString())
+    }
     var rememberHost by rememberSaveable { mutableStateOf(autoConnect) }
     val portValue = port.toIntOrNull()
+    val controlPortValue = controlPort.toIntOrNull()
 
     Column(
         modifier = Modifier
@@ -73,6 +77,17 @@ fun ConnectScreen(
             modifier = Modifier.fillMaxWidth(),
         )
         Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = controlPort,
+            onValueChange = { input ->
+                if (input.all { it.isDigit() } && input.length <= 5) controlPort = input
+            },
+            label = { Text("Control port (clipboard, files)") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(8.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Switch(checked = rememberHost, onCheckedChange = { rememberHost = it })
             Spacer(Modifier.height(0.dp))
@@ -80,8 +95,15 @@ fun ConnectScreen(
         }
         Spacer(Modifier.height(24.dp))
         Button(
-            enabled = address.isNotBlank() && portValue != null,
-            onClick = { onConnect(address.trim(), portValue ?: return@Button, rememberHost) },
+            enabled = address.isNotBlank() && portValue != null && controlPortValue != null,
+            onClick = {
+                onConnect(
+                    address.trim(),
+                    portValue ?: return@Button,
+                    controlPortValue ?: return@Button,
+                    rememberHost,
+                )
+            },
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text("Connect")
