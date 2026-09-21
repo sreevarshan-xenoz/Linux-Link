@@ -81,9 +81,12 @@ From **Sunshine** (ideas):
    P-State is documented to wreck low-latency NVENC; Sunshine ships this
    default-on). Cheap, server-side, hardware-gated.
 6. Portal/PipeWire + hardware encode is production-viable (their matrix shows
-   XDG portal ✅ with VAAPI/NVENC/Vulkan/software) → re-risk our parked
-   R2#3 in-process VAAPI/NVENC work; the blocker is *this box's* VAAPI init,
-   not the approach.
+   XDG portal ✅ with VAAPI/NVENC/Vulkan/software) → our parked R2#3 in-process
+   VAAPI work is now **un-parked and landed (C4, 2026-09-21)**: the blocker was
+   never "this box can't VAAPI" but that the encoder was pointed at the wrong
+   DRM render node (this hybrid laptop's VA-capable Intel iHD device is
+   `renderD129`, not the NVIDIA `renderD128`). NVENC in-process stays
+   driver-gated (this box's 580.x predates FFmpeg 9's NVENC API-13).
 7. **wlroots `zwlr_screencopy` as a third capture backend on Hyprland** —
    direct DMABUF frames without the portal grant/session-per-request overhead
    (real portal pain on Hyprland is documented in Sunshine #4662). Hyprland
@@ -251,9 +254,27 @@ From **scrcpy** (code-level OK, Apache-2.0):
   `parse_max_clock`/`query_args`/`lock_args`/`reset_args`/`persistence_args`
   unit-tested; the subprocess path needs a real NVIDIA + root. Server-side
   only (`encode` feature) — no wire/JNI/Kotlin change (57 exports).
-- **C4 · Re-open R2#3** (in-process VAAPI/NVENC `AVHWDeviceContext`) on a
-  machine where VAAPI initializes — this box can't (see AGENTS); Sunshine's
-  matrix says the architecture is sound. Device + desktop gated.
+- **C4 · Re-open R2#3** (in-process VAAPI `AVHWDeviceContext`) — ✅
+  **implemented 2026-09-21, verified live on this box.** New
+  `core/src/streaming/encoder_vaapi.rs`: a hand-rolled raw-FFI VAAPI encoder
+  (`ffmpeg-next` 9.0 exposes no hwdevice bindings, so the
+  `av_hwdevice_ctx_create → av_hwframe_ctx_alloc/init → h264/hevc_vaapi`
+  pipeline is driven through `ffmpeg::ffi`): BGRA→NV12 `sws_scale` →
+  `av_hwframe_get_buffer` → `av_hwframe_transfer_data` (hwupload) →
+  `avcodec_send_frame`, IDR forced via `AVFrame.pict_type`, Annex-B out.
+  `VideoEncoder` routes `HardwareEncoder::Vaapi` in-process first, falling
+  back to the verified sidecar then software (C2 ladder). The real blocker
+  was never "this box can't VAAPI" — it was that FFmpeg binds a *specific* DRM
+  render node and this hybrid laptop's `renderD128` is the NVIDIA card (no VA
+  driver) while the Intel iHD driver that *does* encode lives on `renderD129`.
+  `open_vaapi_device` therefore tries each node (and honours
+  `LINUX_LINK_VAAPI_DEVICE`), so the encoder opens out of the box; the sidecar's
+  hardcoded `renderD128` is likewise now node-detected. Live test
+  `test_vaapi_encode_roundtrip` encodes 40 frames through real `h264_vaapi`
+  here (self-skips on boxes with no VA-capable node). NVENC in-process stays
+  driver-gated (this box's 580.x driver predates FFmpeg 9's NVENC API-13
+  requirement), so NVENC remains on the verified sidecar. Server-only
+  (`encode` feature) — no wire/JNI/Kotlin change (58 exports).
 
 ### Phase D — RustDesk-class session UX, re-implemented (S–M each)
 - **D1 · View-only & input-lock modes.** ✅ **Landed 2026-09-20** (device
@@ -445,7 +466,7 @@ these anywhere — that's the moat)
 ## 6. Suggested execution order
 A1 ✅ → A2 ✅ → B1 ✅ → D1 ✅ → A3/E5 ✅ → B2 ✅ → D3 ✅ → C1 ✅ → E2 ✅ →
 C2 ✅ → D2 ✅ → E3 ✅ → B3 ✅ → D4 ✅ → E1 ✅ → C3 ✅ → E5-remainder ✅ →
-E4 ✅ → E6 ✅ → (C4 hardware-gated). Rationale: telemetry and consent
+E4 ✅ → E6 ✅ → C4 ✅ (in-process VAAPI, live on this box; NVENC in-process stays driver-gated). Rationale: telemetry and consent
 features are cheap trust-builders and unblock honest codec/relay presets;
 screencopy is the biggest measurable latency win testable on this box today;
 codec ladder comes after negotiation groundwork.

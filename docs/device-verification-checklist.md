@@ -72,7 +72,8 @@ place.
 - [ ] R4 C1 HEVC + window crop: pick a window during a HEVC session → encoder rebuild at
       window size keeps HEVC and the phone reconfigures on size change without codec change.
 - [ ] R4 C2 startup ladder (desktop-observable): on a box where hardware encoding is broken
-      (e.g. this one's VAAPI), start a session → server log shows "Hardware encoder unavailable
+      (e.g. force `hardware_encoder = "nvenc"` here — this box's NVIDIA driver predates FFmpeg 9
+      NVENC, so the sidecar dies), start a session → server log shows "Hardware encoder unavailable
       (…); falling back to software (C2)" and video still appears within ~2 s on x264.
 - [ ] R4 C2 mid-session encoder kill (HEVC session): during a live `codec=H.265` session,
       `pkill -f 'ffmpeg .*vaapi'` (or kill the encoder child seen in `pstree` of the server) →
@@ -89,6 +90,28 @@ place.
       encoder rebuild must NOT re-log the hardware fallback (sticky `encoder_preferred` — a
       rebuild must not re-probe the dead hardware).
 - [ ] R4 C3 NVENC power pin (**NVIDIA hardware only — skip on non-NVIDIA boxes**): start an NVENC session (server log "Video encoder sidecar" on `h264_nvenc`/`hevc_nvenc`) → server log "pinned NVENC GPU 0 graphics clock to N MHz"; `nvidia-smi -q -d CLOCK -i 0` shows the graphics clock held at its max. End the session → log "restored NVENC GPU 0 to default clock management" and `nvidia-smi -q -d CLOCK` shows clocks back under adaptive management. On an unprivileged desktop the pin self-declines (log "clock lock refused ... running unpinned") and no reset is issued.
+
+## 2c. In-process VAAPI encode (R4 C4) — desktop/box-observable, no device needed
+
+Note: there is **no `hardware_encoder` key in config.toml yet** — the streaming server constructs
+`StreamingConfig` with `HardwareEncoder::Auto` (`streamer.rs`), which `VideoEncoder::new` resolves via
+`resolve_encoder(Auto, probe_encoders())`. So on a live session the exact rung is whatever Auto picks;
+the deterministic C4 proof on the host is the unit test below, and the desktop-observable checks are the
+backend log line + the `LINUX_LINK_VAAPI_DEVICE` override (honoured by both the in-process and sidecar
+paths regardless of the config knob). Forcing a *specific* encoder end-to-end is a known future knob,
+not part of C4.
+
+- [ ] R4 C4 host proof (no phone): `cargo test -p linux-link-core --lib encoder_vaapi` → 
+      `test_vaapi_encode_roundtrip` encodes 40 real frames through `h264_vaapi` on this box's Intel
+      iHD node and asserts Annex-B packets + ≥1 keyframe (self-skips green where no VA node exists).
+- [ ] R4 C4 device-node selection: on the hybrid Intel+NVIDIA box the probe must land on the
+      VA-capable node, NOT the hardcoded NVIDIA `renderD128` — `LINUX_LINK_VAAPI_DEVICE=/dev/dri/renderD129`
+      starts a session → server log "Video encoder: in-process VAAPI (h264_vaapi) on /dev/dri/renderD129"
+      and **no `ffmpeg` sidecar child** is spawned for the vaapi path (`pstree` of the server). Point the
+      override at a VA-less node (e.g. `/dev/dri/renderD128`) → it degrades to sidecar-then-software (C2),
+      never hangs.
+- [ ] R4 C4 quality (needs a phone): a VAAPI-encoded session decodes with correct color (no NV12 chroma
+      shift) and the GOP (fps×2) keyframe lets first-frame render land within ~2 s.
 
 ## 2a. Desktop-side session visibility + kick (R4 D2)
 

@@ -27,6 +27,7 @@ use tracing::{debug, error, info, trace, warn};
 
 use super::encoder_detect::HardwareEncoder;
 use super::encoder_inproc::InProcessEncoder;
+use super::encoder_vaapi::VaapiEncoder;
 use super::{EncodedPacket, EncoderPreset, H264Profile, StreamingConfig, VideoCodec, VideoFrame};
 
 /// Set a file descriptor to non-blocking mode.
@@ -53,12 +54,14 @@ const NAL_TYPE_IDR: u8 = 5;
 /// Mask to extract NAL unit type from the first byte.
 const NAL_TYPE_MASK: u8 = 0x1F;
 
-/// Video encoder facade over the two FFmpeg backends.
+/// Video encoder facade over the FFmpeg backends.
 pub enum VideoEncoder {
     /// Persistent FFmpeg child process over stdio pipes (VAAPI/NVENC).
     Sidecar(SidecarEncoder),
     /// In-process libx264/libx265 via `ffmpeg-next` (software path).
     InProcess(InProcessEncoder),
+    /// In-process VAAPI (`h264_vaapi`/`hevc_vaapi`) via raw FFmpeg FFI (C4).
+    VaapiInProcess(VaapiEncoder),
 }
 
 impl VideoEncoder {
@@ -79,6 +82,19 @@ impl VideoEncoder {
 
         let mut hw_config = config.clone();
         hw_config.hardware_encoder = resolved;
+
+        // C4: VAAPI prefers the in-process hardware path (no child process, no
+        // stdio pipes, device-node auto-detect). On failure fall to the
+        // verified sidecar, then the software rung — the C2 ladder.
+        if matches!(resolved, HardwareEncoder::Vaapi) {
+            match VaapiEncoder::new(hw_config.clone()) {
+                Ok(encoder) => return Ok(VideoEncoder::VaapiInProcess(encoder)),
+                Err(e) => {
+                    warn!("In-process VAAPI unavailable ({e:#}); trying sidecar (C2/C4)");
+                }
+            }
+        }
+
         match open_sidecar_verified(hw_config) {
             Ok(encoder) => Ok(encoder),
             Err(e) => {
@@ -103,6 +119,7 @@ impl VideoEncoder {
         match self {
             Self::Sidecar(_) => "ffmpeg-sidecar",
             Self::InProcess(_) => "in-process",
+            Self::VaapiInProcess(_) => "in-process-vaapi",
         }
     }
 
@@ -111,6 +128,7 @@ impl VideoEncoder {
         match self {
             Self::Sidecar(e) => e.encode_frame(frame),
             Self::InProcess(e) => e.encode_frame(frame),
+            Self::VaapiInProcess(e) => e.encode_frame(frame),
         }
     }
 
@@ -119,6 +137,7 @@ impl VideoEncoder {
         match self {
             Self::Sidecar(e) => e.drain(),
             Self::InProcess(e) => e.drain(),
+            Self::VaapiInProcess(e) => e.drain(),
         }
     }
 
@@ -127,6 +146,7 @@ impl VideoEncoder {
         match self {
             Self::Sidecar(e) => e.request_keyframe(),
             Self::InProcess(e) => e.request_keyframe(),
+            Self::VaapiInProcess(e) => e.request_keyframe(),
         }
     }
 
@@ -135,6 +155,7 @@ impl VideoEncoder {
         match self {
             Self::Sidecar(e) => e.sequence(),
             Self::InProcess(e) => e.sequence(),
+            Self::VaapiInProcess(e) => e.sequence(),
         }
     }
 
@@ -143,6 +164,7 @@ impl VideoEncoder {
         match self {
             Self::Sidecar(e) => e.config(),
             Self::InProcess(e) => e.config(),
+            Self::VaapiInProcess(e) => e.config(),
         }
     }
 }
@@ -717,6 +739,44 @@ pub(crate) fn vbv_kbit_bounds(bitrate_bps: u32, fps: u32) -> (u64, u64) {
 
 /// Build the FFmpeg command-line arguments for encoding.
 ///
+/// The DRM render node the VAAPI sidecar should bind to. Honours the
+/// `LINUX_LINK_VAAPI_DEVICE` override, else the lowest existing
+/// `/dev/dri/renderD*`. On hybrid-GPU laptops the first node (`renderD128`)
+/// is often the discrete NVIDIA card with no VA driver, so hardcoding it
+/// fails; picking a present node + the C2 startup verify lets a broken pick
+/// degrade instead of killing the session (the in-process path tests each
+/// node's actual VAAPI usability).
+fn vaapi_device_node() -> String {
+    use super::encoder_vaapi::VAAPI_DEVICE_ENV;
+    if let Ok(node) = std::env::var(VAAPI_DEVICE_ENV)
+        && !node.is_empty()
+    {
+        return node;
+    }
+    let mut nodes: Vec<u32> = (128..136)
+        .filter(|n| std::path::Path::new(&format!("/dev/dri/renderD{n}")).exists())
+        .collect();
+    if nodes.is_empty()
+        && let Ok(entries) = std::fs::read_dir("/dev/dri")
+    {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if let Some(tail) = name.strip_prefix("renderD")
+                && let Ok(n) = tail.parse::<u32>()
+            {
+                nodes.push(n);
+            }
+        }
+        nodes.sort_unstable();
+        nodes.dedup();
+    }
+    nodes
+        .first()
+        .map(|n| format!("/dev/dri/renderD{n}"))
+        .unwrap_or_else(|| "/dev/dri/renderD128".to_string())
+}
+
 /// Input: raw BGRA frames via stdin (pipe:0)
 /// Output: H.264/H.265 NAL units via stdout (pipe:1)
 fn build_ffmpeg_args(config: &StreamingConfig, keyframe_interval: u64) -> Vec<String> {
@@ -781,7 +841,7 @@ fn build_ffmpeg_args(config: &StreamingConfig, keyframe_interval: u64) -> Vec<St
         HardwareEncoder::Vaapi => {
             vec![
                 "-vaapi_device".to_string(),
-                "/dev/dri/renderD128".to_string(),
+                vaapi_device_node(),
                 "-c:v".to_string(),
                 codec_name.to_string(),
                 "-b:v".to_string(),
