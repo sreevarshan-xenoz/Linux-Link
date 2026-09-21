@@ -82,6 +82,9 @@ place.
 - [ ] Picking a window: video re-encodes at window size (encoder rebuild), crop tracks the window, taps map to desktop coords via the screen box.
 - [ ] Moving the window mid-session: crop follows only after re-pick (known limitation — crop is static rect).
 - [ ] "Whole desktop" clears the crop.
+- [ ] R4 B2 (Hyprland): pick a window → server log shows "Streaming compositor-cropped window frames"; partly-occluded window streams correctly (occluder NOT in the video), and only the window's pixels are encoded.
+- [ ] R4 B2: close the streamed window mid-session → stream keeps running on full-output frames with software crop (warn log "did not stage"; no session drop).
+- [ ] R4 B2 (non-Hyprland wlroots, no export global): window pick still works via software crop exactly as pre-B2.
 - [ ] Monitor picker lists monitors via xcap; selecting index N streams that monitor's region; reconnect persists the choice per host.
 - [ ] Mid-session monitor switch tears down + rebuilds cleanly (no zombie session — bridge "already active" path).
 

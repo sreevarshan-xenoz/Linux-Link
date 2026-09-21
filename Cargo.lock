@@ -2588,6 +2588,7 @@ dependencies = [
  "anyhow",
  "ashpd",
  "async-trait",
+ "bitflags 2.13.2",
  "dirs",
  "evdev",
  "ffmpeg-next",
@@ -2610,8 +2611,10 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+ "wayland-backend",
  "wayland-client",
  "wayland-protocols-wlr",
+ "wayland-scanner",
  "x11rb",
  "xcap",
 ]

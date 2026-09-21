@@ -698,7 +698,9 @@ fun RemoteScreen(
                 cropWindow = w
                 cropScreen = screen
                 scope.launch(Dispatchers.IO) {
-                    RustCore.sendWindowCrop(w.localAt[0], w.localAt[1], w.size[0], w.size[1])
+                    // The address lets a Hyprland server capture the window
+                    // itself; the rect serves every other server.
+                    RustCore.sendWindowCrop(w.localAt[0], w.localAt[1], w.size[0], w.size[1], w.address)
                 }
                 showPicker = false
             },

@@ -526,6 +526,8 @@ pub async fn start_capture_auto(
     config: StreamingConfig,
     frame_tx: mpsc::Sender<VideoFrame>,
     cancel: CancellationToken,
+    window_rx: tokio::sync::watch::Receiver<u64>,
+    window_mode: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<CaptureSession> {
     match detect_display_server() {
         DisplayServer::Wayland => {
@@ -537,6 +539,8 @@ pub async fn start_capture_auto(
                 config.clone(),
                 frame_tx.clone(),
                 cancel.clone(),
+                window_rx,
+                window_mode,
             ) {
                 Ok(session) => {
                     info!("Starting Wayland screencopy capture (no portal)");

@@ -15,17 +15,26 @@
 //! [`crate::streaming::capture::start_capture_auto`] then uses the portal
 //! path unchanged. Set `LINUX_LINK_SCREENCOPY=0` to force the portal even
 //! on wlroots.
+//!
+//! R4 B2 extends the same loop with **per-window capture** through
+//! `hyprland_toplevel_export_v1`: when the client asks to stream a specific
+//! window, the compositor hands us exactly that window's pixels (occlusion-
+//! correct, and no wasted encode bandwidth on the rest of the desktop).
+//! Anything that can't serve it — no such global, a window that has since
+//! closed, a failed copy — falls back to full-output frames and clears
+//! `window_mode`, so the encode task's software crop takes over unchanged.
 
 use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
-use std::sync::atomic::{AtomicI32, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering as AtomicOrdering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use tokio::sync::mpsc as tokio_mpsc;
+use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 use wayland_client::globals::{GlobalList, GlobalListContents, registry_queue_init};
 use wayland_client::protocol::wl_buffer::WlBuffer;
 use wayland_client::protocol::wl_output::{self, WlOutput};
@@ -41,6 +50,35 @@ use wayland_protocols_wlr::screencopy::v1::client::zwlr_screencopy_manager_v1::Z
 use super::capture::CaptureSession;
 use super::{StreamingConfig, VideoFrame};
 
+/// Generated client bindings for `hyprland_toplevel_export_v1` (R4 B2:
+/// per-window capture). The XML is a vendored, trimmed copy (BSD-3-Clause,
+/// upstream hyprwm/hyprland-protocols) under `core/protocols/`; trimming the
+/// v2 wlr-handle request keeps the generated code dependent on nothing
+/// beyond wayland-client/wayland-backend/bitflags.
+#[allow(
+    dead_code,
+    missing_docs,
+    non_camel_case_types,
+    non_snake_case,
+    non_upper_case_globals,
+    unused_unsafe,
+    unused_variables,
+    clippy::all
+)]
+mod hlte {
+    use wayland_client;
+    use wayland_client::protocol::*;
+    pub mod __interfaces {
+        use wayland_client::protocol::__interfaces::*;
+        wayland_scanner::generate_interfaces!("protocols/hyprland-toplevel-export-v1.xml");
+    }
+    use self::__interfaces::*;
+    wayland_scanner::generate_client_code!("protocols/hyprland-toplevel-export-v1.xml");
+}
+
+use hlte::hyprland_toplevel_export_frame_v1::{self as hltf, HyprlandToplevelExportFrameV1};
+use hlte::hyprland_toplevel_export_manager_v1::HyprlandToplevelExportManagerV1;
+
 /// Request rate for a static screen: the compositor still fills the shm
 /// buffer, but an undamaged `ready` costs no encode.
 const IDLE_FPS: u64 = 10;
@@ -49,6 +87,11 @@ const POLL_TICK: Duration = Duration::from_millis(100);
 /// Time the caller waits for the first successful frame before falling back
 /// to the portal path (the capture thread aborts via the cancel token).
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+/// Time a toplevel capture may stay silent before it is considered dead.
+/// Hyprland answers a request for a gone/invalid window handle by logging and
+/// returning *without ever creating the frame object*, so there is no
+/// `failed` event to wait for — silence is the only signal.
+const WINDOW_STAGE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Output geometry (wl_output global coordinates) shared per bound output.
 #[derive(Default)]
@@ -194,15 +237,77 @@ impl Dispatch<WlBuffer, ()> for WlState {
     }
 }
 
+impl Dispatch<HyprlandToplevelExportManagerV1, ()> for WlState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &HyprlandToplevelExportManagerV1,
+        _event: <HyprlandToplevelExportManagerV1 as Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+/// The toplevel-export frame object mirrors `zwlr_screencopy_frame_v1` event
+/// for event, so the same [`FramePhase`] slot drives both paths.
+impl Dispatch<HyprlandToplevelExportFrameV1, FrameSlot> for WlState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &HyprlandToplevelExportFrameV1,
+        event: <HyprlandToplevelExportFrameV1 as Proxy>::Event,
+        data: &FrameSlot,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        use hltf::Event;
+        let mut phase = data.lock().unwrap();
+        match event {
+            Event::Buffer {
+                format,
+                width,
+                height,
+                stride,
+            } => {
+                if let WEnum::Value(format) = format {
+                    phase.buffer = Some((width, height, stride, format));
+                } else {
+                    phase.failed = true;
+                }
+            }
+            Event::Flags {
+                flags: WEnum::Value(hltf::Flags::YInvert),
+            } => phase.y_invert = true,
+            Event::Damage { .. } => phase.damaged = true,
+            Event::Ready { .. } => phase.done = true,
+            Event::Failed => phase.failed = true,
+            Event::LinuxDmabuf { .. } => {
+                if phase.buffer.is_none() {
+                    phase.failed = true;
+                }
+            }
+            Event::BufferDone => {}
+            _ => {}
+        }
+    }
+}
+
 /// Start wlroots screencopy capture of one output.
 ///
 /// Spawns the capture thread and returns only after its **first frame** has
 /// been grabbed successfully (so callers can fall back to the portal on any
 /// setup failure: no display, no global, no output, unsupported buffer).
+///
+/// `window_rx` carries the Hyprland window address the client asked to
+/// stream (R4 B2, 0 = whole output); `window_mode` is set while the thread
+/// really is emitting compositor-cropped per-window frames, which tells the
+/// encode task to skip its own software crop.
 pub fn start_screencopy_capture(
     config: StreamingConfig,
     frame_tx: tokio_mpsc::Sender<VideoFrame>,
     cancel: CancellationToken,
+    window_rx: watch::Receiver<u64>,
+    window_mode: Arc<AtomicBool>,
 ) -> Result<CaptureSession> {
     if std::env::var("LINUX_LINK_SCREENCOPY")
         .map(|v| v == "0")
@@ -217,9 +322,14 @@ pub fn start_screencopy_capture(
     std::thread::Builder::new()
         .name("screencopy-capture".into())
         .spawn(move || {
-            if let Err(e) =
-                run_capture_loop(thread_config, frame_tx, thread_cancel, ready_tx.clone())
-            {
+            if let Err(e) = run_capture_loop(
+                thread_config,
+                frame_tx,
+                thread_cancel,
+                ready_tx.clone(),
+                window_rx,
+                window_mode,
+            ) {
                 let _ = ready_tx.send(Err(e));
             }
         })
@@ -238,11 +348,44 @@ pub fn start_screencopy_capture(
     }
 }
 
+/// The two frame-object flavors this backend drives: whole-output
+/// (`zwlr_screencopy`) and single-window (`hyprland_toplevel_export`, R4 B2).
+/// Both speak the same event language, so one [`FramePhase`] slot and one
+/// copy/destroy tail serve either.
+enum Capture {
+    Output(ZwlrScreencopyFrameV1),
+    Window(HyprlandToplevelExportFrameV1),
+}
+
+impl Capture {
+    fn copy(&self, buffer: &WlBuffer) {
+        match self {
+            // `copy_with_damage` is zwlr's `copy(buffer, ignore_damage = 0)`:
+            // the `damage` events that drive idle back-off depend on it.
+            Capture::Output(f) => f.copy_with_damage(buffer),
+            Capture::Window(f) => f.copy(buffer, 0),
+        }
+    }
+
+    fn destroy(&self) {
+        match self {
+            Capture::Output(f) => f.destroy(),
+            Capture::Window(f) => f.destroy(),
+        }
+    }
+
+    fn is_window(&self) -> bool {
+        matches!(self, Capture::Window(_))
+    }
+}
+
 fn run_capture_loop(
     config: StreamingConfig,
     frame_tx: tokio_mpsc::Sender<VideoFrame>,
     cancel: CancellationToken,
     ready_tx: Sender<Result<()>>,
+    mut window_rx: watch::Receiver<u64>,
+    window_mode: Arc<AtomicBool>,
 ) -> Result<()> {
     let conn = Connection::connect_to_env().context("no Wayland display")?;
     let (globals, mut queue) =
@@ -257,6 +400,13 @@ fn run_capture_loop(
     let Ok(manager): Result<ZwlrScreencopyManagerV1, _> = globals.bind(&qh, 3..=3, ()) else {
         bail!("compositor does not advertise zwlr_screencopy_manager_v1 >= 3");
     };
+    // R4 B2: per-window capture is a Hyprland-only extra. When the global is
+    // absent the client's window request still works — `window_mode` stays
+    // false and the encode task keeps software-cropping the output frames.
+    let export: Option<HyprlandToplevelExportManagerV1> = globals.bind(&qh, 1..=1, ()).ok();
+    if export.is_none() {
+        info!("No hyprland_toplevel_export_v1 global: window streaming stays software-crop");
+    }
 
     let outputs = bind_outputs(&globals, &qh)?;
     let mut state = WlState;
@@ -274,7 +424,17 @@ fn run_capture_loop(
     );
     let mut shm_buf: Option<ShmBuffer> = None;
     let mut idle = false;
-    let mut first = true;
+    // The handshake only ever needs the first frame, window or not.
+    let mut ready_sent = false;
+    // Frame source actually used last cycle (None = whole output). A change
+    // means pixel geometry changed underneath, so the next frame ships even
+    // if the compositor reports no damage.
+    let mut source: Option<u32> = None;
+    let mut force_emit = true;
+    // Handle of a window whose capture could not be staged: retried only
+    // when the client picks again (the watch value changes), so a closed
+    // window cannot spin the loop on 2 s timeouts.
+    let mut suspended: Option<u64> = None;
 
     loop {
         if cancel.is_cancelled() {
@@ -283,12 +443,60 @@ fn run_capture_loop(
         }
         let cycle_start = Instant::now();
 
-        let slot: FrameSlot = Arc::new(Mutex::new(FramePhase::default()));
-        // overlay_cursor = 1: desktop parity with the portal path, which
-        // shares with the system cursor composited in.
-        let frame = manager.capture_output(1, &output, &qh, slot.clone());
+        let addr = *window_rx.borrow_and_update();
+        let wanted = match (addr, suspended, export.as_ref()) {
+            (0, _, _) => None,
+            (a, Some(s), _) if s == a => None,
+            (a, _, Some(mgr)) => Some((a, mgr)),
+            (_, _, None) => None,
+        };
 
-        // Stage 1: the compositor announces the shm layout (or fails).
+        let mut slot: FrameSlot = Arc::new(Mutex::new(FramePhase::default()));
+        let mut used_window: Option<u32> = None;
+        let capture = match wanted {
+            Some((addr, mgr)) => {
+                let handle = addr as u32;
+                // overlay_cursor = 1: desktop parity with the output path.
+                let frame = mgr.capture_toplevel(1, handle, &qh, slot.clone());
+                let staged = pump_until_timeout(
+                    &conn,
+                    &mut queue,
+                    &mut state,
+                    &cancel,
+                    WINDOW_STAGE_TIMEOUT,
+                    || {
+                        let p = slot.lock().unwrap();
+                        p.buffer.is_some() || p.done || p.failed
+                    },
+                )?;
+                let ok = staged && {
+                    let p = slot.lock().unwrap();
+                    p.buffer.is_some() && !p.failed
+                };
+                if ok {
+                    used_window = Some(handle);
+                    Capture::Window(frame)
+                } else {
+                    frame.destroy();
+                    warn!(
+                        addr,
+                        "Window capture did not stage; falling back to full-output frames"
+                    );
+                    suspended = Some(addr);
+                    window_mode.store(false, AtomicOrdering::Relaxed);
+                    slot = Arc::new(Mutex::new(FramePhase::default()));
+                    Capture::Output(manager.capture_output(1, &output, &qh, slot.clone()))
+                }
+            }
+            None => {
+                window_mode.store(false, AtomicOrdering::Relaxed);
+                Capture::Output(manager.capture_output(1, &output, &qh, slot.clone()))
+            }
+        };
+
+        // Stage 1: the compositor announces the shm layout (or fails). For a
+        // window capture this is already satisfied — the deadline above only
+        // admits a staged frame.
         pump_until(&conn, &mut queue, &mut state, &cancel, || {
             let p = slot.lock().unwrap();
             p.buffer.is_some() || p.done || p.failed
@@ -296,12 +504,14 @@ fn run_capture_loop(
         let meta = {
             let p = slot.lock().unwrap();
             if p.failed || p.buffer.is_none() {
+                capture.destroy();
                 bail!("compositor rejected the shm capture (unsupported buffer format?)");
             }
             p.buffer.unwrap()
         };
         let (w, h, stride, format) = meta;
         if !matches!(format, wl_shm::Format::Argb8888 | wl_shm::Format::Xrgb8888) {
+            capture.destroy();
             bail!("unsupported screencopy shm format {format:?}");
         }
 
@@ -316,7 +526,7 @@ fn run_capture_loop(
         }
         let fb = shm_buf.as_ref().unwrap();
         let (pool, buffer) = fb.attach(&shm, &qh);
-        frame.copy_with_damage(&buffer);
+        capture.copy(&buffer);
 
         // Stage 2: wait for ready/failed.
         pump_until(&conn, &mut queue, &mut state, &cancel, || {
@@ -329,18 +539,41 @@ fn run_capture_loop(
         };
         buffer.destroy();
         pool.destroy();
-        frame.destroy();
+        capture.destroy();
         if failed {
+            if let Some(handle) = used_window {
+                warn!(
+                    handle,
+                    "Window frame copy failed; falling back to full-output frames"
+                );
+                suspended = Some(addr);
+                window_mode.store(false, AtomicOrdering::Relaxed);
+                continue;
+            }
             bail!("screencopy frame copy failed (compositor busy?)");
+        }
+
+        // A source switch (output ↔ window, or window ↔ window) invalidates
+        // both the client's decoder size and the accumulated reference
+        // frames, so that cycle must emit even without damage.
+        let new_source = capture.is_window().then_some(used_window.unwrap_or(0));
+        if new_source != source {
+            source = new_source;
+            force_emit = true;
+            if capture.is_window() {
+                info!(w, h, "Streaming compositor-cropped window frames");
+                window_mode.store(true, AtomicOrdering::Relaxed);
+            }
         }
 
         // The first frame ships regardless of reported damage: a static
         // screen's initial capture may arrive undamaged, and the pipeline
         // needs a starting frame.
-        let emit = first || damaged;
-        if first {
+        let emit = force_emit || damaged;
+        force_emit = false;
+        if !ready_sent {
             let _ = ready_tx.send(Ok(()));
-            first = false;
+            ready_sent = true;
         }
 
         if emit {
@@ -497,6 +730,41 @@ where
         if let Some(guard) = conn.prepare_read() {
             poll_fd(guard.connection_fd().as_raw_fd(), POLL_TICK);
             // Errors (WouldBlock on timeout) just re-enter the loop.
+            let _ = guard.read();
+        }
+    }
+}
+
+/// Drain pending events (cancel-aware) until `done` or `budget` elapses;
+/// returns whether `done` was reached. A Hyprland window capture that is
+/// never answered — closed or bogus handle — produces no events at all, so
+/// a deadline is the only way to notice.
+fn pump_until_timeout<F>(
+    conn: &Connection,
+    queue: &mut EventQueue<WlState>,
+    state: &mut WlState,
+    cancel: &CancellationToken,
+    budget: Duration,
+    done: F,
+) -> Result<bool>
+where
+    F: Fn() -> bool,
+{
+    let deadline = Instant::now() + budget;
+    loop {
+        queue.dispatch_pending(state)?;
+        if done() {
+            return Ok(true);
+        }
+        if cancel.is_cancelled() {
+            bail!("capture cancelled while waiting for compositor events");
+        }
+        if Instant::now() >= deadline {
+            return Ok(false);
+        }
+        queue.flush()?;
+        if let Some(guard) = conn.prepare_read() {
+            poll_fd(guard.connection_fd().as_raw_fd(), POLL_TICK);
             let _ = guard.read();
         }
     }
@@ -662,13 +930,16 @@ mod tests {
         let (tx, mut rx) = tokio_mpsc::channel::<VideoFrame>(2);
         let cancel = CancellationToken::new();
         let config = StreamingConfig::default();
-        let session = match start_screencopy_capture(config, tx, cancel.clone()) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("skipping: no wlroots screencopy available here: {e:#}");
-                return;
-            }
-        };
+        let (_window_tx, window_rx) = watch::channel(0u64);
+        let window_mode = Arc::new(AtomicBool::new(false));
+        let session =
+            match start_screencopy_capture(config, tx, cancel.clone(), window_rx, window_mode) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("skipping: no wlroots screencopy available here: {e:#}");
+                    return;
+                }
+            };
         let frame = rx
             .blocking_recv()
             .expect("handshake completed but no frame arrived");
@@ -689,6 +960,90 @@ mod tests {
         drop(session); // cancels via Drop
         // A live capture thread would still hold the token uncalled;
         // session Drop must have cancelled it.
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(cancel.is_cancelled());
+    }
+
+    /// Address of the focused Hyprland window in the space the windows plugin
+    /// reports (`hyprctl -j activewindow` → `"address": "0x…"`). `None` off
+    /// Hyprland, which makes the window test below skip.
+    fn active_window_handle() -> Option<u64> {
+        let out = std::process::Command::new("hyprctl")
+            .args(["-j", "activewindow"])
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let parsed: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+        let address = parsed.get("address")?.as_str()?;
+        u64::from_str_radix(address.trim_start_matches("0x"), 16).ok()
+    }
+
+    /// R4 B2 against the live compositor: switch an already-running capture
+    /// to a single window and back. Requires Hyprland (the export global) and
+    /// a visible focused window; skips when either is missing.
+    #[test]
+    fn screencopy_switches_between_output_and_window() {
+        let Some(addr) = active_window_handle() else {
+            eprintln!("skipping: no Hyprland activewindow address here");
+            return;
+        };
+        let (tx, mut rx) = tokio_mpsc::channel::<VideoFrame>(2);
+        let cancel = CancellationToken::new();
+        let (window_tx, window_rx) = watch::channel(0u64);
+        let window_mode = Arc::new(AtomicBool::new(false));
+        let session = match start_screencopy_capture(
+            StreamingConfig::default(),
+            tx.clone(),
+            cancel.clone(),
+            window_rx,
+            window_mode.clone(),
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("skipping: no wlroots screencopy available here: {e:#}");
+                return;
+            }
+        };
+        let full = rx
+            .blocking_recv()
+            .expect("handshake completed but no frame arrived");
+        assert!(full.width > 0 && full.height > 0);
+
+        // Drain what the output loop already queued, then ask for the window.
+        while rx.try_recv().is_ok() {}
+        window_tx.send(addr).unwrap();
+        let win = loop {
+            match rx.blocking_recv() {
+                // The capture thread sets `window_mode` in the same cycle as
+                // (and just before) the first window frame, so a frame seen
+                // while it is set is the compositor's own window pixels.
+                Some(f) if window_mode.load(AtomicOrdering::Relaxed) => break f,
+                Some(_) => {}
+                None => panic!("capture thread died while switching to window capture"),
+            }
+        };
+        assert!(win.width > 0 && win.height > 0);
+        assert_eq!(win.data.len(), (win.stride * win.height) as usize);
+        eprintln!(
+            "window capture: {}x{} from a {}x{} output",
+            win.width, win.height, full.width, full.height
+        );
+
+        // Clearing the request returns to output frames and hands cropping
+        // back to the encode task.
+        window_tx.send(0u64).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while window_mode.load(AtomicOrdering::Relaxed) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(
+            !window_mode.load(AtomicOrdering::Relaxed),
+            "still emitting window frames after the request was cleared"
+        );
+
+        drop(session);
         std::thread::sleep(Duration::from_millis(300));
         assert!(cancel.is_cancelled());
     }

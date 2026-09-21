@@ -53,12 +53,16 @@ pub enum InputPacket {
     RequestKeyframe,
     /// Restrict the stream to a region of the desktop (window-crop mode).
     /// `None` fields mean 0; an all-`None` packet clears the crop and
-    /// restores the full desktop.
+    /// restores the full desktop. `window` (R4 B2) carries the Hyprland
+    /// window address (0 = none): when nonzero and the compositor offers
+    /// `hyprland_toplevel_export_v1`, the capture is that window's own
+    /// buffer — occlusion-correct, no software crop of the rect.
     WindowCrop {
         x: Option<u32>,
         y: Option<u32>,
         width: Option<u32>,
         height: Option<u32>,
+        window: u64,
     },
     /// R4 D1 view-only mode: while enabled the **server** drops every
     /// injected-input packet from this session (mouse, keyboard, gamepad,
@@ -144,12 +148,14 @@ impl InputPacket {
                 y,
                 width,
                 height,
+                window,
             } => {
-                let mut buf = Vec::with_capacity(17);
+                let mut buf = Vec::with_capacity(25);
                 buf.push(TAG_WINDOW_CROP);
                 for v in [x, y, width, height] {
                     buf.extend_from_slice(&v.unwrap_or(0).to_le_bytes());
                 }
+                buf.extend_from_slice(&window.to_le_bytes());
                 buf
             }
         }
@@ -165,12 +171,22 @@ impl InputPacket {
                 y,
                 width,
                 height,
+                ..
             } => match (*width, *height) {
                 (Some(w), Some(h)) if w > 0 && h > 0 => {
                     Some((x.unwrap_or(0), y.unwrap_or(0), w, h))
                 }
                 _ => None,
             },
+            _ => None,
+        }
+    }
+
+    /// For a `WindowCrop` packet: the Hyprland window address to capture
+    /// compositor-side (R4 B2), or `None` for plain geometry cropping.
+    pub fn window_handle(&self) -> Option<u64> {
+        match self {
+            InputPacket::WindowCrop { window, .. } => (*window > 0).then_some(*window),
             _ => None,
         }
     }
@@ -249,19 +265,21 @@ impl InputPacket {
             }
             TAG_WINDOW_CROP => {
                 anyhow::ensure!(
-                    data.len() == 17,
-                    "WindowCrop packet must be 17 bytes, got {}",
+                    data.len() == 25,
+                    "WindowCrop packet must be 25 bytes, got {}",
                     data.len()
                 );
                 let field = |i: usize| {
                     let v = u32::from_le_bytes(data[1 + i * 4..5 + i * 4].try_into().unwrap());
                     (v > 0).then_some(v)
                 };
+                let window = u64::from_le_bytes(data[17..25].try_into().unwrap());
                 Ok(InputPacket::WindowCrop {
                     x: field(0),
                     y: field(1),
                     width: field(2),
                     height: field(3),
+                    window,
                 })
             }
             _ => {
@@ -446,11 +464,13 @@ mod tests {
             y: Some(60),
             width: Some(1280),
             height: Some(720),
+            window: 0xdead_beef_1234,
         };
         let data = packet.encode();
-        assert_eq!(data.len(), 17);
+        assert_eq!(data.len(), 25);
         let decoded = InputPacket::decode(&data).unwrap();
         assert_eq!(decoded.crop_rect(), Some((100, 60, 1280, 720)));
+        assert_eq!(decoded.window_handle(), Some(0xdead_beef_1234));
     }
 
     #[test]
@@ -461,9 +481,11 @@ mod tests {
             y: None,
             width: Some(800),
             height: Some(600),
+            window: 0,
         };
         let decoded = InputPacket::decode(&packet.encode()).unwrap();
         assert_eq!(decoded.crop_rect(), Some((0, 0, 800, 600)));
+        assert_eq!(decoded.window_handle(), None);
 
         // All-zero payload clears the crop.
         let clear = InputPacket::WindowCrop {
@@ -471,9 +493,10 @@ mod tests {
             y: None,
             width: None,
             height: None,
+            window: 0,
         };
         let data = clear.encode();
-        assert_eq!(&data[1..], &[0u8; 16]);
+        assert_eq!(&data[1..], &[0u8; 24]);
         assert_eq!(InputPacket::decode(&data).unwrap().crop_rect(), None);
     }
 
@@ -485,12 +508,15 @@ mod tests {
             y: Some(2),
             width: Some(3),
             height: Some(4),
+            window: 7,
         }
         .encode();
         full.push(0);
         assert!(InputPacket::decode(&full).is_err());
+        // A pre-B2 17-byte frame (no window field) is rejected too.
+        assert!(InputPacket::decode(&full[..17]).is_err());
         assert_eq!(
-            InputPacket::decode(&full[..17]).unwrap().crop_rect(),
+            InputPacket::decode(&full[..25]).unwrap().crop_rect(),
             Some((1, 2, 3, 4))
         );
     }

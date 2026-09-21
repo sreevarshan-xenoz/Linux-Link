@@ -2104,13 +2104,37 @@ pub async fn send_mouse_click(button: u8, pressed: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// Restrict the server's capture to a window rect (R3#7 single-window
-/// streaming). The rect is in monitor-local capture coordinates
-/// (`WindowInfoDto::local_at` + `size`); zero width or height clears the
-/// crop and restores the full desktop. The server rebuilds the encoder at
-/// the cropped resolution, so the video stream size follows the window.
-/// QUIC-only, like `send_mouse_abs`.
-pub async fn send_window_crop(x: u32, y: u32, width: u32, height: u32) -> Result<(), String> {
+/// Parse a Hyprland window address as the windows plugin reports it
+/// (`"0x55f6c2d3"`, optionally bare decimal) into the handle the server
+/// hands to `hyprland_toplevel_export_v1`. Empty or unparseable → 0, which
+/// means "geometry crop only" and keeps the pre-B2 software-crop behavior.
+fn parse_window_address(address: &str) -> u64 {
+    let s = address.trim();
+    if s.is_empty() {
+        return 0;
+    }
+    match s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        Some(hex) => u64::from_str_radix(hex, 16).unwrap_or(0),
+        None => s.parse::<u64>().unwrap_or(0),
+    }
+}
+
+/// Restrict the server's capture to a window (R3#7 single-window streaming,
+/// R4 B2 compositor-side capture). `address` is the Hyprland window address
+/// from `get_windows`; when the server understands it, the compositor crops
+/// to that window itself (occlusion-correct, no wasted bandwidth). The rect
+/// (monitor-local `WindowInfoDto::local_at` + `size`) always travels too —
+/// it is what non-Hyprland servers crop with, and what the input mapping
+/// uses. Zero width or height clears the crop and restores the full desktop.
+/// The server rebuilds the encoder at the captured resolution, so the video
+/// stream size follows the window. QUIC-only, like `send_mouse_abs`.
+pub async fn send_window_crop(
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+    address: &str,
+) -> Result<(), String> {
     let quic_conn = {
         let guard = (*STREAMING_HANDLE).lock().await;
         if let Some(h) = guard.as_ref() {
@@ -2132,6 +2156,7 @@ pub async fn send_window_crop(x: u32, y: u32, width: u32, height: u32) -> Result
             y: None,
             width: None,
             height: None,
+            window: 0,
         }
     } else {
         InputPacket::WindowCrop {
@@ -2139,6 +2164,7 @@ pub async fn send_window_crop(x: u32, y: u32, width: u32, height: u32) -> Result
             y: Some(y),
             width: Some(width),
             height: Some(height),
+            window: parse_window_address(address),
         }
     };
     let data = packet.encode();

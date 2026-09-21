@@ -267,15 +267,30 @@ impl StreamingServer {
         // actually reaches the pipeline, not just the session config).
         let (crop_tx, crop_rx) = watch::channel(None::<(u32, u32, u32, u32)>);
 
+        // R4 B2: the same packet's Hyprland window address (0 = geometry
+        // crop only). The screencopy capture thread consumes it and flips
+        // `window_mode` while it is actually emitting per-window frames —
+        // the encode task must then skip the software crop, but only once
+        // the compositor confirms (non-Hyprland servers keep the old
+        // software-crop behavior with the same packet).
+        let (window_tx, window_rx) = watch::channel(0u64);
+        let window_mode = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
         let mut tasks = JoinSet::new();
 
         // Task 1: Screen capture (runs on dedicated OS thread internally)
         let capture_config = self.config.clone();
         let _capture_bitrate_rx = self.bitrate_watcher();
         let capture_cancel = cancel.clone();
-        let capture_session = capture::start_capture_auto(capture_config, frame_tx, capture_cancel)
-            .await
-            .context("Failed to start screen capture")?;
+        let capture_session = capture::start_capture_auto(
+            capture_config,
+            frame_tx,
+            capture_cancel,
+            window_rx.clone(),
+            window_mode.clone(),
+        )
+        .await
+        .context("Failed to start screen capture")?;
 
         info!("Screen capture session started");
 
@@ -297,6 +312,8 @@ impl StreamingServer {
             VideoEncoder::new(encoder_config).context("Failed to create video encoder")?;
         let base_config = self.config.clone();
         let encode_crop_rx = crop_rx.clone();
+        let encode_window_rx = window_rx.clone();
+        let encode_window_mode = window_mode.clone();
 
         // Spawn encoding task — reads frames, produces packets
         let encode_cancel = cancel.clone();
@@ -307,6 +324,10 @@ impl StreamingServer {
             let mut frames_dropped = 0u64;
             let mut crop: Option<(u32, u32, u32, u32)> = None;
             let mut crop_rx = encode_crop_rx;
+            let mut window_rx = encode_window_rx;
+            // True while the capture thread is actually emitting
+            // compositor-cropped per-window frames (R4 B2).
+            let window_mode = encode_window_mode;
 
             loop {
                 tokio::select! {
@@ -340,6 +361,17 @@ impl StreamingServer {
                         }
                     }
 
+                    // R4 B2: a new window handle switches the capture
+                    // thread to compositor-side window capture. Force an
+                    // IDR so the client reseeds against the different
+                    // frame source; the software crop is skipped while
+                    // `window_mode` reports it is live.
+                    Ok(()) = window_rx.changed() => {
+                        let addr = *window_rx.borrow_and_update();
+                        info!(addr, "Window capture target changed");
+                        encoder.request_keyframe();
+                    }
+
                     // Check for bitrate updates
                     Ok(()) = encoder_bitrate_rx.changed() => {
                         let current_bitrate = *encoder_bitrate_rx.borrow();
@@ -348,7 +380,12 @@ impl StreamingServer {
 
                     // Process next frame
                     Some(mut frame) = frame_rx.recv() => {
-                        if let Some((cx, cy, cw, ch)) = crop
+                        // In compositor-side window mode the frames already
+                        // are exactly the window — the software crop would
+                        // cut into it a second time.
+                        let software_crop = !window_mode.load(Ordering::Relaxed);
+                        if software_crop
+                            && let Some((cx, cy, cw, ch)) = crop
                             && !frame.crop_region(cx, cy, cw, ch)
                         {
                             // Crop rect lies outside the captured frame
@@ -577,6 +614,7 @@ impl StreamingServer {
         let input_tx = self.input_tx.clone();
         let keyframe_req_tx = keyframe_tx.clone();
         let monitor_crop_tx = crop_tx;
+        let monitor_window_tx = window_tx;
         let monitor_view_only = self.view_only.clone();
         let monitor_full_quality = self.full_quality.clone();
         let monitor_span = tracing::info_span!("connection_monitor");
@@ -623,8 +661,10 @@ impl StreamingServer {
                                                 // resolution, don't inject input.
                                                 if matches!(packet, InputPacket::WindowCrop { .. }) {
                                                     let rect = packet.crop_rect();
-                                                    info!(?rect, "Client set window crop");
+                                                    let addr = packet.window_handle().unwrap_or(0);
+                                                    info!(?rect, addr, "Client set window crop");
                                                     let _ = monitor_crop_tx.send(rect);
+                                                    let _ = monitor_window_tx.send(addr);
                                                     continue;
                                                 }
                                                 // View-only is server-enforced input

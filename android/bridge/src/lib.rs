@@ -456,8 +456,10 @@ pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeSendMous
     to_jstring(&mut env, json)
 }
 
-/// Restrict capture to a monitor-local window rect (R3#7 window crop);
-/// zero width/height clears the crop.
+/// Restrict capture to a window (R3#7 crop + R4 B2 compositor-side capture);
+/// zero width/height clears it. `address` is the Hyprland window address as
+/// reported by `get_windows` — empty when unknown, which leaves the server
+/// cropping by rect instead.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeSendWindowCrop(
     mut env: JNIEnv<'_>,
@@ -466,13 +468,16 @@ pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeSendWind
     y: jint,
     width: jint,
     height: jint,
+    address: JString<'_>,
 ) -> jstring {
     let nonneg = |v: jint| v.max(0) as u32;
+    let address = jstring_to_string(&mut env, &address);
     let json = envelope_unit(RUNTIME.block_on(api::send_window_crop(
         nonneg(x),
         nonneg(y),
         nonneg(width),
         nonneg(height),
+        &address,
     )));
     to_jstring(&mut env, json)
 }

@@ -110,6 +110,7 @@ object RustCore {
         y: Int,
         width: Int,
         height: Int,
+        address: String,
     ): String
     private external fun nativeSetViewOnly(enabled: Boolean): String
     private external fun nativeSetFullQuality(enabled: Boolean): String
@@ -493,9 +494,12 @@ object RustCore {
         envelope(nativeGetWindows(address, port))
 
     /**
-     * Restrict the server's capture to a monitor-local rect (single-window
-     * streaming, R3#7): use a window's `local_at` + `size`. The video stream
-     * is re-encoded at the cropped resolution. Zero width/height clears the
+     * Restrict the server's capture to one window (single-window streaming):
+     * use a window's `local_at` + `size`, and pass its Hyprland `address` so
+     * a Hyprland server can capture the window itself (occlusion-correct, no
+     * wasted bandwidth) instead of cropping the desktop in software. The
+     * rect always travels — it is what other servers use. The video stream
+     * is re-encoded at the captured resolution. Zero width/height clears the
      * crop and restores the full desktop. QUIC-only.
      */
     fun sendWindowCrop(
@@ -503,7 +507,8 @@ object RustCore {
         y: Int,
         width: Int,
         height: Int,
-    ): Result<Unit> = envelope(nativeSendWindowCrop(x, y, width, height)).map { }
+        address: String = "",
+    ): Result<Unit> = envelope(nativeSendWindowCrop(x, y, width, height, address)).map { }
 
     fun clearWindowCrop(): Result<Unit> = sendWindowCrop(0, 0, 0, 0)
 

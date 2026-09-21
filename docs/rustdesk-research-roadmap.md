@@ -154,11 +154,18 @@ From **scrcpy** (code-level OK, Apache-2.0):
   wl_output geometry vs the xcap enumeration (same space as the picker).
   Remaining ideas from the original bullet (dmabuf zero-copy) deferred —
   shm copies are already the portal path's cost model.
-- **B2 · Window-granular screencopy.** Hyprland's screencopy supports
-  window-mode capture; wire it to the R3#7 crop path so a window pick
-  becomes compositor-crop'd frames (no server-side BGRA crop) — cheaper and
-  occlusion-correct. Accept: window stream of an overlapped window shows
-  only the window, no software crop rects.
+- **B2 · Window-granular screencopy.** ✅ **Landed 2026-09-21** (verified
+  live on this box's Hyprland — focused window streamed as 918×1020
+  compositor-cropped frames from a 1920×1080 output, clean round-trip back).
+  Wired to the R3#7 crop path via `hyprland_toplevel_export_v1` (Hyprland's
+  actual window-capture protocol — its frame events mirror zwlr's), with a
+  u64 window address added to `InputPacket::WindowCrop` (17→25 bytes; 0 =
+  legacy software crop, so non-Hyprland servers and every old code path
+  behave identically). `window_mode` tells the encode task to skip its BGRA
+  crop while compositor frames are live; staging failures/gone handles fall
+  back to output frames mid-session without dropping the stream. Accept
+  criterion met: window frames come from the compositor, occlusion-correct,
+  no software crop applied.
 - **B3 · Portal fallback ordering.** Auto (screencopy on Hyprland/wlroots
   that implement it, portal elsewhere, X11 last) + config override.
 
