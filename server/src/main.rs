@@ -46,5 +46,6 @@ async fn main() -> Result<()> {
         }
         cli::Commands::Pair { pin, grant } => service::pair(pin, grant).await,
         cli::Commands::Unpair { device_id } => service::unpair(device_id).await,
+        cli::Commands::Kick { device } => service::kick(device).await,
     }
 }

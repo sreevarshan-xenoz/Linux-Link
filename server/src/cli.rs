@@ -57,6 +57,12 @@ pub enum Commands {
         /// Device id to untrust (omit to untrust all devices)
         device_id: Option<String>,
     },
+    /// Drop a live streaming session (R4 D2): device id, a unique id
+    /// prefix of >=6 chars, the peer IP, or "all"
+    Kick {
+        /// Session target — see the subcommand help
+        device: String,
+    },
 }
 
 /// Parse a `--grant` duration (`45s`, `15m`, `2h`, `7d`, combinable like

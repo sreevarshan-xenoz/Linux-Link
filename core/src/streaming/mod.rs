@@ -14,6 +14,7 @@ pub mod input_packet;
 pub mod iroh_connection;
 pub mod session;
 pub mod session_telemetry;
+pub mod sessions;
 pub mod transport;
 
 // Server-only modules — these require Linux-specific dependencies

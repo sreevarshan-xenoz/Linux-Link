@@ -85,6 +85,10 @@ pub async fn run(config: Config) -> Result<()> {
         lan_discovery.run(Duration::from_secs(30)).await;
     });
 
+    // R4 D2: mirror live streaming sessions to the state dir, notify the
+    // desktop when one starts, and consume `linux-link kick` requests.
+    tokio::spawn(crate::live_sessions::run_watcher());
+
     // Prepare shared state for v2 multiplexer and v1 streaming
     let cert_manager = Arc::new(CertManager::new().context("Failed to create CertManager")?);
     let registry = Arc::new(kde_service.registry.clone_for_dispatch());
@@ -477,6 +481,58 @@ pub async fn print_status() -> Result<()> {
     let tailscale = TailscaleClient::new().context("failed to initialize Tailscale client")?;
     let status = tailscale.status_text().await?;
     println!("{}", status);
+
+    // R4 D2: what is watching this desktop right now (mirrored by the
+    // daemon's live-session watcher; absent when no daemon is running).
+    if let Ok(path) = crate::live_sessions::live_sessions_path()
+        && let Ok(raw) = std::fs::read_to_string(&path)
+    {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        if let Some(lines) = crate::live_sessions::format_status_lines(&raw, now) {
+            if lines.is_empty() {
+                println!("\nStreaming sessions: none live");
+            } else {
+                println!("\nStreaming sessions (live):");
+                for line in lines {
+                    println!("  {line}");
+                }
+                println!("  (end one with: linux-link kick <device-id>)");
+            }
+        }
+    }
+    Ok(())
+}
+
+/// R4 D2: request that the running daemon drop streaming session(s)
+/// matching `device` (id, id prefix, peer IP, or "all"). File-based, like
+/// the pairing PIN handoff — the daemon consumes it within ~1 s.
+pub async fn kick(device: String) -> Result<()> {
+    let pid_file = state::pid_file_path()?;
+    if !pid_file.exists() {
+        bail!("no running Linux Link server to kick through");
+    }
+    let target = device.trim().to_string();
+    if target.is_empty() {
+        bail!("kick target is empty");
+    }
+    let path = crate::live_sessions::kick_file_path()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    std::fs::write(&path, format!("{target}\n{stamp}\n"))
+        .with_context(|| format!("failed to write {}", path.display()))?;
+    println!(
+        "Kick request sent for '{target}' — matching sessions end within ~1 s \
+         (verify with: linux-link status)"
+    );
     Ok(())
 }
 

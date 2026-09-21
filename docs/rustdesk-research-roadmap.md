@@ -227,10 +227,26 @@ From **scrcpy** (code-level OK, Apache-2.0):
   so enforcement can't be defeated by a stale client queue. Phone toggle on
   the session bar (amber while on), re-armed automatically after any stream
   rebuild (new pipeline starts interactive). 53 JNI exports.
-- **D2 · Desktop-side session consent & tray HUD.** Optional
-  "phone is watching" indicator (waybar module doc / `notify-send` on start +
-  a `linux-link status` line), and `linux-link kick <device>` to drop a
-  session — parity with RustDesk's confirm dialog without a GUI daemon.
+- **D2 · Desktop-side session consent & tray HUD.** ✅ **Landed 2026-09-21**
+  (desktop behavior verifiable now; phone-side effect unverified — no
+  device). Core: process-global live-session registry
+  (`core/src/streaming/sessions.rs`) — `run_pipeline` registers after the
+  pairing gate and an RAII handle deregisters on any exit path; `kick()`
+  closes the QUIC connection so teardown rides the normal routes (capture,
+  encoder children, mic relay all die through the pipeline's own cancel).
+  Server: `live_sessions.rs` watcher (1 s tick) mirrors the registry to
+  `live_sessions.json` (atomic tmp+rename) for `linux-link status`, raises a
+  notify-send "a device is streaming this desktop" per new session (log
+  fallback headless — same discipline as the PIN notification), and consumes
+  a `kick` request file (`<target>\n<unix-secs>`, ignored when >60 s stale).
+  CLI: `linux-link kick <device-id|prefix≥6|peer-IP|all>` (file handoff like
+  `pair`'s PIN file — no admin socket to attack; refuses when no pid file
+  exists). `status` gained a "Streaming sessions (live)" block. Honest gaps:
+  no interactive confirm-on-arrival (RustDesk's dialog would need a GUI
+  prompt + accept/reject channel — indicator + kick is the parity we
+  promised here), and unannounced legacy clients are only kickable by peer
+  IP. Unit tests: registry register/list/deregister, kick prefix rules +
+  close-flag, kick-file TTL parsing, JSON↔formatter roundtrip.
 - **D3 · One-time access PIN with scope.** ✅ **Landed 2026-09-21**
   (device behavior unverified). `linux-link pair --grant 15m` writes a
   third PIN-file line; pairing with that PIN stores a time-boxed TrustStore

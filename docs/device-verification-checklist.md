@@ -80,6 +80,24 @@ place.
       encoder rebuild must NOT re-log the hardware fallback (sticky `encoder_preferred` — a
       rebuild must not re-probe the dead hardware).
 
+## 2a. Desktop-side session visibility + kick (R4 D2)
+
+- [ ] Consent notice: first phone connect → desktop shows a "Linux Link: a device is
+      streaming this desktop" notification with device id + LAN/WAN + peer (headless: the same
+      line appears in the server log instead).
+- [ ] `linux-link status` during the session → tailscale output plus a "Streaming sessions
+      (live):" line (short device id, transport, peer, up-seconds). With no session: "none live".
+- [ ] `linux-link kick <id-prefix>` (≥6 chars, or full id, or peer IP) → phone shows the Down
+      status chip within ~2 s and the status line disappears; other sessions are untouched.
+- [ ] `linux-link kick all` ends every live session at once.
+- [ ] kick with no running server → "no running Linux Link server to kick through", nothing
+      written; a bogus target logs "kick: no live session matched" and the live session survives.
+- [ ] Stale request safety: with no daemon running, hand-write `$XDG_STATE_HOME/linux-link/kick`
+      (`all\n<unix-secs older than 60s>`), start the daemon, connect a phone → the session must
+      NOT be killed (the expired request is dropped with a warn on first tick).
+- [ ] Phone disconnect (normal Exit) → status line goes away within ~2 s; no leftover session in
+      `live_sessions.json` (registry deregisters on pipeline exit).
+
 ## 3. Input paths (R2#4, Tier 1 #2)
 
 - [ ] Direct-touch: tap = left click at the touched point (check `evtest` on desktop for BTN_LEFT, and MT finger down/up on the "Linux Link Virtual Touch" device — axis resolution may need tuning).

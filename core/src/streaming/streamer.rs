@@ -278,6 +278,12 @@ impl StreamingServer {
             ));
         }
 
+        // R4 D2: publish the accepted session in the live registry so the
+        // desktop can list it (`linux-link status`) or end it
+        // (`linux-link kick`); the handle deregisters when this function
+        // exits by any path.
+        let _live_session = super::sessions::register(device_id.clone(), &connection);
+
         let cancel = self.cancel.clone();
         let (frame_tx, mut frame_rx) = mpsc::channel::<VideoFrame>(2);
         let (packet_tx, mut packet_rx) = mpsc::channel::<EncodedPacket>(8);
