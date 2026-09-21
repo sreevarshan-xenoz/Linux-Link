@@ -188,10 +188,29 @@ From **scrcpy** (code-level OK, Apache-2.0):
   loopback wire round-trip test asserts caps+monitor+deviceId streams
   negotiate an H.265 session; forced-HEVC on a real device pending the
   device-checklist pass.
-- **C2 · Runtime fallback discipline (RustDesk lesson).** Encoder open
-  failure or mid-session encoder stall → rebuild at H.264/software with a
-  keyframe, notify client via config channel. Accept: kill VAAPI mid-session
-  (test env) → stream continues on x264 within 2 s, HUD notes the switch.
+- **C2 · Runtime fallback discipline (RustDesk lesson).** ✅ **Landed
+  2026-09-21** (device behavior unverified). Three layers. (1) Open ladder:
+  `SidecarEncoder::verify_startup` feeds black probe frames and reads stdout
+  over a 600 ms window — measured on this box, a broken-VAAPI FFmpeg child
+  survives a pure exit-poll (the init failure surfaces only when it digests
+  its first input frame), so output bytes are the liveness proof; a failed
+  hardware rung makes `VideoEncoder::new` degrade to Software + H.264
+  (`degrade_to_software`, in-process x264 first, sidecar last). Session
+  startup here now *lands* on a working encoder — all 9 previously-failing
+  `--ignored` real-encode tests pass through the ladder. (2) Encode-task
+  supervisor (`streamer.rs`): sticky `encoder_preferred` config; 5
+  consecutive encode Errs or a 2 s/30-frame no-output stall rebuilds the
+  software rung once (IDR-first, like every construction); the bottom rung
+  gets a 90-error budget, then the session ends cleanly. (3) Client:
+  `H264Decoder.kt` re-sniffs MIME at every keyframe — the C1 "codec never
+  changes mid-session" assumption is now false — swaps the MediaCodec
+  instance on a H.265→H.264 downgrade, and `RemoteScreen` toasts "Desktop
+  switched encoder — now H.264" (es/ta included). Honest gap: a *same-codec*
+  hw→sw fallback is invisible to the phone (identical bitstream; server log
+  is the signal — a status-plane push needs the v2 config channel). The
+  original accept line (kill VAAPI mid-session → x264 within 2 s, HUD notes
+  the switch) is device-observable; checks in
+  docs/device-verification-checklist.md §2.
 - **C3 · NVENC power pin (idea #5),** gated to sessions with an NVIDIA
   encoder active; document the `nvidia-smi` calls, restore on session end.
 - **C4 · Re-open R2#3** (in-process VAAPI/NVENC `AVHWDeviceContext`) on a

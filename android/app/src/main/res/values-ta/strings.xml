@@ -51,6 +51,7 @@
     <string name="mic_error">மைக் பகிர்வு: %1$s</string>
     <string name="mic_unavailable">இந்த சாதனத்தில் Opus என்கோடர் இல்லை (Android 9+)</string>
     <string name="mic_permission_denied">மைக்ரோஃபோன் அனுமதி மறுக்கப்பட்டது</string>
+    <string name="codec_switched">டெஸ்க்டாப் என் கோடெக்கை மாற்றியுள்ளது — இப்போது %1$s</string>
     <string name="lock_pc">PC பூட்டு</string>
     <string name="blackout">கருப்புத் திரை</string>
     <string name="pip">PiP</string>

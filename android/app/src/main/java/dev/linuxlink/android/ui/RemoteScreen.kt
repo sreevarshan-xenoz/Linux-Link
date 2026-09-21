@@ -201,6 +201,21 @@ fun RemoteScreen(
         }
     }
 
+    // R4 C2: the server's encoder-fallback ladder can change the wire codec
+    // mid-session (e.g. HEVC → software H.264 after a hardware encoder died).
+    // The decoder notices on the first re-keyed IDR and reports here; the
+    // stream keeps playing, so all we owe the user is the explanation.
+    var codecNotice by remember { mutableStateOf<String?>(null) }
+    val codecSwitchMessage = codecNotice?.let { stringResource(R.string.codec_switched, it) }
+    LaunchedEffect(codecSwitchMessage) {
+        if (codecSwitchMessage != null) {
+            android.widget.Toast
+                .makeText(context, codecSwitchMessage, android.widget.Toast.LENGTH_SHORT)
+                .show()
+            codecNotice = null
+        }
+    }
+
     // R4 E2 phone-mic share: MediaCodec-encodes the mic to Opus and streams
     // it to the desktop's "Linux Link Mic" PipeWire source. Independent of
     // view-only — the server routes mic packets before the input drop.
@@ -454,6 +469,7 @@ fun RemoteScreen(
                 mapping = cropWindow?.desktopMapping(cropScreen),
                 monitorIndex = monitorIndex,
                 onStatus = { streamStatus = it },
+                onCodecChanged = { label -> codecNotice = label },
                 onVideoSizeChanged = { w, h -> videoSize = androidx.compose.ui.unit.IntSize(w, h) },
                 secure = blackout,
                 modifier = Modifier.fillMaxSize(),

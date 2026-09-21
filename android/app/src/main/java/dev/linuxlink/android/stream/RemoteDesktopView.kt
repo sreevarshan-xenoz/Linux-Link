@@ -132,6 +132,9 @@ fun RemoteDesktopView(
     monitorIndex: Int = -1,
     onStatus: (StreamStatus) -> Unit = {},
     onVideoSizeChanged: (Int, Int) -> Unit = { _, _ -> },
+    /** R4 C2: fires when the server's encoder-fallback ladder changes the
+     * wire codec mid-session ("H.264" / "H.265"). */
+    onCodecChanged: (String) -> Unit = {},
     /** Mark the video surface secure (Tier-3 #15 blackout mode) so decoded
      * frames never appear in screenshots, recordings, or Recents. */
     secure: Boolean = false,
@@ -199,6 +202,7 @@ fun RemoteDesktopView(
                                         HostStore.wanIdentity(context, address),
                                         monitorIndex,
                                         onStatus,
+                                        onCodecChanged,
                                     ) { w, h ->
                                         videoSize = IntSize(w, h)
                                         onVideoSizeChanged(w, h)
@@ -485,10 +489,12 @@ private class DecoderHost {
         wanIdentity: String?,
         monitorIndex: Int = -1,
         onStatus: (StreamStatus) -> Unit = {},
+        onCodec: (String) -> Unit = {},
+        /** Last so call sites keep the size-reporting lambda trailing. */
         onVideoSize: (Int, Int) -> Unit,
     ) {
         if (thread != null) return
-        val active = H264Decoder(surface, width, height, onVideoSize)
+        val active = H264Decoder(surface, width, height, onVideoSize, onCodec)
         decoder = active
         // Stale reports from a stopped generation must not clobber a newer
         // attempt's status.

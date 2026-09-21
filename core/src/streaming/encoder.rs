@@ -7,6 +7,14 @@
 //!
 //! `VideoEncoder::new` picks the backend from the resolved encoder choice
 //! and falls back to the sidecar if the in-process path cannot open.
+//!
+//! R4 C2 (fallback discipline): hardware backends die *after* spawn — VAAPI
+//! init errors kill the FFmpeg child within milliseconds of a successful
+//! `spawn()`. `SidecarEncoder::verify_startup` waits out that window before
+//! the pipeline commits to the backend, and `VideoEncoder::new` degrades to
+//! the software rung (H.264, in-process first) when the hardware child
+//! cannot survive it. The encode task in `streamer.rs` watches a live
+//! encoder for stalls/Err storms and rebuilds along the same ladder.
 
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::unix::io::AsRawFd;
@@ -54,7 +62,8 @@ pub enum VideoEncoder {
 }
 
 impl VideoEncoder {
-    /// Create the encoder, preferring the in-process software backend.
+    /// Create the encoder, preferring the resolved backend and degrading to
+    /// software when a hardware backend cannot open or dies on startup (C2).
     pub fn new(config: StreamingConfig) -> anyhow::Result<Self> {
         use super::encoder_detect::{probe_encoders, resolve_encoder};
 
@@ -65,18 +74,36 @@ impl VideoEncoder {
         };
 
         if matches!(resolved, HardwareEncoder::Software) {
-            match InProcessEncoder::new(config.clone()) {
-                Ok(encoder) => {
-                    info!("Video encoder: in-process FFmpeg (software)");
-                    return Ok(Self::InProcess(encoder));
-                }
-                Err(e) => {
-                    warn!("In-process encoder unavailable ({e:#}); using FFmpeg sidecar");
-                }
-            }
+            return open_software(config);
         }
 
-        Ok(Self::Sidecar(SidecarEncoder::new(config)?))
+        let mut hw_config = config.clone();
+        hw_config.hardware_encoder = resolved;
+        match open_sidecar_verified(hw_config) {
+            Ok(encoder) => Ok(encoder),
+            Err(e) => {
+                warn!("Hardware encoder unavailable ({e:#}); falling back to software (C2)");
+                let mut soft = config.clone();
+                degrade_to_software(&mut soft);
+                open_software(soft)
+            }
+        }
+    }
+
+    /// Open an encoder already forced to the software rung, without the
+    /// hardware probe — used by the encode task's mid-session rebuild.
+    pub fn new_software(config: StreamingConfig) -> anyhow::Result<Self> {
+        let mut soft = config;
+        degrade_to_software(&mut soft);
+        open_software(soft)
+    }
+
+    /// Human-readable backend name, for the "encoder switched" telemetry/UX.
+    pub fn backend_name(&self) -> &'static str {
+        match self {
+            Self::Sidecar(_) => "ffmpeg-sidecar",
+            Self::InProcess(_) => "in-process",
+        }
     }
 
     /// Encode a single raw frame; `None` means the encoder has no output yet.
@@ -119,6 +146,43 @@ impl VideoEncoder {
         }
     }
 }
+
+/// Mutate a config onto the bottom rung of the fallback ladder: software
+/// encoder, H.264 (C2). HEVC is dropped even though x265 exists — the
+/// roadmap's acceptance path is "continues on x264", and H.264 is the one
+/// codec every client is guaranteed to decode.
+pub fn degrade_to_software(config: &mut StreamingConfig) {
+    config.hardware_encoder = HardwareEncoder::Software;
+    config.codec = VideoCodec::H264;
+}
+
+/// Open the software rung: in-process libx264 first, sidecar as last resort.
+fn open_software(config: StreamingConfig) -> anyhow::Result<VideoEncoder> {
+    match InProcessEncoder::new(config.clone()) {
+        Ok(encoder) => {
+            info!("Video encoder: in-process FFmpeg (software)");
+            return Ok(VideoEncoder::InProcess(encoder));
+        }
+        Err(e) => {
+            warn!("In-process encoder unavailable ({e:#}); using FFmpeg sidecar");
+        }
+    }
+    Ok(VideoEncoder::Sidecar(SidecarEncoder::new(config)?))
+}
+
+/// Open a hardware sidecar and verify the child survives its startup window
+/// (C2). VAAPI/NVENC init failures kill FFmpeg *after* `spawn()` succeeds,
+/// so a bare spawn is not evidence of a usable encoder.
+fn open_sidecar_verified(config: StreamingConfig) -> anyhow::Result<VideoEncoder> {
+    let mut encoder = SidecarEncoder::new(config)?;
+    encoder.verify_startup(DEFAULT_STARTUP_VERIFY)?;
+    Ok(VideoEncoder::Sidecar(encoder))
+}
+
+/// How long to keep probing a sidecar child before trusting it (C2).
+/// Long enough for FFmpeg to spawn, accept probe frames and either emit
+/// output or die — broken VAAPI on this box dies within ~700 ms of spawn.
+pub const DEFAULT_STARTUP_VERIFY: std::time::Duration = std::time::Duration::from_millis(600);
 
 /// H.264 encoder wrapper using a persistent FFmpeg sidecar process.
 ///
@@ -201,6 +265,91 @@ impl SidecarEncoder {
             stderr: BufReader::new(stderr),
             output_buffer: Vec::with_capacity(64 * 1024), // 64 KB initial capacity
         })
+    }
+
+    /// C2: prove the child is a *working* encoder before the pipeline
+    /// commits to it. Hardware init failures (VAAPI `Failed to initialise
+    /// VAAPI connection`, missing NVENC driver) surface only once FFmpeg
+    /// processes input, and the exit can land anywhere from immediately
+    /// after spawn to just past any static wait — so verification keeps
+    /// feeding black probe frames until the child flushes real output
+    /// (alive) or dies / rejects a write (broken: the caller falls one
+    /// rung down the ladder). A child that stays live-but-silent to the
+    /// deadline is trusted; the encode task's stall supervisor is the
+    /// backstop for that case.
+    pub fn verify_startup(&mut self, budget: std::time::Duration) -> anyhow::Result<()> {
+        if self.child_exited()? {
+            anyhow::bail!("FFmpeg encoder process exited during startup");
+        }
+
+        let probe = vec![0u8; self.config.width as usize * self.config.height as usize * 4];
+        let deadline = Instant::now() + budget;
+        let mut buf = [0u8; 8192];
+        loop {
+            // Surface any output already produced: bits out of the encoder
+            // are the strongest liveness proof there is.
+            loop {
+                match self.stdout.read(&mut buf) {
+                    Ok(0) => {
+                        anyhow::bail!("FFmpeg encoder closed stdout during startup");
+                    }
+                    Ok(n) => {
+                        self.output_buffer.extend_from_slice(&buf[..n]);
+                        if n < buf.len() {
+                            break;
+                        }
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            if !self.output_buffer.is_empty() {
+                return Ok(());
+            }
+
+            if self.child_exited()? {
+                anyhow::bail!("FFmpeg encoder process exited during startup");
+            }
+            if Instant::now() >= deadline {
+                // Alive, but no output yet (encoders buffer their first
+                // frame). Trust it; probe frames already accepted encode as
+                // valid black frames.
+                debug!("Encoder probe produced no output yet; trusting the live child");
+                return Ok(());
+            }
+
+            if let Some(stdin) = self.stdin.as_mut() {
+                stdin
+                    .write_all(&probe)
+                    .and_then(|()| stdin.flush())
+                    .map_err(|e| {
+                        anyhow::anyhow!("FFmpeg encoder rejected a startup probe ({e})")
+                    })?;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+
+    /// Non-blocking reap: `Ok(true)` when the child is gone (its first
+    /// stderr line is surfaced as the reason), `Ok(false)` while alive.
+    fn child_exited(&mut self) -> anyhow::Result<bool> {
+        match self.process.as_inner_mut().try_wait() {
+            Ok(Some(status)) => {
+                let mut reason = String::new();
+                let _ = self.stderr.read_line(&mut reason);
+                if reason.is_empty() {
+                    reason.push_str("no stderr output");
+                }
+                error!(
+                    "FFmpeg encoder process exited ({status}): {}",
+                    reason.trim()
+                );
+                Ok(true)
+            }
+            Ok(None) => Ok(false),
+            Err(e) if e.kind() == io::ErrorKind::InvalidInput => Ok(true),
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// Encode a single raw frame to H.264.
@@ -1181,5 +1330,99 @@ mod tests {
 
         // Drop should clean up without panicking
         drop(encoder);
+    }
+
+    #[test]
+    fn degrade_to_software_drops_hardware_and_hevc() {
+        let mut config = StreamingConfig {
+            width: 320,
+            height: 240,
+            fps: 30,
+            bitrate_bps: 1_000_000,
+            codec: VideoCodec::H265,
+            profile: H264Profile::Baseline,
+            preset: EncoderPreset::UltraFast,
+            hardware_encoder: HardwareEncoder::Nvenc,
+            monitor_index: 0,
+        };
+        degrade_to_software(&mut config);
+        assert_eq!(config.hardware_encoder, HardwareEncoder::Software);
+        assert_eq!(config.codec, VideoCodec::H264);
+    }
+
+    #[test]
+    fn degraded_config_skips_the_hardware_probe() {
+        // A Software-pinned config must not consult probe_encoders — this is
+        // what keeps the encode task's mid-session rebuild cheap and free of
+        // the broken-hardware path that stalled in the first place.
+        let mut config = StreamingConfig {
+            width: 320,
+            height: 240,
+            fps: 30,
+            bitrate_bps: 1_000_000,
+            codec: VideoCodec::H264,
+            profile: H264Profile::Baseline,
+            preset: EncoderPreset::UltraFast,
+            hardware_encoder: HardwareEncoder::Software,
+            monitor_index: 0,
+        };
+        // Degrading an already-degraded config is a no-op (idempotent ladder).
+        let before = config.clone();
+        degrade_to_software(&mut config);
+        assert_eq!(config.hardware_encoder, before.hardware_encoder);
+        assert_eq!(config.codec, before.codec);
+    }
+
+    /// C2 acceptance, machine-invariant form: force a hardware rung that may
+    /// or may not survive on the test box. `VideoEncoder::new` must come back
+    /// with an encoder that produces a packet quickly — either the real VAAPI
+    /// path (healthy GPU box) or the software fallback (this box's broken
+    /// VAAPI init). Never a dead sidecar, never an error.
+    #[test]
+    #[ignore = "spawns real FFmpeg/x264 encoders"]
+    fn forced_hardware_rung_lands_on_a_working_encoder() {
+        let config = StreamingConfig {
+            width: 320,
+            height: 240,
+            fps: 30,
+            bitrate_bps: 1_000_000,
+            codec: VideoCodec::H264,
+            profile: H264Profile::Baseline,
+            preset: EncoderPreset::UltraFast,
+            hardware_encoder: HardwareEncoder::Vaapi,
+            monitor_index: 0,
+        };
+
+        let start = Instant::now();
+        let mut encoder =
+            VideoEncoder::new(config).expect("fallback ladder must always yield an encoder");
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(5),
+            "startup ladder must resolve well inside the C2 2s budget"
+        );
+
+        let stride = 320 * 4;
+        let frame = VideoFrame {
+            data: vec![0u8; (stride * 240) as usize],
+            width: 320,
+            height: 240,
+            stride,
+            timestamp: Instant::now(),
+        };
+
+        for _ in 0..60 {
+            if encoder
+                .encode_frame(&frame)
+                .expect("working encoder must not Err on plain frames")
+                .is_some()
+            {
+                return; // packet produced — ladder landed on a live backend
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        panic!(
+            "encoder produced no packet in 60 attempts: {:?}",
+            encoder.backend_name()
+        );
     }
 }

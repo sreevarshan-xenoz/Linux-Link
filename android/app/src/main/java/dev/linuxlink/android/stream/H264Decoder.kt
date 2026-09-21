@@ -29,15 +29,20 @@ import java.util.concurrent.atomic.AtomicBoolean
  * server encoder at the window's resolution mid-session, so when
  * INFO_OUTPUT_FORMAT_CHANGED reports different dimensions the codec is
  * reconfigured and the cached keyframe re-seeds it (the server always emits
- * an IDR as the first packet after a rebuild; the codec itself never changes
- * mid-session). The new size is announced via [onVideoSize] so the UI can
- * re-layout.
+ * an IDR as the first packet after a rebuild). The new size is announced via
+ * [onVideoSize] so the UI can re-layout.
+ *
+ * R4 C2: the codec CAN change mid-session — the server's encoder-fallback
+ * ladder degrades to software H.264 when a hardware encoder dies — so every
+ * keyframe is re-sniffed; on a MIME change the MediaCodec instance is swapped
+ * and the fresh keyframe re-seeds it, with [onCodec] notifying the UI.
  */
 class H264Decoder(
     private val surface: Surface,
     width: Int,
     height: Int,
     private val onVideoSize: ((Int, Int) -> Unit)? = null,
+    private val onCodec: ((String) -> Unit)? = null,
 ) {
     val running = AtomicBoolean(false)
 
@@ -92,10 +97,22 @@ class H264Decoder(
                         // Annex-B access-unit sniffing needs a keyframe header.
                         if (!frame.isKeyframe) continue
                         mime = sniffMime(frame.data)
-                        mediaCodec = MediaCodec.createDecoderByType(mime).also {
-                            codec = it
-                            it.configure(buildFormat(mime, configW, configH), surface, null, 0)
-                            it.start()
+                        mediaCodec = openCodec(mime)
+                    } else if (frame.isKeyframe) {
+                        // R4 C2: the server's fallback ladder can rebuild
+                        // mid-session on a different codec (HEVC → H.264).
+                        // Keyframes are the only safe place to notice —
+                        // re-sniff and swap if the header disagrees.
+                        val sniffed = sniffMime(frame.data)
+                        if (sniffed != mime) {
+                            val replacement = runCatching { openCodec(sniffed) }.getOrNull()
+                            if (replacement != null) {
+                                runCatching { mediaCodec.stop() }
+                                runCatching { mediaCodec.release() }
+                                mediaCodec = replacement
+                                mime = sniffed
+                                onCodec?.invoke(codecLabel(sniffed))
+                            }
                         }
                     }
                     feed(mediaCodec, bufferInfo, frame.data, frame.isKeyframe)
@@ -110,6 +127,15 @@ class H264Decoder(
             codec = null
         }
     }
+
+    /** Create + configure + start a decoder instance for [mime] at the
+     * current known size. */
+    private fun openCodec(mime: String): MediaCodec =
+        MediaCodec.createDecoderByType(mime).also {
+            it.configure(buildFormat(mime, configW, configH), surface, null, 0)
+            it.start()
+            codec = it
+        }
 
     fun stop() {
         running.set(false)
@@ -219,5 +245,8 @@ class H264Decoder(
             val hevcType = (b0 shr 1) and 0x3F
             return if ((hevcType == 32 || hevcType == 33) && b1 == 0x01) MIME_HEVC else MIME_AVC
         }
+
+        /** UI-facing codec name for the switch notice (R4 C2). */
+        fun codecLabel(mime: String): String = if (mime == MIME_HEVC) "H.265" else "H.264"
     }
 }

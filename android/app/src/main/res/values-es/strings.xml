@@ -51,6 +51,7 @@
     <string name="mic_error">Micrófono: %1$s</string>
     <string name="mic_unavailable">Este dispositivo no tiene codificador Opus (Android 9+)</string>
     <string name="mic_permission_denied">Permiso de micrófono denegado</string>
+    <string name="codec_switched">El escritorio cambió de codificador: ahora %1$s</string>
     <string name="lock_pc">Bloquear PC</string>
     <string name="blackout">Pantalla negra</string>
     <string name="pip">PiP</string>

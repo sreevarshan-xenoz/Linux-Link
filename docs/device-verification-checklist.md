@@ -62,6 +62,23 @@ place.
       stream) must still get H.264.
 - [ ] R4 C1 HEVC + window crop: pick a window during a HEVC session → encoder rebuild at
       window size keeps HEVC and the phone reconfigures on size change without codec change.
+- [ ] R4 C2 startup ladder (desktop-observable): on a box where hardware encoding is broken
+      (e.g. this one's VAAPI), start a session → server log shows "Hardware encoder unavailable
+      (…); falling back to software (C2)" and video still appears within ~2 s on x264.
+- [ ] R4 C2 mid-session encoder kill (HEVC session): during a live `codec=H.265` session,
+      `pkill -f 'ffmpeg .*vaapi'` (or kill the encoder child seen in `pstree` of the server) →
+      log shows "Rebuilt encoder on software rung (C2)", video resuming within ~2 s and the phone
+      toasts "Desktop switched encoder — now H.264" (MediaCodec swap re-sniffed from the first
+      software IDR).
+- [ ] R4 C2 mid-session stall, same-codec: force the supervisor on an H.264 session (kill its
+      sidecar child) → video recovers on software x264 with NO phone toast (identical bitstream —
+      the server log line is the only signal; that is expected).
+- [ ] R4 C2 bottom rung exhausted: with software already live, keep killing encoders until the
+      log shows "Encoder bottom rung exhausted; ending session" → stream goes Down cleanly
+      (status chip + Retry works), never a silent infinite stall.
+- [ ] R4 C2 crop stability: during a software-fallback session, pick/clear a window crop →
+      encoder rebuild must NOT re-log the hardware fallback (sticky `encoder_preferred` — a
+      rebuild must not re-probe the dead hardware).
 
 ## 3. Input paths (R2#4, Tier 1 #2)
 

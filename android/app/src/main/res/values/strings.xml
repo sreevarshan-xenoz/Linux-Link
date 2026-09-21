@@ -58,6 +58,7 @@
     <string name="mic_error">Mic share: %1$s</string>
     <string name="mic_unavailable">No Opus encoder on this device (Android 9+)</string>
     <string name="mic_permission_denied">Microphone permission denied</string>
+    <string name="codec_switched">Desktop switched encoder — now %1$s</string>
     <string name="lock_pc">Lock PC</string>
     <string name="blackout">Blackout</string>
     <string name="pip">PiP</string>

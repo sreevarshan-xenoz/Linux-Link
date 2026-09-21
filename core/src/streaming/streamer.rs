@@ -4,7 +4,7 @@
 //! Manages lifecycle, error handling, and graceful shutdown.
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use tokio::sync::{mpsc, watch};
@@ -335,7 +335,11 @@ impl StreamingServer {
 
         let mut encoder =
             VideoEncoder::new(encoder_config).context("Failed to create video encoder")?;
-        let base_config = self.config.clone();
+        // R4 C2: the rung we actually landed on after any startup fallback.
+        // Resolution rebuilds clone this (not `base_config`) so a session
+        // that fell back to hardware→software at startup doesn't oscillate
+        // back through the failing hardware probe on every window crop.
+        let mut encoder_preferred = encoder.config().clone();
         let encode_crop_rx = crop_rx.clone();
         let encode_window_rx = window_rx.clone();
         let encode_window_mode = window_mode.clone();
@@ -353,6 +357,19 @@ impl StreamingServer {
             // True while the capture thread is actually emitting
             // compositor-cropped per-window frames (R4 B2).
             let window_mode = encode_window_mode;
+            // C2 supervisor state: the encode task used to log an Err and
+            // keep looping forever against a dead encoder. Now consecutive
+            // failures (or frames consumed with no output for STALL_WINDOW)
+            // rebuild the encoder one rung down; the bottom rung gets a
+            // hard failure budget before the session ends.
+            let mut encode_errs = 0u64;
+            let mut frames_since_packet = 0u64;
+            let mut last_packet_at = Instant::now();
+            let mut used_fallback_rung = false;
+            const ERR_REBUILD_AT: u64 = 5;
+            const ERR_END_AT: u64 = 90;
+            const STALL_FRAMES: u64 = 30;
+            const STALL_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
 
             loop {
                 tokio::select! {
@@ -426,18 +443,36 @@ impl StreamingServer {
                         if frame.width != encoder.config().width
                             || frame.height != encoder.config().height
                         {
-                            let mut cfg = base_config.clone();
+                            let mut cfg = encoder_preferred.clone();
                             cfg.width = frame.width;
                             cfg.height = frame.height;
                             cfg.bitrate_bps = *encoder_bitrate_rx.borrow_and_update();
-                            match VideoEncoder::new(cfg) {
+                            let rebuilt = match VideoEncoder::new(cfg.clone()) {
+                                Ok(e) => Ok(e),
+                                Err(e) => {
+                                    // C2: a resolution rebuild that can't open
+                                    // its preferred rung degrades one rung
+                                    // rather than killing the session.
+                                    error!(
+                                        error = %e,
+                                        "Preferred-rung rebuild failed; degrading to software"
+                                    );
+                                    VideoEncoder::new_software(cfg)
+                                }
+                            };
+                            match rebuilt {
                                 Ok(e) => {
                                     info!(
                                         width = frame.width,
                                         height = frame.height,
+                                        backend = e.backend_name(),
                                         "Encoder rebuilt at frame resolution"
                                     );
+                                    encoder_preferred = e.config().clone();
                                     encoder = e;
+                                    encode_errs = 0;
+                                    frames_since_packet = 0;
+                                    last_packet_at = Instant::now();
                                 }
                                 Err(e) => {
                                     error!(error = %e, "Failed to rebuild encoder; ending session");
@@ -447,9 +482,53 @@ impl StreamingServer {
                             }
                         }
 
+                        // C2: rebuild one rung down after repeated failures
+                        // or a sustained no-output stall. Returns false when
+                        // the encoder is already on the bottom rung and has
+                        // spent its budget — caller must end the session.
+                        macro_rules! fallback_rung {
+                            ($reason:expr) => {{
+                                if used_fallback_rung {
+                                    error!(reason = $reason, "Encoder bottom rung exhausted; ending session");
+                                    encode_cancel.cancel();
+                                    break;
+                                }
+                                let mut cfg = encoder_preferred.clone();
+                                cfg.width = encoder.config().width;
+                                cfg.height = encoder.config().height;
+                                cfg.bitrate_bps = *encoder_bitrate_rx.borrow();
+                                match VideoEncoder::new_software(cfg) {
+                                    Ok(e) => {
+                                        warn!(
+                                            reason = $reason,
+                                            backend = e.backend_name(),
+                                            "Rebuilt encoder on software rung (C2)"
+                                        );
+                                        used_fallback_rung = true;
+                                        encoder_preferred = e.config().clone();
+                                        encoder = e;
+                                        encode_errs = 0;
+                                        frames_since_packet = 0;
+                                        last_packet_at = Instant::now();
+                                    }
+                                    Err(e) => {
+                                        error!(
+                                            error = %e,
+                                            "Software-rung rebuild failed; ending session"
+                                        );
+                                        encode_cancel.cancel();
+                                        break;
+                                    }
+                                }
+                            }};
+                        }
+
                         match encoder.encode_frame(&frame) {
                             Ok(Some(packet)) => {
                                 packets_encoded += 1;
+                                encode_errs = 0;
+                                frames_since_packet = 0;
+                                last_packet_at = Instant::now();
                                 if packet.is_keyframe {
                                     debug!("Keyframe encoded (seq={}, size={} bytes)", packet.sequence, packet.data.len());
                                 }
@@ -464,12 +543,27 @@ impl StreamingServer {
                             Ok(None) => {
                                 // Encoder has no output yet (latency/drain phase)
                                 frames_dropped += 1;
+                                frames_since_packet += 1;
                                 if frames_dropped % 30 == 0 {
                                     debug!("Encoder latency: {} frames waiting for output", frames_dropped);
                                 }
+                                if frames_since_packet >= STALL_FRAMES
+                                    && last_packet_at.elapsed() >= STALL_WINDOW
+                                {
+                                    fallback_rung!("no output for 2s while consuming frames");
+                                }
                             }
                             Err(e) => {
-                                error!(error = %e, "Encoding failure");
+                                encode_errs += 1;
+                                error!(error = %e, errs = encode_errs, "Encoding failure");
+                                if encode_errs >= ERR_END_AT {
+                                    error!("Encoder unrecoverable after {ERR_END_AT} failures; ending session");
+                                    encode_cancel.cancel();
+                                    break;
+                                }
+                                if encode_errs >= ERR_REBUILD_AT && !used_fallback_rung {
+                                    fallback_rung!("repeated encode failures");
+                                }
                             }
                         }
                     }
