@@ -176,6 +176,19 @@ place.
 - [ ] "Ring PC" → desktop plays sound 30 s (pw-play/paplay path; silent no-op is FAIL here since desktop has audio).
 - [ ] Desktop pushes findmydevice ring → phone alarm loops at max volume 30 s (phone in alarm-volume >0; check DoNotDisturb doesn't block USAGE_ALARM).
 
+## 8a. Control-channel versioning (R4 D4)
+
+- [ ] Reply still works end-to-end after the `kdeconnect.notification-reply` →
+      `kdeconnect.linuxlink.notification_reply` rename (desktop-side check): reply from the phone
+      shade → `replies.log` records it + confirmation popup (the server only matches the new type
+      now, so an old client build's reply would silently no-op — both ends must be from this build).
+- [ ] `llVersion` tag is present on our extension packets only: capture the control-channel line
+      (e.g. `journalctl`/strace the JSON, or a debug log of `to_wire` output) — a
+      `kdeconnect.linuxlink.privacy`/`.audio`/`.state` packet carries `"llVersion":1`; a native
+      `kdeconnect.identity`/`kdeconnect.pair`/`kdeconnect.clipboard` packet does NOT.
+- [ ] Forward-compat: hand-inject a `kdeconnect.linuxlink.privacy` line with an extra unknown
+      top-level field and an unknown body key → server still parses and acts (unknown fields ignored).
+
 ## 9. Privacy mode + lock (Tier-3 #15)
 
 - [ ] "Privacy: on" → physical keyboard/mouse on desktop stop responding (`evtest`: grabs held), while phone input still flows.

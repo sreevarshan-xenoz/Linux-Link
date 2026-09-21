@@ -679,7 +679,7 @@ pub async fn send_notification_reply(
         .map_err(|e| format!("Connection failed: {e}"))?;
     let (_reader, writer) = tokio::io::split(stream);
     let sender = TcpDeviceSender::new(writer, address);
-    let request = NetworkPacket::new("kdeconnect.notification-reply")
+    let request = NetworkPacket::new("kdeconnect.linuxlink.notification_reply")
         .with_body(serde_json::json!({ "id": id, "reply": text, "passive": false }));
     sender
         .send_packet(&request)

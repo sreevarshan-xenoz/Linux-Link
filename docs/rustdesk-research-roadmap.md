@@ -277,13 +277,34 @@ From **scrcpy** (code-level OK, Apache-2.0):
   both. Re-pairing a granted device with a normal PIN promotes it to
   permanent (existing semantics), expiring a grant just blocks *new*
   pairings/sessions — live sessions run to their own end (kick is D2).
-- **D4 · Protocol versioning discipline** (KDE Connect lesson: their
-  protocol doc is explicitly *not a spec* and can change without notice).
-  Tag our `kdeconnect.linuxlink.*` packets with a `llVersion` field, parse
-  defensively (ignore unknown fields — mostly true today), and note the one
-  found convention violation: `kdeconnect.notification-reply` uses a hyphen
-  where their type regex says `[a-z_]+` — harmless for us, but rename before
-  1.0 if we ever ship interop with real KDE Connect phones.
+- **D4 · Protocol versioning discipline.** ✅ **Landed 2026-09-21** (wire
+  format unit-verified; needs a live desktop+phone pair to see a tagged byte
+  stream). KDE Connect's doc is a self-disclaimed non-spec, so we version the
+  packets **we** own and stay defensive about the rest:
+  - **`llVersion` tag.** A new optional top-level `llVersion` field on
+    `NetworkPacket`, auto-stamped by `to_wire()` (the single send choke point
+    every server + bridge path goes through) on any packet whose type starts
+    with `kdeconnect.linuxlink.`, from a new `LL_EXT_VERSION` constant — so no
+    construction site has to remember it and KDE Connect's *native* types
+    (`kdeconnect.pair`, `kdeconnect.clipboard`, …) stay untagged. It is
+    deliberately separate from the KDE identity handshake `protocolVersion`;
+    the extension version only bumps for a change to an existing field's
+    *meaning* — purely additive fields are forward-compatible by design.
+  - **Defensive parse (already true, now asserted).** `body` is an opaque
+    `serde_json::Value` and `deny_unknown_fields` is used nowhere, so unknown
+    fields — top-level or nested — are ignored; a regression test feeds a
+    future-shaped packet (extra `llVersion`, unknown `futureTopLevel`) and
+    confirms it still parses with known fields intact.
+  - **Convention violation fixed.** `kdeconnect.notification-reply` (hyphen,
+    which KDE's `[a-z_]+` type regex rejects) moved to
+    `kdeconnect.linuxlink.notification_reply` — a conformant name *and* our own
+    namespace, so it now rides the `llVersion` tag too. It was never a real KDE
+    Connect type we interoperate with, and both ends ship together (bridge
+    send + server plugin + capability string), so there is no compat shim.
+  Tests: 4 core (`llVersion` stamped on linuxlink types, native types
+  untagged, explicit version preserved, unknown-field tolerance) + 3 server
+  (reply round-trip, capability declaration, app-name parse) under the new
+  name. No new JNI exports (57); Kotlin side is a doc-comment update.
 
 ### Phase E — Unique features (the differentiators; our survey found none of
 these anywhere — that's the moat)

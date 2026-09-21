@@ -10,9 +10,14 @@ use crate::state;
 ///
 /// The desktop's captured notifications are pushed to the phone with a
 /// stable `id` (see `notification_monitor`); the phone's reply arrives here
-/// as `kdeconnect.notification-reply` `{id, reply}` (KDE Connect's native
-/// type). The desktop cannot hand the text back to the originating app —
-/// that requires calling private per-app D-Bus objects — so delivery is:
+/// as `kdeconnect.linuxlink.notification_reply` `{id, reply}`. (This is our
+/// own extension, not KDE Connect's `kdeconnect.notification-reply` — R4 D4
+/// moved it under the versioned `kdeconnect.linuxlink.*` namespace and to a
+/// conformant `[a-z_]` name, since KDE's type regex rejects the hyphen and
+/// their doc is explicitly not a spec. Both ends ship together; no real KDE
+/// Connect phone talks to us yet.) The desktop cannot hand the text back to
+/// the originating app — that requires calling private per-app D-Bus objects —
+/// so delivery is:
 /// append to `~/.local/state/linux-link/replies.log`, copy to the desktop
 /// clipboard (Cmd-paste into the chat window), and show a confirmation
 /// notification naming the app being replied to.
@@ -26,7 +31,7 @@ impl Plugin for NotificationReplyPlugin {
     }
 
     fn incoming_capabilities(&self) -> &'static [&'static str] {
-        &["kdeconnect.notification-reply"]
+        &["kdeconnect.linuxlink.notification_reply"]
     }
 
     fn outgoing_capabilities(&self) -> &'static [&'static str] {
@@ -38,7 +43,7 @@ impl Plugin for NotificationReplyPlugin {
         packet: &NetworkPacket,
         _sender: &dyn DeviceSender,
     ) -> Result<()> {
-        if packet.packet_type != "kdeconnect.notification-reply" {
+        if packet.packet_type != "kdeconnect.linuxlink.notification_reply" {
             return Ok(());
         }
         let Some(reply) = packet.body.get("reply").and_then(|v| v.as_str()) else {
@@ -132,7 +137,7 @@ fn notify_desktop_reply(id: &str, reply: &str, from: &str) {
 
 /// Payload the phone sends for a reply (shared shape with the bridge tests).
 pub fn reply_payload(id: &str, reply: &str) -> NetworkPacket {
-    NetworkPacket::new("kdeconnect.notification-reply")
+    NetworkPacket::new("kdeconnect.linuxlink.notification_reply")
         .with_body(json!({ "id": id, "reply": reply, "passive": false }))
 }
 
@@ -145,7 +150,10 @@ mod tests {
         let pkt = reply_payload("signal|Alice", "on my way");
         let wire = String::from_utf8(pkt.to_wire().unwrap()).unwrap();
         let parsed = NetworkPacket::from_wire(&wire).unwrap();
-        assert_eq!(parsed.packet_type, "kdeconnect.notification-reply");
+        assert_eq!(
+            parsed.packet_type,
+            "kdeconnect.linuxlink.notification_reply"
+        );
         assert_eq!(parsed.body["reply"], "on my way");
         assert_eq!(parsed.body["id"], "signal|Alice");
     }
@@ -160,7 +168,7 @@ mod tests {
         assert!(
             NotificationReplyPlugin::default()
                 .incoming_capabilities()
-                .contains(&"kdeconnect.notification-reply")
+                .contains(&"kdeconnect.linuxlink.notification_reply")
         );
     }
 }

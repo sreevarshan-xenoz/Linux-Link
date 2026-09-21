@@ -24,7 +24,7 @@ import java.util.concurrent.atomic.AtomicInteger
  * Desktop → phone notification relay with inline reply (R3 Tier-2 #11c).
  * The bridge queues `kdeconnect.notification` pushes off the control
  * channel; this poller posts them as Android notifications whose reply
- * action sends `kdeconnect.notification-reply` back to the desktop.
+ * action sends `kdeconnect.linuxlink.notification_reply` back to the desktop.
  */
 
 const val CHANNEL_DESKTOP_NOTIFICATIONS = "linux-link-desktop-notifications"
