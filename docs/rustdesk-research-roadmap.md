@@ -135,8 +135,9 @@ From **scrcpy** (code-level OK, Apache-2.0):
   `InputPacket::FullQuality` (tag 10) latches a per-session user override;
   the phone shows a one-tap toggle under the "WAN · relaying" badge (rides
   A1's link-state reporting). Accept criteria met: relayed sessions reach the
-  preset within the first sample, one-tap override, direct re-raise. E5's
-  bitrate axis is covered; fps/resolution/codec presets remain open.
+  preset within the first sample, one-tap override, direct re-raise.
+  *(E5 later folded this relay-guard into an always-on **bitrate arbiter** that
+  also applies the HUD preset ceiling and rebuilds the encoder live — see E5.)*
 
 ### Phase B — Hyprland-native capture (M) — *testable live on this box*
 - **B1 · `zwlr_screencopy` backend.** ✅ **Landed 2026-09-20** (verified live
@@ -382,10 +383,21 @@ these anywhere — that's the moat)
   overlay (layer-shell) so bystanders and the user's own keyboard know.
   Pairs with the blackout mode on the phone for a true pocket-remote story.
 - **E5 · Adaptive profile presets per link state** (builds on A1–A3):
-  "LAN 60fps", "WAN direct", "WAN relayed" presets adjusting
-  resolution/fps/bitrate/codec in one shot, switchable from the HUD.
-  *Partial (A3): the WAN-relayed bitrate floor + one-tap override landed;
-  fps/resolution/codec preset axes and a preset picker still open.*
+  named HUD profiles — Auto / Quality / Balanced / Economy — switchable in
+  one tap. ✅ *Landed (2026-09-21), honest axis scope: the preset moves the
+  **bitrate** axis (a `min`-ceiling against the session's configured rate, so
+  native resolution is never dropped — only bandwidth). The A3 relay floor and
+  the E5 preset ceiling are folded in a single always-on **bitrate arbiter**
+  (`InputPacket::QualityPreset`, tag 12), and the encode task now *applies* a
+  bitrate change live (rebuild at current res + IDR) instead of deferring it to
+  the next resolution rebuild. resolution/fps are capture-loop params fixed at
+  pipeline start and a mid-session codec swap needs the client to reconfigure
+  MediaCodec (C1/C2) — those axes stay session-start choices, reachable via the
+  phone's existing retry/monitor-switch (a fresh pipeline). "LAN 60fps / WAN
+  direct / WAN relayed" auto-defaulting on link state was NOT built: the
+  arbiter already floors relayed paths (A3) and the user picks a profile
+  explicitly; per-link auto-resolution/codec presets are a deliberate
+  non-goal given the architecture.*
 - **E6 · Foldable/tablet dual-pane** — stream on one half, native trackpad +
   shortcut dock on the other (we own both endpoints; RustDesk's tablet UI is
   a stretched phone layout). (M, device-gated polish.)
@@ -399,8 +411,9 @@ these anywhere — that's the moat)
   — iroh's default relays already punch ~half the time.
 
 ## 6. Suggested execution order
-A1 → A2 → B1 → D1 → A3/E5 → B2 → D3 → C1 → E2 → C2 → D2 → E3 → B3 → D4 →
-E1 → C3 → (C4, E4, E6 when hardware allows). Rationale: telemetry and consent
+A1 ✅ → A2 ✅ → B1 ✅ → D1 ✅ → A3/E5 ✅ → B2 ✅ → D3 ✅ → C1 ✅ → E2 ✅ →
+C2 ✅ → D2 ✅ → E3 ✅ → B3 ✅ → D4 ✅ → E1 ✅ → C3 ✅ → E5-remainder ✅ →
+(C4, E4, E6 when hardware/device allows). Rationale: telemetry and consent
 features are cheap trust-builders and unblock honest codec/relay presets;
 screencopy is the biggest measurable latency win testable on this box today;
 codec ladder comes after negotiation groundwork.

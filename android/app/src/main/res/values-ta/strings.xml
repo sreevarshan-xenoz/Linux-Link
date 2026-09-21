@@ -46,6 +46,11 @@
     <string name="full_quality_on">முழு தரம்: இயக்கம்</string>
     <string name="full_quality_off">முழு தரம்: முடக்கம்</string>
     <string name="full_quality_error">முழு தரம்: %1$s</string>
+    <string name="preset_auto">தரம்: தானியங்கி</string>
+    <string name="preset_quality">தரம்: அதிகபட்சம்</string>
+    <string name="preset_balanced">தரம்: சமநிலை</string>
+    <string name="preset_economy">தரம்: சேமிப்பு</string>
+    <string name="quality_preset_error">தரம் அமைவு: %1$s</string>
     <string name="mic_on">மைக்: இயக்கம்</string>
     <string name="mic_off">மைக்: முடக்கம்</string>
     <string name="mic_error">மைக் பகிர்வு: %1$s</string>

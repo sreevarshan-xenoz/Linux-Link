@@ -3,7 +3,7 @@
 //! Wires together capture → encoder → QUIC send into a single coordinated pipeline.
 //! Manages lifecycle, error handling, and graceful shutdown.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -17,9 +17,9 @@ use super::audio::{AudioConfig, AudioEncoder as AudioOpusEncoder};
 use super::audio_capture;
 use super::bitrate::AdaptiveBitrate;
 use super::capture;
-use super::connection::{Connection, QuinnConnection, SharedConnection, TransportFamily};
+use super::connection::{Connection, QuinnConnection, SharedConnection};
 use super::encoder::VideoEncoder;
-use super::input_packet::InputPacket;
+use super::input_packet::{InputPacket, PRESET_AUTO, preset_bitrate_ceil};
 use super::session_telemetry::{SessionOutcome, SessionRecorder};
 use super::transport::{self, CertManager, StreamServer, StreamTransportConfig};
 use super::{EncodedPacket, StreamingConfig, VideoCodec, VideoFrame};
@@ -63,6 +63,12 @@ pub struct StreamingServer {
     /// R4 A3 user override of the relay bitrate floor: set by
     /// `InputPacket::FullQuality`, read by the relay-guard task.
     full_quality: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// R4 E5 link-profile preset id ([`PRESET_AUTO`]..`PRESET_ECONOMY`),
+    /// set by `InputPacket::QualityPreset`. The bitrate-arbiter task folds
+    /// it with the A3 relay floor into the live encoder bitrate. Per
+    /// session (a `StreamingServer` is built per connection), so it resets
+    /// to `Auto` on reconnect.
+    preset: std::sync::Arc<AtomicU8>,
     /// R4 C1 server half of the codec negotiation: even when the client
     /// declares HEVC support, H.265 is only picked if the operator allowed
     /// it (`Config::allow_hevc` — HEVC encoder availability is the
@@ -95,6 +101,7 @@ impl StreamingServer {
             telemetry: false,
             view_only: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             full_quality: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            preset: std::sync::Arc::new(AtomicU8::new(PRESET_AUTO)),
             hevc_allowed: false,
             capture_backend: super::CaptureBackend::default(),
         }
@@ -431,10 +438,49 @@ impl StreamingServer {
                         encoder.request_keyframe();
                     }
 
-                    // Check for bitrate updates
+                    // Bitrate changes (R4 A3 relay floor / E5 HUD preset)
+                    // are baked into the encoder's FFmpeg command (rate
+                    // control + VBV + GOP), so applying one means a rebuild.
+                    // Reuse the sticky preferred config so a rebuild never
+                    // re-probes a hardware rung that already failed (C2), and
+                    // keep the current frame resolution — only the rate moves.
                     Ok(()) = encoder_bitrate_rx.changed() => {
-                        let current_bitrate = *encoder_bitrate_rx.borrow();
-                        debug!("Bitrate updated to {} bps", current_bitrate);
+                        let new_bitrate = *encoder_bitrate_rx.borrow_and_update();
+                        if new_bitrate != encoder.config().bitrate_bps {
+                            let mut cfg = encoder_preferred.clone();
+                            cfg.bitrate_bps = new_bitrate;
+                            let rebuilt = match VideoEncoder::new(cfg.clone()) {
+                                Ok(e) => Ok(e),
+                                Err(e) => {
+                                    error!(
+                                        error = %e,
+                                        "Bitrate rebuild failed; degrading to software"
+                                    );
+                                    VideoEncoder::new_software(cfg)
+                                }
+                            };
+                            match rebuilt {
+                                Ok(e) => {
+                                    info!(
+                                        bitrate_bps = new_bitrate,
+                                        backend = e.backend_name(),
+                                        "Encoder rebuilt for new bitrate"
+                                    );
+                                    encoder_preferred = e.config().clone();
+                                    encoder = e;
+                                    encode_errs = 0;
+                                    frames_since_packet = 0;
+                                    last_packet_at = Instant::now();
+                                }
+                                Err(e) => {
+                                    error!(error = %e, "Bitrate rebuild failed; ending session");
+                                    encode_cancel.cancel();
+                                    break;
+                                }
+                            }
+                        } else {
+                            debug!("Bitrate unchanged ({} bps)", new_bitrate);
+                        }
                     }
 
                     // Process next frame
@@ -753,6 +799,7 @@ impl StreamingServer {
         let monitor_window_tx = window_tx;
         let monitor_view_only = self.view_only.clone();
         let monitor_full_quality = self.full_quality.clone();
+        let monitor_preset = self.preset.clone();
         let monitor_mic_tx = self.mic_tx.clone();
         let monitor_span = tracing::info_span!("connection_monitor");
         tasks.spawn(async move {
@@ -821,6 +868,17 @@ impl StreamingServer {
                                                     monitor_full_quality
                                                         .store(enabled, Ordering::Relaxed);
                                                     info!(enabled, "Relay quality override changed");
+                                                    continue;
+                                                }
+                                                // Link-profile preset (R4 E5) is
+                                                // control-plane too: latch the id
+                                                // for the bitrate arbiter, never
+                                                // injected, survives view-only.
+                                                if let InputPacket::QualityPreset { preset } =
+                                                    packet
+                                                {
+                                                    monitor_preset.store(preset, Ordering::Relaxed);
+                                                    info!(preset, "Link-profile preset changed");
                                                     continue;
                                                 }
                                                 // Mic audio (R4 E2) is session
@@ -919,45 +977,57 @@ impl StreamingServer {
             });
         }
 
-        // Task 7b: relay quality floor (R4 A3). An iroh session riding a
-        // relay shares third-party bandwidth that is not ours to saturate,
-        // so while the selected path is a relay the encoder is clamped to
-        // a conservative bitrate; a mid-session punch-through (or a
-        // relaying upgrade) restores the configured rate. Quinn (LAN /
-        // Tailscale) has no relay concept — the task never spawns there.
-        if connection.transport_family() == TransportFamily::Iroh {
-            let relay_conn = connection.clone();
-            let relay_bitrate_tx = self.bitrate_tx.clone();
+        // Task 7b: live bitrate arbiter (R4 A3 + E5). One task owns every
+        // link-driven bitrate change so they never fight: it folds the A3
+        // relay floor and the E5 HUD preset ceiling together against the
+        // session's configured rate and pushes the result to the encoder
+        // whenever the effective value changes.
+        //
+        //   effective = configured
+        //                 .min(relay_cap)        // 2 Mbit/s while relayed
+        //                 .min(preset_ceil)      // HUD profile, relative to native
+        //
+        // `FullQuality` clears the relay floor (explicit override). The
+        // relay term is inert on quinn (LAN / Tailscale never report a
+        // relayed path) and on iroh before punching, so this task runs for
+        // every transport — that is what lets a LAN session pick a preset.
+        {
+            let arb_conn = connection.clone();
+            let arb_bitrate_tx = self.bitrate_tx.clone();
             let configured_bitrate = self.config.bitrate_bps;
-            let relay_cancel = cancel.clone();
-            let relay_full_quality = self.full_quality.clone();
+            let arb_cancel = cancel.clone();
+            let arb_full_quality = self.full_quality.clone();
+            let arb_preset = self.preset.clone();
             tasks.spawn(async move {
-                let mut clamped = false;
+                // Seed with the configured rate; the first tick reconciles.
+                let mut applied = configured_bitrate;
                 loop {
                     tokio::select! {
-                        _ = relay_cancel.cancelled() => break,
-                        _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+                        _ = arb_cancel.cancelled() => break,
+                        _ = tokio::time::sleep(Duration::from_secs(2)) => {}
                     }
-                    // A user override (or a punch-through) un-clamps.
                     let relayed =
-                        relay_conn.stats().relayed && !relay_full_quality.load(Ordering::Relaxed);
-                    if relayed && !clamped {
-                        let cap = configured_bitrate.min(RELAY_BITRATE_CAP_BPS);
-                        info!(
-                            cap_bps = cap,
-                            configured_bps = configured_bitrate,
-                            "Relayed path: clamping encoder bitrate (shared relay bandwidth)"
-                        );
-                        let _ = relay_bitrate_tx.send(cap);
-                        clamped = true;
-                    } else if !relayed && clamped {
-                        info!(
-                            configured_bps = configured_bitrate,
-                            "Direct path: restoring configured encoder bitrate"
-                        );
-                        let _ = relay_bitrate_tx.send(configured_bitrate);
-                        clamped = false;
+                        arb_conn.stats().relayed && !arb_full_quality.load(Ordering::Relaxed);
+                    let relay_cap = if relayed {
+                        RELAY_BITRATE_CAP_BPS
+                    } else {
+                        u32::MAX
+                    };
+                    let preset_ceil =
+                        preset_bitrate_ceil(arb_preset.load(Ordering::Relaxed), configured_bitrate);
+                    let effective = configured_bitrate.min(relay_cap).min(preset_ceil);
+                    if effective == applied {
+                        continue;
                     }
+                    info!(
+                        effective_bps = effective,
+                        configured_bps = configured_bitrate,
+                        relayed,
+                        preset = arb_preset.load(Ordering::Relaxed),
+                        "Encoder bitrate target changed"
+                    );
+                    let _ = arb_bitrate_tx.send(effective);
+                    applied = effective;
                 }
             });
         }

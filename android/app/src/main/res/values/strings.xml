@@ -53,6 +53,11 @@
     <string name="full_quality_on">Full quality: on</string>
     <string name="full_quality_off">Full quality: off</string>
     <string name="full_quality_error">Full quality: %1$s</string>
+    <string name="preset_auto">Quality: auto</string>
+    <string name="preset_quality">Quality: max</string>
+    <string name="preset_balanced">Quality: balanced</string>
+    <string name="preset_economy">Quality: economy</string>
+    <string name="quality_preset_error">Quality preset: %1$s</string>
     <string name="mic_on">Mic: on</string>
     <string name="mic_off">Mic: off</string>
     <string name="mic_error">Mic share: %1$s</string>

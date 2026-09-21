@@ -519,6 +519,18 @@ pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeSetFullQ
     to_jstring(&mut env, json)
 }
 
+/// R4 E5: select a named link-profile preset (0 Auto, 1 Quality,
+/// 2 Balanced, 3 Economy) the server folds into the live encoder bitrate.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeSendQualityPreset(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    preset: jint,
+) -> jstring {
+    let json = envelope_unit(RUNTIME.block_on(api::send_quality_preset(preset as u8)));
+    to_jstring(&mut env, json)
+}
+
 /// Open the R4 E2 phone→desktop mic (start frame; the server creates its
 /// "Linux Link Mic" PipeWire source). Opus encoding happens in Kotlin.
 #[unsafe(no_mangle)]

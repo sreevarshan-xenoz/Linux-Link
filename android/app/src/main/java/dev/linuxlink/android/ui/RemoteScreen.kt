@@ -179,6 +179,27 @@ fun RemoteScreen(
             withContext(Dispatchers.IO) { RustCore.setFullQuality(true) }
         }
     }
+    // R4 E5: named link-profile preset the HUD cycles through (Auto →
+    // Quality → Balanced → Economy). A server-side bitrate ceiling, folded
+    // with the A3 relay floor; per-session, so re-armed on (re)connect like
+    // the other latches. Auto is the no-op default (never sent on Up).
+    var qualityPreset by remember { mutableStateOf(RustCore.PRESET_AUTO) }
+    var qualityPresetError by remember { mutableStateOf<String?>(null) }
+    val qualityPresetErrorMessage =
+        qualityPresetError?.let { stringResource(R.string.quality_preset_error, it) }
+    LaunchedEffect(qualityPresetErrorMessage) {
+        if (qualityPresetErrorMessage != null) {
+            android.widget.Toast
+                .makeText(context, qualityPresetErrorMessage, android.widget.Toast.LENGTH_SHORT)
+                .show()
+            qualityPresetError = null
+        }
+    }
+    LaunchedEffect(status) {
+        if (qualityPreset != RustCore.PRESET_AUTO && status is StreamStatus.Up) {
+            withContext(Dispatchers.IO) { RustCore.sendQualityPreset(qualityPreset) }
+        }
+    }
     // Tier-3 #14: decoded video frame size, used to pick the PiP aspect ratio.
     var videoSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
     // Tier-3 #15: desktop privacy mode. The server's input grab carries a
@@ -719,6 +740,32 @@ fun RemoteScreen(
                         val label =
                             if (viewOnly) stringResource(R.string.view_only_on) else stringResource(R.string.view_only_off)
                         Text(label, color = if (viewOnly) Color(0xFFFFC080) else Color.White)
+                    }
+                    TextButton(
+                        onClick = {
+                            val next = when (qualityPreset) {
+                                RustCore.PRESET_AUTO -> RustCore.PRESET_QUALITY
+                                RustCore.PRESET_QUALITY -> RustCore.PRESET_BALANCED
+                                RustCore.PRESET_BALANCED -> RustCore.PRESET_ECONOMY
+                                else -> RustCore.PRESET_AUTO
+                            }
+                            qualityPreset = next
+                            scope.launch(Dispatchers.IO) {
+                                RustCore.sendQualityPreset(next)
+                                    .onFailure { qualityPresetError = it.message }
+                            }
+                        },
+                    ) {
+                        val label = when (qualityPreset) {
+                            RustCore.PRESET_QUALITY -> stringResource(R.string.preset_quality)
+                            RustCore.PRESET_BALANCED -> stringResource(R.string.preset_balanced)
+                            RustCore.PRESET_ECONOMY -> stringResource(R.string.preset_economy)
+                            else -> stringResource(R.string.preset_auto)
+                        }
+                        Text(
+                            label,
+                            color = if (qualityPreset != RustCore.PRESET_AUTO) Color(0xFF80C0FF) else Color.White,
+                        )
                     }
                     TextButton(
                         onClick = {

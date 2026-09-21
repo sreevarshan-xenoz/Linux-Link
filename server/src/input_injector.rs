@@ -425,6 +425,9 @@ impl InputInjector {
             // Likewise: the relay bitrate floor is server-side quality
             // control, never an input event.
             InputPacket::FullQuality { .. } => Ok(()),
+            // Link-profile preset (R4 E5) is server-side bitrate control,
+            // handled by the streaming server's arbiter, never injected.
+            InputPacket::QualityPreset { .. } => Ok(()),
             // Mic audio is consumed by the streaming server's mic relay task
             // (R4 E2) before the input channel; never injected.
             InputPacket::Mic { .. } => Ok(()),

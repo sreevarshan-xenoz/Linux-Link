@@ -2263,6 +2263,41 @@ pub async fn send_full_quality(enabled: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// R4 E5: pick a named link-profile preset (see `RustCore` id constants:
+/// 0 Auto, 1 Quality, 2 Balanced, 3 Economy). Control-plane — the server
+/// folds it with the A3 relay floor into the live encoder bitrate. Never
+/// injected, and it survives view-only.
+pub async fn send_quality_preset(preset: u8) -> Result<(), String> {
+    let quic_conn = {
+        let guard = (*STREAMING_HANDLE).lock().await;
+        if let Some(h) = guard.as_ref() {
+            Some(h.connection.clone())
+        } else {
+            let v2_guard = (*crate::V2_HANDLE).lock().await;
+            v2_guard
+                .as_ref()
+                .map(|h| QuinnConnection::shared(h.connection.clone()))
+        }
+    };
+
+    let conn =
+        quic_conn.ok_or_else(|| "Quality preset requires an active QUIC session".to_string())?;
+
+    let data = InputPacket::QualityPreset { preset }.encode();
+    let mut send_stream = conn
+        .open_uni()
+        .await
+        .map_err(|e| format!("QUIC open stream: {e}"))?;
+    send_stream
+        .write_all(&data)
+        .await
+        .map_err(|e| format!("QUIC write: {e}"))?;
+    send_stream
+        .finish()
+        .map_err(|e| format!("QUIC finish: {e}"))?;
+    Ok(())
+}
+
 // R4 E2 mic-share plumbing: the phone-side Opus encoder is Kotlin's
 // MediaCodec (`c2.android.opus.encoder`) — the `opus` crate can't
 // cross-compile here (audiopus_sys builds libopus via CMake, which fights

@@ -19,6 +19,31 @@ const TAG_WINDOW_CROP: u8 = 8;
 const TAG_VIEW_ONLY: u8 = 9;
 const TAG_FULL_QUALITY: u8 = 10;
 const TAG_MIC: u8 = 11;
+const TAG_QUALITY_PRESET: u8 = 12;
+
+/// R4 E5: named link-profile presets, switchable from the phone HUD. A
+/// preset is a *ceiling* the user asks for; the server folds it together
+/// with the R4 A3 relay floor into the live encoder bitrate. Values are
+/// shared client↔server, so they must never be renumbered.
+pub const PRESET_AUTO: u8 = 0;
+pub const PRESET_QUALITY: u8 = 1;
+pub const PRESET_BALANCED: u8 = 2;
+pub const PRESET_ECONOMY: u8 = 3;
+
+/// Map a [`PRESET_*`] id to the bitrate ceiling it implies, expressed
+/// relative to the session's `configured_bps` (native resolution differs
+/// per monitor, so bands are caps, never floors). `Auto` and `Quality`
+/// impose no preset ceiling — `Auto` leaves the rate to the link (the A3
+/// relay floor still applies) while `Quality` is the user explicitly
+/// asking for the full configured rate. Pure, so it is unit-testable on
+/// both the server and the (client-only) bridge build.
+pub fn preset_bitrate_ceil(preset: u8, configured_bps: u32) -> u32 {
+    match preset {
+        PRESET_BALANCED => configured_bps.min(5_000_000),
+        PRESET_ECONOMY => configured_bps.min(1_500_000),
+        _ => configured_bps,
+    }
+}
 
 /// A compact binary input event for real-time remote control.
 ///
@@ -83,6 +108,12 @@ pub enum InputPacket {
     /// the phone user chooses to broadcast, handled server-side by the
     /// mic relay (decode Opus → feed a PipeWire source).
     Mic { enabled: bool, opus: Vec<u8> },
+    /// R4 E5 link-profile preset: a named bitrate ceiling the user picks
+    /// from the HUD (see [`PRESET_AUTO`]..[`PRESET_ECONOMY`]). Control-plane
+    /// — never injected and it survives view-only, like `FullQuality` — the
+    /// server folds it with the A3 relay floor and steers the live encoder
+    /// bitrate. `preset` carries the id directly.
+    QualityPreset { preset: u8 },
     /// Gamepad state: 6 analog axes + 16-bit button bitmask.
     Gamepad {
         /// Left stick X, Left stick Y, Right stick X, Right stick Y, L2, R2.
@@ -160,6 +191,7 @@ impl InputPacket {
                 buf.extend_from_slice(opus);
                 buf
             }
+            InputPacket::QualityPreset { preset } => vec![TAG_QUALITY_PRESET, *preset],
             InputPacket::WindowCrop {
                 x,
                 y,
@@ -311,6 +343,14 @@ impl InputPacket {
                     window,
                 })
             }
+            TAG_QUALITY_PRESET => {
+                anyhow::ensure!(
+                    data.len() == 2,
+                    "QualityPreset packet must be 2 bytes, got {}",
+                    data.len()
+                );
+                Ok(InputPacket::QualityPreset { preset: data[1] })
+            }
             _ => {
                 anyhow::bail!("Unknown input packet tag: {}", tag);
             }
@@ -363,6 +403,32 @@ mod tests {
     #[test]
     fn test_mouse_move_abs_truncated() {
         assert!(InputPacket::decode(&[6, 0, 1]).is_err());
+    }
+
+    #[test]
+    fn test_quality_preset_roundtrip_and_framing() {
+        for preset in [PRESET_AUTO, PRESET_QUALITY, PRESET_BALANCED, PRESET_ECONOMY] {
+            let data = InputPacket::QualityPreset { preset }.encode();
+            assert_eq!(data, vec![12, preset]);
+            match InputPacket::decode(&data).unwrap() {
+                InputPacket::QualityPreset { preset: got } => assert_eq!(got, preset),
+                other => panic!("wrong variant: {other:?}"),
+            }
+        }
+        // Strict 2-byte framing.
+        assert!(InputPacket::decode(&[12]).is_err());
+        assert!(InputPacket::decode(&[12, 2, 0]).is_err());
+    }
+
+    #[test]
+    fn test_preset_bitrate_ceil_is_cap_relative_to_configured() {
+        assert_eq!(preset_bitrate_ceil(PRESET_AUTO, 8_000_000), 8_000_000);
+        assert_eq!(preset_bitrate_ceil(PRESET_QUALITY, 8_000_000), 8_000_000);
+        assert_eq!(preset_bitrate_ceil(PRESET_BALANCED, 8_000_000), 5_000_000);
+        assert_eq!(preset_bitrate_ceil(PRESET_ECONOMY, 8_000_000), 1_500_000);
+        // Bands are ceilings: a low configured rate is never raised.
+        assert_eq!(preset_bitrate_ceil(PRESET_BALANCED, 1_000_000), 1_000_000);
+        assert_eq!(preset_bitrate_ceil(PRESET_ECONOMY, 900_000), 900_000);
     }
 
     #[test]

@@ -122,6 +122,7 @@ object RustCore {
     ): String
     private external fun nativeSetViewOnly(enabled: Boolean): String
     private external fun nativeSetFullQuality(enabled: Boolean): String
+    private external fun nativeSendQualityPreset(preset: Int): String
     private external fun nativeStartMic(): String
     private external fun nativeSendMicOpus(opus: ByteArray): String
     private external fun nativeStopMic(): String
@@ -576,6 +577,22 @@ object RustCore {
      */
     fun setFullQuality(enabled: Boolean): Result<Unit> =
         envelope(nativeSetFullQuality(enabled)).map { }
+
+    /**
+     * R4 E5: choose a named link-profile preset from the HUD. The server
+     * folds it together with the A3 relay floor into the live encoder
+     * bitrate (a ceiling relative to the session's configured rate, so the
+     * native resolution is never dropped — only bandwidth). Use [PRESET_*].
+     * Control-plane: survives view-only, never injected. QUIC-only.
+     */
+    fun sendQualityPreset(preset: Int): Result<Unit> =
+        envelope(nativeSendQualityPreset(preset)).map { }
+
+    // Wire ids shared with InputPacket::QualityPreset in the Rust core.
+    const val PRESET_AUTO = 0
+    const val PRESET_QUALITY = 1
+    const val PRESET_BALANCED = 2
+    const val PRESET_ECONOMY = 3
 
     /**
      * R4 E2 reverse audio (phone mic → desktop): open the mic channel — the
