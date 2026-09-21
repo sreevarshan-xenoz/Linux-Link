@@ -170,6 +170,10 @@ pub async fn spawn_wan_endpoint(
                 let mut streaming_server =
                     StreamingServer::new(config, StreamTransportConfig::default(), cert_manager);
                 streaming_server.set_input_channel(input_tx);
+                // R4 E2: WAN sessions get the same phone-mic relay as LAN.
+                let (mic_tx, mic_rx) = tokio::sync::mpsc::channel(64);
+                tokio::spawn(crate::mic_relay::run_mic_relay(mic_rx));
+                streaming_server.set_mic_channel(mic_tx);
                 streaming_server.set_session_telemetry(true);
                 streaming_server.set_hevc_allowed(allow_hevc);
                 if pairing_required {

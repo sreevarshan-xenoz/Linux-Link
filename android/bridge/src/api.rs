@@ -2261,6 +2261,63 @@ pub async fn send_full_quality(enabled: bool) -> Result<(), String> {
     Ok(())
 }
 
+// R4 E2 mic-share plumbing: the phone-side Opus encoder is Kotlin's
+// MediaCodec (`c2.android.opus.encoder`) — the `opus` crate can't
+// cross-compile here (audiopus_sys builds libopus via CMake, which fights
+// cargo-ndk) — so the bridge only frames and forwards finished packets.
+// Format both ends agree on: 48 kHz mono, 20 ms frames.
+async fn stream_connection() -> Result<linux_link_core::streaming::SharedConnection, String> {
+    (*STREAMING_HANDLE)
+        .lock()
+        .await
+        .as_ref()
+        .map(|h| h.connection.clone())
+        .ok_or_else(|| "Mic requires an active streaming session".to_string())
+}
+
+async fn send_mic_frame(
+    conn: &linux_link_core::streaming::SharedConnection,
+    enabled: bool,
+    opus: Vec<u8>,
+) -> Result<(), String> {
+    let data = InputPacket::Mic { enabled, opus }.encode();
+    let mut send_stream = conn
+        .open_uni()
+        .await
+        .map_err(|e| format!("QUIC open stream: {e}"))?;
+    send_stream
+        .write_all(&data)
+        .await
+        .map_err(|e| format!("QUIC write: {e}"))?;
+    send_stream
+        .finish()
+        .map_err(|e| format!("QUIC finish: {e}"))?;
+    Ok(())
+}
+
+/// Open the phone→desktop mic: sends the start frame, which makes the
+/// server create its "Linux Link Mic" PipeWire source. Pairs with
+/// `send_mic_opus`/`stop_mic`.
+pub async fn start_mic() -> Result<(), String> {
+    let conn = stream_connection().await?;
+    send_mic_frame(&conn, true, Vec::new()).await
+}
+
+/// Push one encoded Opus frame (20 ms, 48 kHz mono) to the desktop.
+pub async fn send_mic_opus(opus: Vec<u8>) -> Result<(), String> {
+    let conn = stream_connection().await?;
+    send_mic_frame(&conn, true, opus).await
+}
+
+/// Close the phone→desktop mic: the server removes its virtual source.
+/// Best-effort — succeeds silently with no session.
+pub async fn stop_mic() -> Result<(), String> {
+    if let Ok(conn) = stream_connection().await {
+        send_mic_frame(&conn, false, Vec::new()).await?;
+    }
+    Ok(())
+}
+
 /// Send keyboard event to remote, preferring the low-latency QUIC streaming channel.
 ///
 /// Falls back to KDE Connect TCP protocol if streaming is not active.

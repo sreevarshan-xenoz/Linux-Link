@@ -53,6 +53,11 @@
     <string name="full_quality_on">Full quality: on</string>
     <string name="full_quality_off">Full quality: off</string>
     <string name="full_quality_error">Full quality: %1$s</string>
+    <string name="mic_on">Mic: on</string>
+    <string name="mic_off">Mic: off</string>
+    <string name="mic_error">Mic share: %1$s</string>
+    <string name="mic_unavailable">No Opus encoder on this device (Android 9+)</string>
+    <string name="mic_permission_denied">Microphone permission denied</string>
     <string name="lock_pc">Lock PC</string>
     <string name="blackout">Blackout</string>
     <string name="pip">PiP</string>

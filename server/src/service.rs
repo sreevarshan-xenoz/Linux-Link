@@ -379,6 +379,11 @@ pub async fn run(config: Config) -> Result<()> {
                                     cert_manager_clone
                                 );
                                 streaming_server.set_input_channel(input_tx);
+                                // R4 E2: phone-mic frames feed a pw-loopback
+                                // virtual source for the life of this session.
+                                let (mic_tx, mic_rx) = tokio::sync::mpsc::channel(64);
+                                tokio::spawn(crate::mic_relay::run_mic_relay(mic_rx));
+                                streaming_server.set_mic_channel(mic_tx);
                                 streaming_server.set_session_telemetry(true);
                                 streaming_server.set_hevc_allowed(allow_hevc);
                                 if pairing_required {

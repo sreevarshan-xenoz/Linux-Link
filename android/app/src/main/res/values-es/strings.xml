@@ -46,6 +46,11 @@
     <string name="full_quality_on">Calidad máxima: activado</string>
     <string name="full_quality_off">Calidad máxima: desactivado</string>
     <string name="full_quality_error">Calidad máxima: %1$s</string>
+    <string name="mic_on">Micrófono: activado</string>
+    <string name="mic_off">Micrófono: desactivado</string>
+    <string name="mic_error">Micrófono: %1$s</string>
+    <string name="mic_unavailable">Este dispositivo no tiene codificador Opus (Android 9+)</string>
+    <string name="mic_permission_denied">Permiso de micrófono denegado</string>
     <string name="lock_pc">Bloquear PC</string>
     <string name="blackout">Pantalla negra</string>
     <string name="pip">PiP</string>

@@ -519,6 +519,44 @@ pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeSetFullQ
     to_jstring(&mut env, json)
 }
 
+/// Open the R4 E2 phone→desktop mic (start frame; the server creates its
+/// "Linux Link Mic" PipeWire source). Opus encoding happens in Kotlin.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeStartMic(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+) -> jstring {
+    let json = envelope_unit(RUNTIME.block_on(api::start_mic()));
+    to_jstring(&mut env, json)
+}
+
+/// Push one encoded Opus frame (20 ms, 48 kHz mono) to the desktop mic relay.
+///
+/// # Safety
+/// `opus` must be a valid `jbyteArray` reference from the JNI caller.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeSendMicOpus(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    opus: jbyteArray,
+) -> jstring {
+    let json = match env.convert_byte_array(unsafe { jni::objects::JByteArray::from_raw(opus) }) {
+        Ok(bytes) => envelope_unit(RUNTIME.block_on(api::send_mic_opus(bytes))),
+        Err(e) => format!(r#"{{"error":"JNI byte array: {e}"}}"#),
+    };
+    to_jstring(&mut env, json)
+}
+
+/// Close the phone→desktop mic (server removes its virtual source).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeStopMic(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+) -> jstring {
+    let json = envelope_unit(RUNTIME.block_on(api::stop_mic()));
+    to_jstring(&mut env, json)
+}
+
 /// Send a keyboard event. `key_code` is an Android KeyCode; the bridge maps
 /// it to evdev internally. `text` carries the char for UTF-8 input paths.
 #[unsafe(no_mangle)]

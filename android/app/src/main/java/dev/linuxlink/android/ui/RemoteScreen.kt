@@ -1,14 +1,18 @@
 package dev.linuxlink.android.ui
 
+import android.Manifest
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
@@ -42,6 +46,7 @@ import dev.linuxlink.android.R
 import dev.linuxlink.android.bridge.RustCore
 import dev.linuxlink.android.service.SessionForegroundService
 import dev.linuxlink.android.stream.InputMode
+import dev.linuxlink.android.stream.MicCapture
 import dev.linuxlink.android.stream.RemoteDesktopView
 import dev.linuxlink.android.stream.ShortcutBar
 import dev.linuxlink.android.stream.StatsHud
@@ -193,6 +198,87 @@ fun RemoteScreen(
                     runCatching { RustCore.desktopPrivacy(address, controlPort, "release") }
                 }.start()
             }
+        }
+    }
+
+    // R4 E2 phone-mic share: MediaCodec-encodes the mic to Opus and streams
+    // it to the desktop's "Linux Link Mic" PipeWire source. Independent of
+    // view-only — the server routes mic packets before the input drop.
+    var mic by remember { mutableStateOf<MicCapture?>(null) }
+    var micError by remember { mutableStateOf<String?>(null) }
+    // Static messages are carried as @StringRes ids and resolved during
+    // composition (LocalContext.getString in a callback is lint-error: stale
+    // configuration); dynamic reasons come as raw strings through micError.
+    var micErrorRes by remember { mutableStateOf<Int?>(null) }
+    val micErrorMessage =
+        when {
+            micError != null -> stringResource(R.string.mic_error, micError!!)
+            micErrorRes != null -> stringResource(micErrorRes!!)
+            else -> null
+        }
+    LaunchedEffect(micErrorMessage) {
+        if (micErrorMessage != null) {
+            android.widget.Toast
+                .makeText(context, micErrorMessage, android.widget.Toast.LENGTH_SHORT)
+                .show()
+            micError = null
+            micErrorRes = null
+        }
+    }
+    var micPermissionReply by remember { mutableStateOf<Boolean?>(null) }
+    val micPermissionLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            micPermissionReply = granted
+        }
+    fun startMicShare() {
+        if (mic != null) return
+        if (!MicCapture.isAvailable()) {
+            micErrorRes = R.string.mic_unavailable
+            return
+        }
+        if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            return
+        }
+        val capture = MicCapture()
+        scope.launch(Dispatchers.IO) {
+            // onDropped: the worker saw the QUIC session die; clear the toggle.
+            val error = capture.start { scope.launch(Dispatchers.Main) { mic = null } }
+            withContext(Dispatchers.Main) {
+                if (error != null) micError = error else mic = capture
+            }
+        }
+    }
+    fun stopMicShare() {
+        val capture = mic ?: return
+        mic = null
+        scope.launch(Dispatchers.IO) { capture.stop() }
+    }
+    LaunchedEffect(micPermissionReply) {
+        val granted = micPermissionReply ?: return@LaunchedEffect
+        micPermissionReply = null
+        if (!granted) {
+            micErrorRes = R.string.mic_permission_denied
+            return@LaunchedEffect
+        }
+        // Android 14+ pins mic access to the FGS types declared at
+        // startForeground; re-issue the start so a service launched before
+        // the grant picks up the microphone type.
+        val upgrade =
+            Intent(context, SessionForegroundService::class.java).apply {
+                action = SessionForegroundService.ACTION_START
+                putExtra(SessionForegroundService.EXTRA_ADDRESS, address)
+                putExtra(SessionForegroundService.EXTRA_PORT, port)
+                putExtra(SessionForegroundService.EXTRA_CONTROL_PORT, controlPort)
+            }
+        context.startForegroundService(upgrade)
+        startMicShare()
+    }
+    DisposableEffect(mic) {
+        onDispose {
+            mic?.let { capture -> Thread { capture.stop() }.start() }
         }
     }
 
@@ -538,6 +624,13 @@ fun RemoteScreen(
                     }
                     TextButton(onClick = { showAudio = true }) {
                         Text(stringResource(R.string.audio), color = Color.White)
+                    }
+                    TextButton(
+                        onClick = { if (mic == null) startMicShare() else stopMicShare() },
+                    ) {
+                        val label =
+                            if (mic != null) stringResource(R.string.mic_on) else stringResource(R.string.mic_off)
+                        Text(label, color = if (mic != null) Color(0xFFFFC080) else Color.White)
                     }
                     TextButton(onClick = { pairingMessage = null; showPairing = true }) {
                         val label =

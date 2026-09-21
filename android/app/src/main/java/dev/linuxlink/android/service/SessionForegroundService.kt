@@ -21,10 +21,12 @@ import dev.linuxlink.android.bridge.RustCore
  * back through MainActivity.
  *
  * FGS type choice: `specialUse` with a remote-desktop subtype. The client
- * renders a decoded stream — it captures nothing on-device — so
+ * renders a decoded stream — it captures no video on-device — so
  * `mediaProjection`'s consent dialog would be semantically wrong and scary;
  * `dataSync`/`connectedDevice` do not match Play policy. The justification
- * lives in the manifest's PROPERTY_SPECIAL_USE_FGS_SUBTYPE property.
+ * lives in the manifest's PROPERTY_SPECIAL_USE_FGS_SUBTYPE property. The
+ * `microphone` type rides along once RECORD_AUDIO is granted (R4 E2 mic
+ * share) — Android 14 requires it for off-foreground mic access.
  */
 class SessionForegroundService : Service() {
     companion object {
@@ -76,11 +78,18 @@ class SessionForegroundService : Service() {
         }
         val notification = buildNotification(sessionAddress)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
-            )
+            // R4 E2: Android 14+ only lets a backgrounded/PiP session touch the
+            // microphone while the FGS carries the microphone type — and
+            // passing that type without RECORD_AUDIO granted throws, so it is
+            // OR-ed in conditionally. RemoteScreen re-issues the start intent
+            // right after the permission is granted to upgrade a live service.
+            var type = ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) {
+                type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            }
+            startForeground(NOTIFICATION_ID, notification, type)
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }

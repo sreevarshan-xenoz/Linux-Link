@@ -32,9 +32,9 @@ pub mod encoder_inproc;
 #[cfg(feature = "server")]
 pub mod streamer;
 
-#[cfg(feature = "opus")]
-pub use audio::AudioEncoder;
 pub use audio::{AudioConfig, AudioPacket};
+#[cfg(feature = "opus")]
+pub use audio::{AudioDecoder, AudioEncoder};
 pub use bitrate::AdaptiveBitrate;
 #[cfg(feature = "capture")]
 pub use capture::start_capture_auto;

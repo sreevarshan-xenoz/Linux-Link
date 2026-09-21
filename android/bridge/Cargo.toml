@@ -8,6 +8,10 @@ license.workspace = true
 crate-type = ["cdylib"]
 
 [dependencies]
+# `opus` deliberately NOT enabled: audiopus_sys builds libopus via CMake,
+# which does not cross-compile cleanly under cargo-ndk here. The R4 E2 mic
+# path encodes Opus on the Kotlin side (MediaCodec c2.android.opus.encoder)
+# and sends finished packets through `send_mic_frame`.
 linux-link-core = { path = "../../core", default-features = false, features = ["client", "wan"] }
 jni = "0.21"
 anyhow.workspace = true

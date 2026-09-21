@@ -122,6 +122,9 @@ object RustCore {
     ): String
     private external fun nativeSetViewOnly(enabled: Boolean): String
     private external fun nativeSetFullQuality(enabled: Boolean): String
+    private external fun nativeStartMic(): String
+    private external fun nativeSendMicOpus(opus: ByteArray): String
+    private external fun nativeStopMic(): String
     private external fun nativeSendPowerCommand(address: String, port: Int, action: String): String
     private external fun nativeExecuteRemoteCommand(
         address: String,
@@ -567,6 +570,22 @@ object RustCore {
      */
     fun setFullQuality(enabled: Boolean): Result<Unit> =
         envelope(nativeSetFullQuality(enabled)).map { }
+
+    /**
+     * R4 E2 reverse audio (phone mic → desktop): open the mic channel — the
+     * server creates a "Linux Link Mic" PipeWire source apps can select.
+     * Then feed encoded frames with [sendMicOpus] (48 kHz mono, 20 ms Opus
+     * packets from MediaCodec) and close with [stopMic]. QUIC-only: needs a
+     * live streaming session.
+     */
+    fun startMic(): Result<Unit> = envelope(nativeStartMic()).map { }
+
+    /** Push one encoded Opus frame to the desktop mic relay. */
+    fun sendMicOpus(opus: ByteArray): Result<Unit> =
+        envelope(nativeSendMicOpus(opus)).map { }
+
+    /** Close the mic channel; the server removes its virtual source. */
+    fun stopMic(): Result<Unit> = envelope(nativeStopMic()).map { }
 
     fun sendPowerCommand(address: String, port: Int, action: String): Result<Unit> =
         envelope(nativeSendPowerCommand(address, port, action)).map { }

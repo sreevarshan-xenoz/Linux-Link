@@ -174,8 +174,10 @@ From **scrcpy** (code-level OK, Apache-2.0):
   (device behavior unverified). Client announces a decodable-codec bitmask on
   a third pre-pipeline uni-stream `[0xFD, 0x00, caps]` (bit 0 = HEVC; absent
   = legacy H.264-only, so old clients are unaffected); Android reports
-  MediaCodecList's HEVC-decoder presence through the connect/reconnect JNI
-  exports. Server picks H.265 only when the client declares it **and** the
+  HEVC-decoder presence through the connect/reconnect JNI exports via an
+  instantiate-and-release `MediaCodec.createDecoderByType` probe (the
+  codec-list `MediaCodecInfo.isDecoder` form C1 first shipped with was
+  removed from API 37's android.jar). Server picks H.265 only when the client declares it **and** the
   operator allowed it (`allow_hevc` in config.toml, default off — HEVC encoder
   availability is the box's business); the negotiated codec reaches the
   encoder via the existing `StreamingConfig.codec` field. `H264Decoder.kt` is
@@ -234,12 +236,28 @@ these anywhere — that's the moat)
   Workspace HUD → that window becomes the stream (HUD → crop pipeline stitch,
   both already shipped separately); swipe away → back to monitor view. A
   compositor-aware jump-to-context no surveyed project has.
-- **E2 · Phone mic → desktop PipeWire source (reverse audio).** scrcpy does
-  phone-audio-out; nobody does *mic-in* to the Linux box over our control
-  channel. Stream 16k/48k Opus from `AudioRecord` up the existing uni-stream,
-  server creates a PipeWire sink (pw-loopback) named "Linux Link Mic".
-  Calls-on-PC-from-phone story. (S on the wire — audio path exists both
-  directions in the pipeline; M on PipeWire sink plumbing.)
+- **E2 · Phone mic → desktop PipeWire source (reverse audio).** ✅ **Landed
+  2026-09-21** (server relay live-verified on this box; phone behavior
+  unverified). scrcpy does phone-audio-out; nobody does *mic-in* to the Linux
+  box over our channel. New `InputPacket::Mic` (tag 11: `[11, enabled u8,
+  len u32 LE, opus]`, strict decode) rides the existing client→server
+  uni-stream — one stream per 20 ms Opus frame like every input packet — and
+  the stream monitor intercepts it into a bounded (64, drop-on-full) channel
+  **before** the view-only drop: mic is session media, not injected input.
+  Server `mic_relay.rs` decodes with the new core `AudioDecoder` (opus
+  feature) and feeds piped stdin to `pw-loopback -c 1 -m '[[MONO]]' -i
+  'node.name=linux_link_mic … media.class=Audio/Source/Virtual'` — float32
+  because PipeWire 1.6.8 ignores `audio.format` on stdin-fed nodes (probed
+  live); explicit start/stop frames own the node's life, channel-close and
+  kill_on_drop are the safety nets, spawn failures retry on a 5 s cooldown.
+  Wired for LAN **and** WAN sessions. Phone side: `stream/MicCapture.kt` —
+  AudioRecord 48 kHz mono → MediaCodec Opus encoder (32 kbit/s) →
+  `RustCore.sendMicOpus`; Rust-side Opus deliberately avoided (the `opus`
+  crate's CMake build does not cross-compile under cargo-ndk), so the bridge
+  only forwards packets (3 new JNI exports). RECORD_AUDIO + Android 14
+  `microphone` FGS type (graceful: only OR-ed into `startForeground` once
+  the grant exists). Mic survives view-only; stop button, exit and session
+  teardown all remove the desktop source.
 - **E3 · E2E latency probe, compositor-true.** Round-trip the existing e2e
   HUD number with a Hyprland-verified frame stamp: server renders a hidden
   timestamp quads via a transient overlay, phone reads it off the decoded

@@ -4,6 +4,7 @@
 //! - [`AudioConfig`] — sample rate, channels, bitrate configuration
 //! - [`AudioPacket`] — encoded audio data with metadata
 //! - [`AudioEncoder`] — Opus encoder wrapping the `opus` crate (server-only)
+//! - [`AudioDecoder`] — Opus decoder (R4 E2 reverse-audio path on the server)
 //! - Simple PCM buffer types for feeding captured audio
 
 #[cfg(feature = "opus")]
@@ -166,6 +167,45 @@ impl Drop for AudioEncoder {
     }
 }
 
+/// Opus audio decoder wrapping the `opus` crate (R4 E2: the server decodes
+/// phone-mic Opus frames back to PCM before feeding the PipeWire sink).
+/// Only available when the `opus` feature is enabled.
+#[cfg(feature = "opus")]
+pub struct AudioDecoder {
+    decoder: opus::Decoder,
+    channels: u16,
+}
+
+#[cfg(feature = "opus")]
+impl AudioDecoder {
+    /// Create a decoder for `sample_rate` Hz and `channels` (1 or 2).
+    pub fn new(sample_rate: u32, channels: u16) -> Result<Self> {
+        let decoder = opus::Decoder::new(
+            sample_rate,
+            if channels == 1 {
+                opus::Channels::Mono
+            } else {
+                opus::Channels::Stereo
+            },
+        )
+        .context("Failed to create Opus decoder")?;
+        Ok(Self { decoder, channels })
+    }
+
+    /// Decode one Opus packet into interleaved f32 samples (the format
+    /// pw-loopback consumes on stdin).
+    pub fn decode(&mut self, packet: &[u8]) -> Result<Vec<f32>> {
+        // Opus frames are at most 120 ms; 48 kHz is our fixed rate.
+        let mut buf = vec![0f32; 48000 / 1000 * 120 * self.channels as usize];
+        let samples = self
+            .decoder
+            .decode_float(packet, &mut buf, false)
+            .context("Opus decode failed")?;
+        buf.truncate(samples * self.channels as usize);
+        Ok(buf)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -257,6 +297,32 @@ mod tests {
         encoder.reset_sequence();
         let after = encoder.encode(&silence).unwrap().unwrap();
         assert_eq!(after.sequence, 0);
+    }
+
+    #[cfg(feature = "opus")]
+    #[test]
+    fn test_decoder_roundtrip_silence() {
+        let config = AudioConfig {
+            channels: 1,
+            bitrate_bps: 32_000,
+            ..AudioConfig::default()
+        };
+        let mut encoder = AudioEncoder::new(config).unwrap();
+        let silence = vec![0i16; config.samples_per_frame()];
+        let packet = encoder.encode(&silence).unwrap().unwrap();
+
+        let mut decoder = AudioDecoder::new(config.sample_rate, config.channels).unwrap();
+        let pcm = decoder.decode(&packet.data).unwrap();
+        // 20 ms @ 48 kHz mono → 960 interleaved f32 samples.
+        assert_eq!(pcm.len(), 960);
+        assert!(pcm.iter().all(|&s| s.abs() < 0.01));
+    }
+
+    #[cfg(feature = "opus")]
+    #[test]
+    fn test_decoder_rejects_garbage() {
+        let mut decoder = AudioDecoder::new(48000, 1).unwrap();
+        assert!(decoder.decode(&[0xFF, 0xFE, 0x7F]).is_err());
     }
 
     #[cfg(feature = "opus")]

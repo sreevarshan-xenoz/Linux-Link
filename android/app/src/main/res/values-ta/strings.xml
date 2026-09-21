@@ -46,6 +46,11 @@
     <string name="full_quality_on">முழு தரம்: இயக்கம்</string>
     <string name="full_quality_off">முழு தரம்: முடக்கம்</string>
     <string name="full_quality_error">முழு தரம்: %1$s</string>
+    <string name="mic_on">மைக்: இயக்கம்</string>
+    <string name="mic_off">மைக்: முடக்கம்</string>
+    <string name="mic_error">மைக் பகிர்வு: %1$s</string>
+    <string name="mic_unavailable">இந்த சாதனத்தில் Opus என்கோடர் இல்லை (Android 9+)</string>
+    <string name="mic_permission_denied">மைக்ரோஃபோன் அனுமதி மறுக்கப்பட்டது</string>
     <string name="lock_pc">PC பூட்டு</string>
     <string name="blackout">கருப்புத் திரை</string>
     <string name="pip">PiP</string>

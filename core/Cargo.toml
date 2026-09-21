@@ -62,7 +62,9 @@ wayland-backend = { version = "0.3", optional = true }
 bitflags = { version = "2", optional = true }
 tokio-util.workspace = true
 
-# Audio encoding (server-only — Android client only decodes raw Opus packets)
+# Audio coding (Opus). Server: desktop-audio encode + phone-mic decode (R4 E2).
+# The Android bridge deliberately does NOT enable it (CMake cross-compile);
+# the phone encodes mic audio with MediaCodec instead.
 opus = { workspace = true, optional = true }
 
 # Video encoding (Linux-only, optional)

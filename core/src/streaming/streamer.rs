@@ -43,6 +43,12 @@ pub struct StreamingServer {
     adaptive_bitrate: Option<AdaptiveBitrate>,
     /// Channel for routing input events received from client over this QUIC connection
     input_tx: Option<tokio::sync::broadcast::Sender<InputPacket>>,
+    /// R4 E2: routing for client→server mic audio. `InputPacket::Mic` frames
+    /// are intercepted by the monitor task (never injected, never dropped by
+    /// view-only) and forwarded here; the server crate's mic relay decodes
+    /// them into a PipeWire source. Bounded with drop-on-full: stale mic
+    /// audio is worse than gaps. If unset, mic packets are discarded.
+    mic_tx: Option<tokio::sync::mpsc::Sender<InputPacket>>,
     /// Optional pairing enforcement: called with the device id the client
     /// announced in-band (None if it sent none); returning false rejects the
     /// session before capture starts. See `set_pairing_gate`.
@@ -81,6 +87,7 @@ impl StreamingServer {
             bitrate_tx,
             adaptive_bitrate: None,
             input_tx: None,
+            mic_tx: None,
             pairing_gate: None,
             telemetry: false,
             view_only: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -115,6 +122,12 @@ impl StreamingServer {
     /// values and forward them through this channel for injection on the host system.
     pub fn set_input_channel(&mut self, tx: tokio::sync::broadcast::Sender<InputPacket>) {
         self.input_tx = Some(tx);
+    }
+
+    /// Set a channel to receive `InputPacket::Mic` frames from the client
+    /// (R4 E2 reverse audio). See the `mic_tx` field docs.
+    pub fn set_mic_channel(&mut self, tx: tokio::sync::mpsc::Sender<InputPacket>) {
+        self.mic_tx = Some(tx);
     }
 
     /// Require pairing before any video/input pipeline starts.
@@ -629,6 +642,7 @@ impl StreamingServer {
         let monitor_window_tx = window_tx;
         let monitor_view_only = self.view_only.clone();
         let monitor_full_quality = self.full_quality.clone();
+        let monitor_mic_tx = self.mic_tx.clone();
         let monitor_span = tracing::info_span!("connection_monitor");
         tasks.spawn(async move {
             info!("Connection monitor started");
@@ -696,6 +710,18 @@ impl StreamingServer {
                                                     monitor_full_quality
                                                         .store(enabled, Ordering::Relaxed);
                                                     info!(enabled, "Relay quality override changed");
+                                                    continue;
+                                                }
+                                                // Mic audio (R4 E2) is session
+                                                // media, not injected input — it
+                                                // flows to the relay even while
+                                                // view-only is latched.
+                                                if matches!(packet, InputPacket::Mic { .. }) {
+                                                    if let Some(tx) = &monitor_mic_tx
+                                                        && tx.try_send(packet).is_err()
+                                                    {
+                                                        debug!("Mic relay full: dropping frame");
+                                                    }
                                                     continue;
                                                 }
                                                 if monitor_view_only

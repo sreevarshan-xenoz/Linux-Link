@@ -10,6 +10,7 @@ pub mod hyprland;
 pub mod input_injector;
 pub mod iroh_endpoint;
 pub mod kde;
+pub mod mic_relay;
 pub mod notification_monitor;
 pub mod plugins;
 pub mod privacy;

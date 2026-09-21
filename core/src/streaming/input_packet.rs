@@ -18,6 +18,7 @@ const TAG_REQUEST_KEYFRAME: u8 = 7;
 const TAG_WINDOW_CROP: u8 = 8;
 const TAG_VIEW_ONLY: u8 = 9;
 const TAG_FULL_QUALITY: u8 = 10;
+const TAG_MIC: u8 = 11;
 
 /// A compact binary input event for real-time remote control.
 ///
@@ -74,6 +75,14 @@ pub enum InputPacket {
     /// default false). `true` disables the clamp for this session; video
     /// quality then depends on relay capacity. Control-plane, never injected.
     FullQuality { enabled: bool },
+    /// R4 E2 reverse audio (phone mic → desktop virtual microphone).
+    /// `enabled` is the mic-session latch: `true` with an `opus` payload
+    /// carries one 20 ms Opus frame (48 kHz mono); `true` with an empty
+    /// payload is a start/keep-alive; `false` tears the sink down.
+    /// Never injected as input and NOT blocked by view-only — it is media
+    /// the phone user chooses to broadcast, handled server-side by the
+    /// mic relay (decode Opus → feed a PipeWire source).
+    Mic { enabled: bool, opus: Vec<u8> },
     /// Gamepad state: 6 analog axes + 16-bit button bitmask.
     Gamepad {
         /// Left stick X, Left stick Y, Right stick X, Right stick Y, L2, R2.
@@ -142,6 +151,14 @@ impl InputPacket {
             }
             InputPacket::FullQuality { enabled } => {
                 vec![TAG_FULL_QUALITY, if *enabled { 1 } else { 0 }]
+            }
+            InputPacket::Mic { enabled, opus } => {
+                let mut buf = Vec::with_capacity(6 + opus.len());
+                buf.push(TAG_MIC);
+                buf.push(if *enabled { 1 } else { 0 });
+                buf.extend_from_slice(&(opus.len() as u32).to_le_bytes());
+                buf.extend_from_slice(opus);
+                buf
             }
             InputPacket::WindowCrop {
                 x,
@@ -261,6 +278,18 @@ impl InputPacket {
                 anyhow::ensure!(data.len() == 2, "FullQuality packet must be 2 bytes");
                 Ok(InputPacket::FullQuality {
                     enabled: data[1] != 0,
+                })
+            }
+            TAG_MIC => {
+                anyhow::ensure!(data.len() >= 6, "Mic packet needs a 6-byte header");
+                let len = u32::from_le_bytes(data[2..6].try_into().unwrap()) as usize;
+                anyhow::ensure!(
+                    data.len() == 6 + len,
+                    "Mic packet payload must match its length prefix"
+                );
+                Ok(InputPacket::Mic {
+                    enabled: data[1] != 0,
+                    opus: data[6..].to_vec(),
                 })
             }
             TAG_WINDOW_CROP => {
@@ -552,6 +581,57 @@ mod tests {
         }
         assert!(InputPacket::decode(&[10]).is_err());
         assert!(InputPacket::decode(&[10, 1, 1]).is_err());
+    }
+
+    #[test]
+    fn test_mic_roundtrip() {
+        let packet = InputPacket::Mic {
+            enabled: true,
+            opus: vec![0x01, 0xFE, 0x20, 0x00, 0x10],
+        };
+        let data = packet.encode();
+        assert_eq!(data.len(), 11); // 6-byte header + 5-byte payload
+        let decoded = InputPacket::decode(&data).unwrap();
+        match decoded {
+            InputPacket::Mic { enabled, opus } => {
+                assert!(enabled);
+                assert_eq!(opus, vec![0x01, 0xFE, 0x20, 0x00, 0x10]);
+            }
+            _ => panic!("Wrong variant"),
+        }
+    }
+
+    #[test]
+    fn test_mic_start_and_stop_frames() {
+        // Start / keep-alive: enabled with empty payload.
+        let start = InputPacket::Mic {
+            enabled: true,
+            opus: Vec::new(),
+        }
+        .encode();
+        assert_eq!(start, vec![11, 1, 0, 0, 0, 0]);
+        // Stop: disabled, empty payload.
+        let stop = InputPacket::Mic {
+            enabled: false,
+            opus: Vec::new(),
+        }
+        .encode();
+        assert_eq!(stop, vec![11, 0, 0, 0, 0, 0]);
+        assert!(matches!(
+            InputPacket::decode(&stop).unwrap(),
+            InputPacket::Mic {
+                enabled: false,
+                ref opus
+            } if opus.is_empty()
+        ));
+    }
+
+    #[test]
+    fn test_mic_framing_strict() {
+        // Truncated header, lying length prefix, and trailing garbage all fail.
+        assert!(InputPacket::decode(&[11, 1, 0, 0]).is_err());
+        assert!(InputPacket::decode(&[11, 1, 5, 0, 0, 0, 1, 2]).is_err());
+        assert!(InputPacket::decode(&[11, 1, 0, 0, 0, 0, 9]).is_err());
     }
 
     #[test]

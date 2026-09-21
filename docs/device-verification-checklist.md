@@ -131,6 +131,17 @@ place.
 - [ ] Audio sheet opens with volume %, mute state, sink list (matches `wpctl status`).
 - [ ] Slider → desktop volume changes on release; mute switch works; selecting a sink routes default output (verify with `wpctl inspect` + real playback).
 
+## 10a. Phone mic share (R4 E2)
+
+- [ ] "Mic: off" tap → RECORD_AUDIO permission dialog; denying it toasts "Microphone permission denied" and the toggle stays off.
+- [ ] Granting it → button reads "Mic: on" (amber) and the desktop gains a source: `pactl list short sources | grep linux_link_mic` (or pavucontrol → Recording).
+- [ ] Speaking moves the pavucontrol input meter for "Linux Link Mic"; `pw-record --target linux_link_mic /tmp/mic.wav` captures audible speech (play it back).
+- [ ] "Mic: on" tap → source disappears immediately; `pgrep -f linux_link_mic` empty (no leaked pw-loopback children after repeated toggling).
+- [ ] View-only latched → mic keeps flowing (it is session media, not injected input); input is still dropped.
+- [ ] Exit the session while mic is on → source disappears (release-on-dispose); force-killing the phone app → source gone within the QUIC idle timeout (~45 s).
+- [ ] Screen off / PiP while mic is on (Android 14+): audio keeps flowing — the FGS carries the microphone type (logcat: no SecurityException, no silent AudioRecord).
+- [ ] WAN (relayed or direct) session: the same checks pass over the iroh path.
+
 ## 11. WAN over iroh (R1)
 
 - [ ] On same LAN: identity cached (logcat), status shows LAN.
