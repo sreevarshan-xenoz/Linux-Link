@@ -51,5 +51,7 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.ui:ui-tooling-preview")
+    // R4 E6: foldable / large-screen posture (FoldingFeature) for the dual-pane layout.
+    implementation("androidx.window:window:1.5.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

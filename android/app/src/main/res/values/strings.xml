@@ -69,6 +69,12 @@
     <string name="pip">PiP</string>
     <string name="blackout_unlock">Blackout — double-tap to unlock</string>
 
+    <!-- R4 E6: foldable / tablet dual-pane -->
+    <string name="pane_auto">Pane: auto</string>
+    <string name="pane_dual">Pane: dual</string>
+    <string name="pane_single">Pane: single</string>
+    <string name="trackpad_hint">Trackpad — drag to move, tap to click, two fingers to scroll</string>
+
     <!-- Foreground-service + notification relay -->
     <string name="channel_session">Remote desktop session</string>
     <string name="notif_streaming">Streaming to %1$s</string>

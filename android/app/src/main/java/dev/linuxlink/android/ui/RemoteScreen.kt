@@ -16,8 +16,10 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -74,6 +76,18 @@ fun RemoteScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var mode by remember { mutableStateOf(InputMode.DirectTouch) }
+    // R4 E6: foldable / tablet dual-pane. Auto-follows the hinge posture (or a
+    // large window); the "Pane" button cycles Auto → Dual → Single → Auto.
+    var paneMode by remember { mutableStateOf(PaneMode.Auto) }
+    val activity = remember(context) { context.findActivity() }
+    val foldSplit = rememberFoldingSplit(activity)
+    fun cyclePane() {
+        paneMode = when (paneMode) {
+            PaneMode.Auto -> PaneMode.Dual
+            PaneMode.Dual -> PaneMode.Single
+            PaneMode.Single -> PaneMode.Auto
+        }
+    }
     var clipboardSync by remember { mutableStateOf(true) }
     var showHistory by remember { mutableStateOf(false) }
     // R3#7 single-window streaming: the picked window + the layout box the
@@ -497,11 +511,36 @@ fun RemoteScreen(
 
     val metrics = remember { context.resources.displayMetrics }
 
-    Box(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .background(androidx.compose.ui.graphics.Color.Black),
     ) {
+        // A hinge (FoldingFeature) or a large window splits the session into a
+        // stream pane and a control dock (native trackpad + shortcut bar), so
+        // the finger never covers the remote view — RustDesk's tablet UI is
+        // just a stretched phone layout; we own both endpoints and can split.
+        val wide = maxWidth >= 600.dp
+        val autoDual = foldSplit != PaneSplit.None || wide
+        val dualPane = when (paneMode) {
+            PaneMode.Auto -> autoDual
+            PaneMode.Dual -> true
+            PaneMode.Single -> false
+        }
+        val split = when {
+            !dualPane -> PaneSplit.None
+            foldSplit != PaneSplit.None -> foldSplit
+            else -> PaneSplit.Vertical // tablet / unfolded, no hinge axis to read
+        }
+        val vertical = split == PaneSplit.Vertical
+        // Only the stream Box's size changes across a fold, so the SurfaceView
+        // subtree is reused — the decode session is not torn down on a hinge.
+        val streamMod = when {
+            !dualPane -> Modifier.fillMaxSize()
+            vertical -> Modifier.fillMaxHeight().fillMaxWidth(0.5f).align(Alignment.CenterStart)
+            else -> Modifier.fillMaxWidth().fillMaxHeight(0.5f).align(Alignment.TopCenter)
+        }
+        Box(modifier = streamMod) {
         if (showStream) {
             RemoteDesktopView(
                 address = address,
@@ -790,13 +829,42 @@ fun RemoteScreen(
                     ) {
                         Text(stringResource(R.string.pip), color = Color.White)
                     }
+                    TextButton(onClick = { cyclePane() }) {
+                        val paneLabel = when (paneMode) {
+                            PaneMode.Auto -> stringResource(R.string.pane_auto)
+                            PaneMode.Dual -> stringResource(R.string.pane_dual)
+                            PaneMode.Single -> stringResource(R.string.pane_single)
+                        }
+                        Text(
+                            paneLabel,
+                            color = if (dualPane) Color(0xFF80C0FF) else Color.White,
+                        )
+                    }
                 }
-                ShortcutBar(
-                    address = address,
-                    port = port,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                // In dual-pane the shortcut bar lives in the dock beside the
+                // trackpad; here it stays under the stream.
+                if (!dualPane) {
+                    ShortcutBar(
+                        address = address,
+                        port = port,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             }
+        }
+        }
+
+        // The dock pane: a native trackpad + shortcut bar on the far side of
+        // the hinge (or beside the stream on a tablet). Chrome is hidden in
+        // PiP, where the window is thumb-sized and goes to the system.
+        if (dualPane && !inPictureInPicture) {
+            val dockMod =
+                if (vertical) {
+                    Modifier.fillMaxHeight().fillMaxWidth(0.5f).align(Alignment.CenterEnd)
+                } else {
+                    Modifier.fillMaxWidth().fillMaxHeight(0.5f).align(Alignment.BottomCenter)
+                }
+            ControlDock(address = address, port = port, modifier = dockMod)
         }
 
         // Blackout overlay: last child = topmost. Opaque black covers the

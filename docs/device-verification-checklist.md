@@ -274,6 +274,18 @@ place.
 - [ ] Force-stop app mid-stream: desktop auto-releases privacy within TTL, encoder sessions stop (no server-side zombie capture), siren/WoL relays unaffected.
 - [ ] Airplane-mode mid-session then back: clean Down chip + retry, no ANR.
 
+## 17. Foldable / tablet dual-pane (R4 E6)
+
+- [ ] On a foldable folded to half-open (vertical hinge): session auto-splits — desktop video on one pane, trackpad + shortcut dock on the other; tapping/dragging the dock moves the desktop cursor and the finger never covers the video.
+- [ ] Rotate to a horizontal hinge → split flips to top/bottom (stream top, dock bottom) and vice-versa.
+- [ ] Tablet / unfolded (≥600 dp, no hinge): dual-pane auto-engages with a left|right split.
+- [ ] "Pane: auto/dual/single" button cycles the override; forcing Single on a foldable restores the old full-screen layout; forcing Dual on a phone splits it.
+- [ ] Toggling panes mid-session does NOT drop the stream (the decode session survives the fold — check fps continuity / no re-Keyframe gap).
+- [ ] Direct-touch taps on the video pane still hit the right desktop point (letterbox/aspect-fit recompute for the half-width pane).
+- [ ] Shortcut bar appears once — in the dock while dual, under the stream while single.
+- [ ] Blackout still covers BOTH panes (whole window), not just the stream.
+- [ ] es/ta: "Pane:" and trackpad hint localize.
+
 ## Recording results
 
 Update `AGENTS.md` Current Status (mark verified items / list failures) and

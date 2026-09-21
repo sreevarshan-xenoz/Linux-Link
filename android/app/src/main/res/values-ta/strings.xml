@@ -62,6 +62,12 @@
     <string name="pip">PiP</string>
     <string name="blackout_unlock">கருப்புத் திரை — திறக்க இருமுறை தட்டவும்</string>
 
+    <!-- R4 E6: மடிப்பு / டேப்லெட் இரட்டைப் பலகம் -->
+    <string name="pane_auto">பலகம்: தானாக</string>
+    <string name="pane_dual">பலகம்: இரட்டை</string>
+    <string name="pane_single">பலகம்: ஒற்றை</string>
+    <string name="trackpad_hint">டிராக்பேட் — நகர இழுக்கவும், சொடுக்க தட்டவும், உருள இரண்டு விரல்கள்</string>
+
     <!-- Foreground-service + notification relay -->
     <string name="channel_session">தொலைநுணுக பணித்தள அமர்வு</string>
     <string name="notif_streaming">%1$s க்கு ஸ்ட்ரீம் செய்கிறது</string>

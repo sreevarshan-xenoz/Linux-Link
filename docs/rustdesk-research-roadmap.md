@@ -415,9 +415,24 @@ these anywhere — that's the moat)
   arbiter already floors relayed paths (A3) and the user picks a profile
   explicitly; per-link auto-resolution/codec presets are a deliberate
   non-goal given the architecture.*
-- **E6 · Foldable/tablet dual-pane** — stream on one half, native trackpad +
-  shortcut dock on the other (we own both endpoints; RustDesk's tablet UI is
-  a stretched phone layout). (M, device-gated polish.)
+- **E6 · Foldable/tablet dual-pane** ✅ **Landed 2026-09-21** (device behavior
+  unverified — no foldable). New `ui/FoldableLayout.kt`: `rememberFoldingSplit`
+  observes `WindowInfoTracker.windowLayoutInfo` and maps a `FoldingFeature`
+  hinge to a split axis (vertical hinge → left|right, horizontal → top|bottom);
+  `TrackpadDock` is a standalone indirect-control surface (drag → relative
+  move, tap → click, two fingers → scroll) reusing the same ordered-dispatcher
+  input calls as the in-view trackpad; `ControlDock` stacks it over the desktop
+  `ShortcutBar`. `RemoteScreen` becomes a `BoxWithConstraints`: the session
+  (video + HUD + status + controls) lives in a stream pane sized to one half,
+  the dock to the other; dual-pane auto-engages on a hinge **or** a ≥600 dp
+  window (tablet/unfolded) and a "Pane: auto/dual/single" button cycles the
+  override. The stream `Box` is a stable subtree whose modifier changes across
+  a fold, so the `SurfaceView`/decoder is not torn down. Shortcut bar moves
+  from under the stream to the dock while dual. `androidx.window:window:1.5.0`
+  added (cached offline). Single-pane layout is byte-for-byte the previous
+  behavior. Gates: `assembleDebug` + `lintDebug` clean (no new findings; the
+  only RemoteScreen lints are the pre-existing `context.resources` +
+  Int-state advisories), en/es/ta strings shipped.
 
 ### Explicit non-goals (from the research)
 - WebRTC stack (QUIC benchmarks at least as well; rewrites buy nothing).
@@ -430,7 +445,7 @@ these anywhere — that's the moat)
 ## 6. Suggested execution order
 A1 ✅ → A2 ✅ → B1 ✅ → D1 ✅ → A3/E5 ✅ → B2 ✅ → D3 ✅ → C1 ✅ → E2 ✅ →
 C2 ✅ → D2 ✅ → E3 ✅ → B3 ✅ → D4 ✅ → E1 ✅ → C3 ✅ → E5-remainder ✅ →
-E4 ✅ → (C4, E6 when hardware/device allows). Rationale: telemetry and consent
+E4 ✅ → E6 ✅ → (C4 hardware-gated). Rationale: telemetry and consent
 features are cheap trust-builders and unblock honest codec/relay presets;
 screencopy is the biggest measurable latency win testable on this box today;
 codec ladder comes after negotiation groundwork.

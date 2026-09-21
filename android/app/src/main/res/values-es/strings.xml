@@ -62,6 +62,12 @@
     <string name="pip">PiP</string>
     <string name="blackout_unlock">Pantalla negra — doble toque para desbloquear</string>
 
+    <!-- R4 E6: pane plegable / tableta -->
+    <string name="pane_auto">Panel: automático</string>
+    <string name="pane_dual">Panel: doble</string>
+    <string name="pane_single">Panel: simple</string>
+    <string name="trackpad_hint">Panel táctil — arrastra para mover, toca para hacer clic, dos dedos para desplazar</string>
+
     <!-- Foreground-service + notification relay -->
     <string name="channel_session">Sesión de escritorio remoto</string>
     <string name="notif_streaming">Transmitiendo a %1$s</string>
