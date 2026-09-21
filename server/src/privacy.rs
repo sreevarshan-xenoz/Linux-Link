@@ -11,6 +11,15 @@
 //! activation carries a TTL that the phone must keep refreshing; a watchdog
 //! thread releases it when the TTL lapses (phone crash / dropped link), and
 //! closing the device files releases the grabs on process exit anyway.
+//!
+//! R4 E4: on a wlroots desktop that advertises `zwlr_layer_shell_v1`, grabbing
+//! also paints a full-perimeter "session active" shield (core
+//! [`linux_link_core::streaming::shield`]) so bystanders can see the machine is
+//! being driven remotely. It rides the same lifecycle — shown on the first
+//! grab, torn down on release/expiry — and is a no-op where the protocol is
+//! absent. (Local input *blocking* is the `EVIOCGRAB` above; this box's
+//! Hyprland does not advertise `zwp_input_inhibitor_v1`, so the compositor-
+//! native alternative is intentionally not attempted.)
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,6 +27,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use evdev::{AttributeSetRef, Device, KeyCode};
+use linux_link_core::streaming::shield::{self, PrivacyShield};
 
 /// How long a grab lives without a refresh from the phone. The client
 /// re-arms well before this (see the Kotlin poll cadence).
@@ -29,6 +39,9 @@ const WATCHDOG_INTERVAL: Duration = Duration::from_secs(5);
 struct GrabState {
     devices: Vec<Device>,
     expires: Option<Instant>,
+    /// R4 E4 compositor shield — present only while a grab is active *and* the
+    /// desktop advertised `zwlr_layer_shell_v1`. Dropped (unmapped) on release.
+    shield: Option<PrivacyShield>,
 }
 
 fn grab_state() -> &'static Mutex<GrabState> {
@@ -37,6 +50,7 @@ fn grab_state() -> &'static Mutex<GrabState> {
         Mutex::new(GrabState {
             devices: Vec::new(),
             expires: None,
+            shield: None,
         })
     })
 }
@@ -117,6 +131,13 @@ pub fn grab_input(ttl: Duration) -> Result<usize, String> {
     tracing::info!("privacy: grabbed {count} physical input device(s) for {ttl:?}");
     state.devices = grabbed;
     state.expires = Some(Instant::now() + ttl);
+    // R4 E4: paint the compositor shield so bystanders see the session is
+    // live. Best-effort — on a headless/non-layer-shell desktop this is None
+    // and the input grab stands on its own.
+    state.shield = shield::show();
+    if state.shield.is_some() {
+        tracing::info!("privacy: layer-shell privacy shield engaged");
+    }
     Ok(count)
 }
 
@@ -129,6 +150,8 @@ pub fn release_input() -> usize {
     }
     state.devices.clear();
     state.expires = None;
+    // Dropping the shield tears down its layer surface (unmaps the frame).
+    state.shield = None;
     if count > 0 {
         tracing::info!("privacy: released {count} input device(s)");
     }

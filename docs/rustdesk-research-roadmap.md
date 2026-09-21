@@ -377,11 +377,28 @@ these anywhere — that's the moat)
   packet read; the network leg is an RTT/2 estimate, not a timestamped
   one-way. Manual cross-check (film a second device's stopwatch / tap-test)
   lives in the device checklist. Tests: sample math + EWMA seed/smooth/reset.
-- **E4 · Blackout-aware privacy shield on desktop.** We already EVIOCGRAB
-  locally; add a compositor "shield" — Hyprland invisible-block for the
-  grabbed inputs + an optional full-screen "Linux Link session active"
-  overlay (layer-shell) so bystanders and the user's own keyboard know.
-  Pairs with the blackout mode on the phone for a true pocket-remote story.
+- **E4 · Blackout-aware privacy shield on desktop.** ✅ **Landed (2026-09-21),
+  honest scope: the *visual* shield.** While a session is live the desktop now
+  paints a full-perimeter "session active" frame with `zwlr_layer_shell_v1`
+  (`core/src/streaming/shield.rs`) — a transparent-centre, opaque-red ring so
+  bystanders see the machine is remote-driven while the user's own desktop
+  stays fully visible and the remote keeps working. It rides the Tier-3 #15
+  lifecycle: shown on the first `EVIOCGRAB`, torn down on release/TTL expiry,
+  controlled by the phone's existing **Privacy: on/off** toggle (no new wire
+  packet, no new JNI). Geometry is a pure unit-tested function
+  (`render_shield`); a `#[ignore]`d live test maps the layer and confirms the
+  edge pixels through the B1 screencopy backend (**verified on this Hyprland
+  box**). Binds `zwlr_layer_shell_v1`/`wl_shm` defensively → `None` no-op on
+  GNOME/KDE/headless/X11-only. The **input-block** half is *already* satisfied
+  device-side by `EVIOCGRAB`; the compositor-native alternative
+  `zwp_input_inhibitor_v1` is deliberately **not** attempted — this box's
+  Hyprland does not advertise that global, and the grab path works without it
+  (the invisible-block would be a redundant second mechanism). The ring is
+  text-free by design: rendering "Linux Link session active" glyphs needs a
+  font/text rasteriser we deliberately do not add — a saturated frame is an
+  unambiguous signal on its own. Frame geometry is fixed at show() time (a
+  mid-session resolution change is acked but not re-rendered; the compositor
+  scales it) — honest, documented limitation.
 - **E5 · Adaptive profile presets per link state** (builds on A1–A3):
   named HUD profiles — Auto / Quality / Balanced / Economy — switchable in
   one tap. ✅ *Landed (2026-09-21), honest axis scope: the preset moves the
@@ -413,7 +430,7 @@ these anywhere — that's the moat)
 ## 6. Suggested execution order
 A1 ✅ → A2 ✅ → B1 ✅ → D1 ✅ → A3/E5 ✅ → B2 ✅ → D3 ✅ → C1 ✅ → E2 ✅ →
 C2 ✅ → D2 ✅ → E3 ✅ → B3 ✅ → D4 ✅ → E1 ✅ → C3 ✅ → E5-remainder ✅ →
-(C4, E4, E6 when hardware/device allows). Rationale: telemetry and consent
+E4 ✅ → (C4, E6 when hardware/device allows). Rationale: telemetry and consent
 features are cheap trust-builders and unblock honest codec/relay presets;
 screencopy is the biggest measurable latency win testable on this box today;
 codec ladder comes after negotiation groundwork.

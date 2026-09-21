@@ -192,10 +192,13 @@ place.
 - [ ] Forward-compat: hand-inject a `kdeconnect.linuxlink.privacy` line with an extra unknown
       top-level field and an unknown body key → server still parses and acts (unknown fields ignored).
 
-## 9. Privacy mode + lock (Tier-3 #15)
+## 9. Privacy mode + lock (Tier-3 #15, R4 E4)
 
 - [ ] "Privacy: on" → physical keyboard/mouse on desktop stop responding (`evtest`: grabs held), while phone input still flows.
+- [ ] Compositor shield (R4 E4, Hyprland/wlroots): the same "Privacy: on" also paints a full-perimeter red frame on every monitor within ~1 s; the desktop centre stays visible and interactive from the phone (the ring is `KeyboardInteractivity::None`, click-through). Desktop log shows "privacy: layer-shell privacy shield engaged".
 - [ ] Leave session with privacy on → release happens (phone app exit); also verify 10-min TTL auto-release by force-killing the phone app mid-grab.
+- [ ] Shield tears down with the grab: "Privacy: off" → the red frame disappears immediately; force-killing the phone app mid-grab → frame gone after the TTL auto-release.
+- [ ] Non-wlroots desktop (GNOME/KDE/X11, or `LINUX_LINK_SCREENCOPY=0` headless): no shield is attempted — grab still works, no crash, no "shield engaged" log line.
 - [ ] "Lock PC" / session-notification "Lock desktop" → screen locks (loginctl path).
 - [ ] Without `input` group: clean error, no crash.
 

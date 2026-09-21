@@ -32,6 +32,8 @@ pub mod encoder;
 pub mod encoder_inproc;
 #[cfg(feature = "encode")]
 pub mod nvenc_power;
+#[cfg(feature = "capture")]
+pub mod shield;
 #[cfg(feature = "server")]
 pub mod streamer;
 
