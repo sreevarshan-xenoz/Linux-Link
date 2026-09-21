@@ -209,6 +209,12 @@ object RustCore {
     data class StreamingStats(
         val fps: Double,
         val bitrateKbps: Long,
+        /**
+         * R4 E3 compositor-true end-to-end estimate, ms: capture→send age
+         * measured on the desktop clock (carried in every video packet
+         * header) + one transport leg (RTT/2). Excludes the phone's own
+         * decode→panel latency; 0 until the first video packet arrives.
+         */
         val e2eLatencyMs: Long,
         val frameDrops: Long,
         /** "lan" | "wan_direct" | "wan_relayed" | "wan" | "none" (R4 A1). */

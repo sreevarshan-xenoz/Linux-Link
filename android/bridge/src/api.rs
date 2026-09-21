@@ -1432,7 +1432,6 @@ pub fn get_session_status() -> SessionStatus {
 
 /// Get detailed streaming session statistics.
 pub fn get_streaming_stats() -> StreamingStatsDto {
-    let rtt_ms = STREAMING_RTT_US.load(Ordering::Relaxed) / 1000;
     let frame_count = STREAMING_FRAME_COUNT.load(Ordering::Relaxed);
     let byte_count = STREAMING_BYTE_COUNT.load(Ordering::Relaxed);
     let elapsed = crate::STREAMING_START_TIME
@@ -1456,7 +1455,10 @@ pub fn get_streaming_stats() -> StreamingStatsDto {
     StreamingStatsDto {
         fps: (fps * 10.0).round() / 10.0,
         bitrate_kbps,
-        e2e_latency_ms: rtt_ms,
+        // R4 E3: real compositor-true estimate (capture→send age measured
+        // on the desktop clock + one network leg), EWMA'd in the core
+        // client. 0 until the session's first video packet.
+        e2e_latency_ms: linux_link_core::streaming::client::e2e_estimate_ms(),
         frame_drops: 0,
         link_state: match crate::LINK_STATE.load(Ordering::Relaxed) {
             1 => "lan",

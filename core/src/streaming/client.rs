@@ -37,6 +37,49 @@ pub(crate) const CODEC_CAPS_MARKER: [u8; 2] = [0xFD, 0x00];
 /// H.264 is assumed for every client; future bits cover AV1 etc.
 pub const CODEC_CAP_HEVC: u8 = 0b0000_0001;
 
+/// R4 E3 — compositor-true end-to-end latency probe.
+///
+/// Every video packet header carries the frame's *age at send* measured on
+/// the desktop clock: `Instant::elapsed()` of the capture instant, which on
+/// the damage-driven backends is the compositor's copy moment. That makes
+/// the dominant, variable part of the latency chain measurable without any
+/// cross-device clock sync: sample = capture→send age (pure server-clock
+/// interval) + one network leg (transport RTT / 2). What it deliberately
+/// does NOT include: the phone's decode→panel present (unmeasurable from
+/// software) and any queueing after the client's packet read.
+static E2E_EWMA_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// One probe sample in ms (see [`E2E_EWMA_MS`] docs for semantics/limits).
+pub fn e2e_sample_ms(capture_age_us: u64, rtt: Duration) -> u64 {
+    capture_age_us / 1_000 + (rtt.as_millis() as u64) / 2
+}
+
+/// EWMA (¾ old, ¼ new) so the HUD doesn't jitter per frame. First sample
+/// after [`reset_e2e_probe`] seeds it directly.
+pub fn record_e2e_sample(sample_ms: u64) {
+    use std::sync::atomic::Ordering;
+    E2E_EWMA_MS
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |prev| {
+            Some(if prev == 0 {
+                sample_ms.max(1)
+            } else {
+                (3 * prev + sample_ms) / 4
+            })
+        })
+        .ok();
+}
+
+/// Smoothed compositor-true e2e estimate, ms. 0 until the first video
+/// packet of the current session arrives (per-session seed, not stale data).
+pub fn e2e_estimate_ms() -> u64 {
+    E2E_EWMA_MS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Clear the probe at session start.
+pub fn reset_e2e_probe() {
+    E2E_EWMA_MS.store(0, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// QUIC Stream Client — connects to a StreamingServer and receives H.264 video frames.
 ///
 /// # Usage
@@ -409,6 +452,7 @@ async fn recv_with_cancel(
     cancel: CancellationToken,
 ) -> Result<()> {
     info!("Starting packet receiver (video + audio)");
+    reset_e2e_probe();
 
     // Video sequence-gap tracking for IDR requests. Because each frame is sent
     // on its own unidirectional stream, frames can complete out of order; we
@@ -495,6 +539,15 @@ async fn recv_with_cancel(
                                 }
                             }
                             last_video_seq = Some(header.sequence);
+
+                            // R4 E3: compositor-true latency sample — the
+                            // header's age is capture→send on the desktop
+                            // clock, plus half the transport RTT for the
+                            // wire leg.
+                            record_e2e_sample(e2e_sample_ms(
+                                header.timestamp_us,
+                                connection.stats().rtt,
+                            ));
 
                             // Route to video channel
                             let packet = EncodedPacket {
@@ -589,6 +642,29 @@ async fn send_stats_loop(connection: &SharedConnection, cancel: CancellationToke
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn e2e_sample_math() {
+        // 12.34 ms capture→send age + 51 ms RTT (25.5 → 25 ms one-way).
+        assert_eq!(e2e_sample_ms(12_340, Duration::from_millis(51)), 12 + 25);
+        assert_eq!(e2e_sample_ms(0, Duration::ZERO), 0);
+    }
+
+    #[test]
+    fn e2e_ewma_seed_smooth_and_reset() {
+        reset_e2e_probe();
+        assert_eq!(
+            e2e_estimate_ms(),
+            0,
+            "fresh session must not show stale data"
+        );
+        record_e2e_sample(100);
+        assert_eq!(e2e_estimate_ms(), 100, "first sample seeds directly");
+        record_e2e_sample(0);
+        assert_eq!(e2e_estimate_ms(), 75, "EWMA must be 3/4 old + 1/4 new");
+        reset_e2e_probe();
+        assert_eq!(e2e_estimate_ms(), 0);
+    }
 
     #[test]
     fn test_streaming_client_new() {

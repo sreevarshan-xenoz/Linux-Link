@@ -98,6 +98,19 @@ place.
 - [ ] Phone disconnect (normal Exit) → status line goes away within ~2 s; no leftover session in
       `live_sessions.json` (registry deregisters on pipeline exit).
 
+## 2b. Compositor-true latency read (R4 E3)
+
+- [ ] Sanity: on-LAN idle desktop → HUD `e2e` should sit in the low tens of ms and track the
+      `rtt` chip sensibly (e2e ≈ capture age + rtt/2); heavy desktop motion → `e2e` rises
+      (encoder/queue age grows), never reads 0 once video is flowing.
+- [ ] The old bug-shape check: `e2e` must NOT equal `rtt` while frames are under load (it used
+      to be a literal RTT proxy).
+- [ ] Cross-check (eyes, optional): point the phone camera at the desktop with an on-screen
+      clock/stopwatch — the phone's rendered image lags the physical panel by roughly the HUD
+      `e2e` figure (± the phone's own present latency, which the probe can't see).
+- [ ] WAN session: `e2e` should ≈ rtt/2 higher than a LAN session on the same desktop motion
+      (the network-leg term is RTT/2 by construction).
+
 ## 3. Input paths (R2#4, Tier 1 #2)
 
 - [ ] Direct-touch: tap = left click at the touched point (check `evtest` on desktop for BTN_LEFT, and MT finger down/up on the "Linux Link Virtual Touch" device — axis resolution may need tuning).

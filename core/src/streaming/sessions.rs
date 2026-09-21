@@ -156,8 +156,8 @@ mod tests {
     use crate::streaming::connection::{Connection, ConnectionStats, InStream, OutStream};
     use async_trait::async_trait;
     use std::net::{IpAddr, Ipv4Addr};
-    use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
 
     /// Connection double: only the D2 surface (address, family, close) is
     /// real; stream methods are never called by the registry.

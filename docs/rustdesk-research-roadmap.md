@@ -293,11 +293,23 @@ these anywhere — that's the moat)
   `microphone` FGS type (graceful: only OR-ed into `startForeground` once
   the grant exists). Mic survives view-only; stop button, exit and session
   teardown all remove the desktop source.
-- **E3 · E2E latency probe, compositor-true.** Round-trip the existing e2e
-  HUD number with a Hyprland-verified frame stamp: server renders a hidden
-  timestamp quads via a transient overlay, phone reads it off the decoded
-  surface — measures *display-to-touch-to-display*, not encode-to-decode.
-  RustDesk/Sunshine quote encode stats; nobody measures the real loop. (M.)
+- **E3 · E2E latency probe, compositor-true.** ✅ **Landed 2026-09-21**
+  (unit-verified; HUD numbers need a device). The literal survey idea —
+  server renders a timestamp quad, phone OCRs it off the decoded surface —
+  needs eyes + on-device pixel reading; the landed probe gets the *same
+  measurement* single-clock, no OCR, no clock sync: every video packet
+  header already carries the frame's capture→send age measured on the
+  desktop clock (the capture `Instant` survives sidecar + in-proc encoders,
+  and on damage-driven backends that instant IS the compositor's copy
+  moment), so sample = age + transport RTT/2, EWMA'd in
+  `core/src/streaming/client.rs` and reset per session. `linux_link_core…
+  client::e2e_estimate_ms()` now feeds the HUD's `e2e` field — replacing
+  the old number that was literally just RTT (bridge `get_streaming_stats`
+  proxied `rtt_ms`). Honest limits: excludes the phone's decode→panel
+  present (unmeasurable from software) and client-side queueing after the
+  packet read; the network leg is an RTT/2 estimate, not a timestamped
+  one-way. Manual cross-check (film a second device's stopwatch / tap-test)
+  lives in the device checklist. Tests: sample math + EWMA seed/smooth/reset.
 - **E4 · Blackout-aware privacy shield on desktop.** We already EVIOCGRAB
   locally; add a compositor "shield" — Hyprland invisible-block for the
   grabbed inputs + an optional full-screen "Linux Link session active"
