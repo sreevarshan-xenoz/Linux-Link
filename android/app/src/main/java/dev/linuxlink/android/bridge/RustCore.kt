@@ -1,6 +1,6 @@
 package dev.linuxlink.android.bridge
 
-import android.media.MediaCodecList
+import android.media.MediaCodec
 import org.json.JSONObject
 import java.io.File
 import java.nio.ByteBuffer
@@ -252,9 +252,13 @@ object RustCore {
         var caps = cachedCodecCaps
         if (caps < 0) {
             caps = runCatching {
-                val hevc = MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos.any { info ->
-                    info.isDecoder && info.supportedTypes.any { it == "video/hevc" }
-                }
+                // Instantiate-and-release probe: API 37's android.jar removed
+                // MediaCodecInfo.isDecoder(), so the codec-list scan C1 used
+                // no longer compiles. createDecoderByType throws exactly when
+                // no decoder for the type exists.
+                val hevc = runCatching {
+                    MediaCodec.createDecoderByType("video/hevc").release()
+                }.isSuccess
                 if (hevc) 0b1 else 0
             }.getOrDefault(0)
             cachedCodecCaps = caps
