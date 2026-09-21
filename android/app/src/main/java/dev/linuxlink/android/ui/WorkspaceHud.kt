@@ -6,8 +6,10 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -38,6 +40,10 @@ import org.json.JSONObject
  * pushes on the control channel. Numeric workspaces up to 9 switch on tap
  * through the same Super+N keybind injection the shortcut bar uses
  * (Hyprland's IPC dispatch write path is broken upstream).
+ *
+ * E1 adds a window-chip row: tapping a visible window pulls it into the
+ * stream through `onPullWindow`, which drives the same window-crop path the
+ * picker sheet uses — one gesture, no sheet.
  */
 private const val STATE_TYPE = "kdeconnect.linuxlink.hyprland.state"
 private const val EVENT_TYPE = "kdeconnect.linuxlink.hyprland.event"
@@ -46,6 +52,8 @@ private data class WorkspaceHudState(
     val workspaces: List<WsEntry>,
     val activeId: Int,
     val activeTitle: String?,
+    val windows: List<DesktopWindow> = emptyList(),
+    val screen: IntArray? = null,
 )
 
 private data class WsEntry(val id: Int, val name: String)
@@ -53,6 +61,18 @@ private data class WsEntry(val id: Int, val name: String)
 /** `"1:2"` / `"2:web"` → id 1 / 2; null when unparseable. */
 private fun parseWorkspaceRef(token: String): Int? =
     token.trim().substringBefore(':').toIntOrNull()
+
+private fun parseWindowArray(body: JSONObject): List<DesktopWindow> {
+    val arr = body.optJSONArray("windows") ?: return emptyList()
+    return (0 until arr.length()).mapNotNull { i ->
+        arr.optJSONObject(i)?.let { runCatching { desktopWindowFromJson(it) }.getOrNull() }
+    }
+}
+
+private fun parseScreenBox(body: JSONObject): IntArray? =
+    body.optJSONArray("screen")?.let {
+        if (it.length() < 4) null else intArrayOf(it.getInt(0), it.getInt(1), it.getInt(2), it.getInt(3))
+    }
 
 private fun parseState(body: JSONObject): WorkspaceHudState {
     val arr = body.optJSONArray("workspaces") ?: return WorkspaceHudState(emptyList(), -1, null)
@@ -65,7 +85,12 @@ private fun parseState(body: JSONObject): WorkspaceHudState {
     val activeId =
         if (body.isNull("activeWorkspace")) -1 else body.optInt("activeWorkspace", -1)
     val title = body.optString("activeTitle").ifBlank { null }
-    return WorkspaceHudState(entries, activeId, title)
+    val activeAddress = body.optString("activeAddress")
+    val windows =
+        parseWindowArray(body).map { w ->
+            if (w.address == activeAddress) w.copy(active = true) else w
+        }
+    return WorkspaceHudState(entries, activeId, title, windows, parseScreenBox(body))
 }
 
 /** Apply one socket2 event on top of the snapshot-derived state. */
@@ -123,6 +148,8 @@ fun WorkspaceHud(
     address: String,
     port: Int,
     modifier: Modifier = Modifier,
+    croppedAddress: String? = null,
+    onPullWindow: (DesktopWindow, IntArray?) -> Unit = { _, _ -> },
 ) {
     var hud by remember { mutableStateOf<WorkspaceHudState?>(null) }
     val scope = rememberCoroutineScope()
@@ -161,43 +188,94 @@ fun WorkspaceHud(
     }
 
     val state = hud ?: return
-    if (state.workspaces.isEmpty()) return
+    if (state.workspaces.isEmpty() && state.windows.isEmpty()) return
 
-    Row(
+    Column(
         modifier = modifier
             .clip(RoundedCornerShape(8.dp))
             .background(Color.Black.copy(alpha = 0.55f))
             .padding(horizontal = 6.dp, vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {
         Row(
-            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            state.workspaces.sortedBy { it.id }.forEach { ws ->
-                WorkspaceChip(
-                    ws = ws,
-                    active = ws.id == state.activeId,
-                    onClick =
-                        ws.switchAction(address, port)?.let { action ->
-                            { scope.launch(Dispatchers.IO) { action() } }
-                        },
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                state.workspaces.sortedBy { it.id }.forEach { ws ->
+                    WorkspaceChip(
+                        ws = ws,
+                        active = ws.id == state.activeId,
+                        onClick =
+                            ws.switchAction(address, port)?.let { action ->
+                                { scope.launch(Dispatchers.IO) { action() } }
+                            },
+                    )
+                }
+            }
+            val title = state.activeTitle
+            if (!title.isNullOrBlank()) {
+                Text(
+                    title,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    fontSize = 11.sp,
+                    color = Color.White.copy(alpha = 0.85f),
+                    modifier = Modifier.padding(start = 4.dp),
                 )
             }
         }
-        val title = state.activeTitle
-        if (!title.isNullOrBlank()) {
-            Text(
-                title,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                fontSize = 11.sp,
-                color = Color.White.copy(alpha = 0.85f),
-                modifier = Modifier.padding(start = 4.dp),
-            )
+        // E1: a window chip pulls that window into the stream (same crop path
+        // the window picker uses), so "what's on the desktop" and "stream this"
+        // collapse into one tap.
+        if (state.windows.isNotEmpty()) {
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                state.windows.forEach { w ->
+                    WindowChip(
+                        window = w,
+                        streamed = w.address == croppedAddress,
+                        onPull = { onPullWindow(w, state.screen) },
+                    )
+                }
+            }
         }
     }
+}
+
+/** E1 window chip: tap to crop-stream this window; re-tap to return to full desktop. */
+@Composable
+private fun WindowChip(
+    window: DesktopWindow,
+    streamed: Boolean,
+    onPull: () -> Unit,
+) {
+    val shape = RoundedCornerShape(6.dp)
+    val label = window.title.ifBlank { window.app.ifBlank { window.address } }
+    Text(
+        label,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        fontSize = 11.sp,
+        color = if (streamed) Color.Black else Color.White,
+        modifier = Modifier
+            .widthIn(max = 140.dp)
+            .clip(shape)
+            .then(
+                if (streamed) {
+                    Modifier.background(Color.White.copy(alpha = 0.9f))
+                } else {
+                    Modifier.border(1.dp, Color.White.copy(alpha = 0.35f), shape)
+                },
+            )
+            .clickable { onPull() }
+            .padding(horizontal = 8.dp, vertical = 2.dp),
+    )
 }
 
 /** Super+N keybinds exist for workspaces 1..9; named ones are display-only. */

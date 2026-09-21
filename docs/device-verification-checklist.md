@@ -158,6 +158,8 @@ place.
 
 - [ ] Workspace chips appear under StatsHud; open/close/focus a window on desktop → HUD updates within ~4 s.
 - [ ] Tap a chip ≤9 → Super+N injected → workspace switches.
+- [ ] R4 E1: a row of window chips (title/class) shows under the workspace chips on a Hyprland session; tap one → video re-encodes cropped to that window (same as the picker), the tapped chip goes solid/highlighted.
+- [ ] R4 E1: re-tap the highlighted window chip → crop clears back to whole-desktop (monitor) view; a *different* window chip tap switches the crop directly.
 - [ ] Battery chip shows desktop percentage + charging state; matches `upower`.
 
 ## 7. Clipboard + files (Tier 1 #4)

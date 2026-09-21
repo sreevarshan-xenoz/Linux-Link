@@ -62,6 +62,20 @@ data class WindowsListing(
 private fun jsonIntArray(arr: JSONArray?): IntArray =
     if (arr == null || arr.length() < 2) IntArray(2) else intArrayOf(arr.getInt(0), arr.getInt(1))
 
+/** Parse one server window object (getWindows payload or hyprland.state snapshot). */
+fun desktopWindowFromJson(w: JSONObject): DesktopWindow =
+    DesktopWindow(
+        address = w.optString("address"),
+        title = w.optString("title"),
+        app = w.optString("class"),
+        at = jsonIntArray(w.optJSONArray("at")),
+        localAt = jsonIntArray(w.optJSONArray("local_at")),
+        size = jsonIntArray(w.optJSONArray("size")),
+        monitorSize = jsonIntArray(w.optJSONArray("monitor_size")),
+        workspaceName = w.optJSONObject("workspace")?.optString("name") ?: "",
+        active = w.optBoolean("active"),
+    )
+
 fun parseWindowsPayload(json: String): WindowsListing {
     val root = JSONArray(json)
     val windowsArr = root.optJSONArray(0) ?: JSONArray()
@@ -71,18 +85,7 @@ fun parseWindowsPayload(json: String): WindowsListing {
     }
     val windows =
         (0 until windowsArr.length()).map { i ->
-            val w = windowsArr.getJSONObject(i)
-            DesktopWindow(
-                address = w.optString("address"),
-                title = w.optString("title"),
-                app = w.optString("class"),
-                at = jsonIntArray(w.optJSONArray("at")),
-                localAt = jsonIntArray(w.optJSONArray("local_at")),
-                size = jsonIntArray(w.optJSONArray("size")),
-                monitorSize = jsonIntArray(w.optJSONArray("monitor_size")),
-                workspaceName = w.optJSONObject("workspace")?.optString("name") ?: "",
-                active = w.optBoolean("active"),
-            )
+            desktopWindowFromJson(windowsArr.getJSONObject(i))
         }
     return WindowsListing(windows, active, screen)
 }

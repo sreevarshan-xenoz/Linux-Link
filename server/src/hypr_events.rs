@@ -13,6 +13,7 @@ use std::time::Duration;
 use linux_link_core::protocol::kdeconnect::{DeviceSender, NetworkPacket};
 
 use crate::hyprland::{HyprEvent, HyprlandIpc};
+use crate::plugins::windows::{entries, screen_box};
 
 /// Packet type for a single Hyprland event (body: `{event, data}`).
 pub const EVENT_PACKET: &str = "kdeconnect.linuxlink.hyprland.event";
@@ -50,11 +51,16 @@ pub fn event_packet(ev: &HyprEvent) -> Option<NetworkPacket> {
     )
 }
 
-/// Full HUD state: workspaces, visible windows, and the focused window.
+/// Full HUD state: workspaces, visible windows (with the geometry a tapped
+/// chip needs to crop the stream), and the focused window.
 pub async fn state_packet(ipc: &HyprlandIpc) -> Option<NetworkPacket> {
     let workspaces = ipc.workspaces().await.ok()?;
     let clients = ipc.visible_windows().await.unwrap_or_default();
     let active = ipc.active_window().await.ok().flatten();
+    // Best-effort: without the monitor table windows still render, they just
+    // lose crop geometry (single-monitor offset 0,0 is what entries() falls
+    // back to). Same tolerance the windows plugin response uses.
+    let monitors = ipc.monitors().await.unwrap_or_default();
     Some(
         NetworkPacket::new(STATE_PACKET).with_body(serde_json::json!({
             "workspaces": workspaces
@@ -62,15 +68,8 @@ pub async fn state_packet(ipc: &HyprlandIpc) -> Option<NetworkPacket> {
                 .map(|w| serde_json::json!({"id": w.id, "name": w.name, "active": w.active}))
                 .collect::<Vec<_>>(),
             "activeWorkspace": workspaces.iter().find(|w| w.active).map(|w| w.id),
-            "windows": clients
-                .iter()
-                .map(|w| serde_json::json!({
-                    "address": w.address,
-                    "workspace": w.workspace.id,
-                    "class": w.class,
-                    "title": w.title,
-                }))
-                .collect::<Vec<_>>(),
+            "windows": entries(clients, &monitors),
+            "screen": screen_box(&monitors),
             "activeAddress": active.as_ref().map(|a| a.address.clone()),
             "activeTitle": active.as_ref().map(|a| a.title.clone()),
         })),
@@ -136,5 +135,33 @@ mod tests {
         assert_eq!(packet.body["event"], "activewindow");
         assert_eq!(packet.body["data"], "brave-browser,Some, Title");
         assert!(event_packet(&HyprEvent::parse("render>>").unwrap()).is_none());
+    }
+
+    /// E1: the state snapshot's windows must carry the geometry a HUD chip
+    /// taps to crop — verified live, skipped on non-Hyprland hosts.
+    #[tokio::test]
+    async fn state_packet_windows_carry_crop_geometry() {
+        let Ok(ipc) = HyprlandIpc::from_env() else {
+            eprintln!("no Hyprland IPC here, skipping");
+            return;
+        };
+        let Some(packet) = state_packet(&ipc).await else {
+            eprintln!("no workspaces here, skipping");
+            return;
+        };
+        assert_eq!(packet.packet_type, STATE_PACKET);
+        assert!(
+            packet.body.get("screen").is_some(),
+            "snapshot carries the layout box"
+        );
+        let windows = packet.body["windows"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        for w in &windows {
+            assert!(w.get("local_at").is_some(), "window has crop origin: {w}");
+            assert!(w.get("size").is_some(), "window has size: {w}");
+            assert!(w["address"].is_string(), "window has address: {w}");
+        }
     }
 }

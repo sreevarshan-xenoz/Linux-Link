@@ -81,6 +81,28 @@ fun RemoteScreen(
     var cropWindow by remember { mutableStateOf<DesktopWindow?>(null) }
     var cropScreen by remember { mutableStateOf<IntArray?>(null) }
     var showPicker by remember { mutableStateOf(false) }
+    // Shared crop entry: the picker sheet (R3#7) and the workspace HUD's
+    // window chips (R4 E1) both pull a window through this. Re-pulling the
+    // window already on screen returns to the whole-desktop (monitor) view —
+    // the HUD chip row is horizontally scrollable, so "swipe away" is a
+    // re-tap rather than a gesture that would fight the scroll.
+    val pullWindow: (DesktopWindow, IntArray?) -> Unit = { w, screen ->
+        if (cropWindow?.address == w.address) {
+            cropWindow = null
+            cropScreen = null
+            scope.launch(Dispatchers.IO) { RustCore.clearWindowCrop() }
+        } else {
+            // Crop rect is monitor-local capture space; the video is then
+            // re-encoded at the window's resolution.
+            cropWindow = w
+            cropScreen = screen
+            scope.launch(Dispatchers.IO) {
+                // The address lets a Hyprland server capture the window
+                // itself; the rect serves every other server.
+                RustCore.sendWindowCrop(w.localAt[0], w.localAt[1], w.size[0], w.size[1], w.address)
+            }
+        }
+    }
     // R3 Tier-2 #10: which desktop monitor to stream (-1 = server default).
     // Toggling `showStream` tears the view down (surfaceDestroyed stops the
     // session) before recreation, so the new connect can't hit the bridge's
@@ -570,6 +592,8 @@ fun RemoteScreen(
                     address = address,
                     port = port,
                     modifier = Modifier.padding(top = 6.dp),
+                    croppedAddress = cropWindow?.address,
+                    onPullWindow = pullWindow,
                 )
             }
 
@@ -802,15 +826,7 @@ fun RemoteScreen(
             selected = cropWindow,
             onDismiss = { showPicker = false },
             onPick = { w, screen ->
-                // Crop rect is monitor-local capture space; the video is then
-                // re-encoded at the window's resolution.
-                cropWindow = w
-                cropScreen = screen
-                scope.launch(Dispatchers.IO) {
-                    // The address lets a Hyprland server capture the window
-                    // itself; the rect serves every other server.
-                    RustCore.sendWindowCrop(w.localAt[0], w.localAt[1], w.size[0], w.size[1], w.address)
-                }
+                pullWindow(w, screen)
                 showPicker = false
             },
             onFullDesktop = {

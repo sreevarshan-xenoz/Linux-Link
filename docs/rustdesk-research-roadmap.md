@@ -308,10 +308,18 @@ From **scrcpy** (code-level OK, Apache-2.0):
 
 ### Phase E — Unique features (the differentiators; our survey found none of
 these anywhere — that's the moat)
-- **E1 · "Pull window to phone" gesture.** Tap a window chip in the existing
-  Workspace HUD → that window becomes the stream (HUD → crop pipeline stitch,
-  both already shipped separately); swipe away → back to monitor view. A
-  compositor-aware jump-to-context no surveyed project has.
+- **E1 · "Pull window to phone" gesture.** ✅ **Landed 2026-09-21** (device
+  behavior unverified). Tapping a window chip in the Workspace HUD now pulls
+  that window into the stream — the R3#7 crop pipeline and R3#8 HUD stitched
+  into one gesture, no bottom-sheet. `hyprland.state` snapshots gained per-
+  window crop geometry (the snapshot reuses the windows plugin's `entries()` +
+  `screen_box()`, so `windows[]` carries `at`/`local_at`/`size`/`monitor_size`
+  and the body a `screen` box), and `WorkspaceHud` renders a window-chip row
+  whose tap drives the picker's `sendWindowCrop` path (extracted into a shared
+  `pullWindow` lambda). The streamed chip is highlighted; re-tapping it returns
+  to whole-desktop (monitor) view — the roadmap's "swipe away" is realised as
+  this re-tap since the chip row is horizontally scrollable. No wire/JNI change.
+  A compositor-aware jump-to-context no surveyed project has.
 - **E2 · Phone mic → desktop PipeWire source (reverse audio).** ✅ **Landed
   2026-09-21** (server relay live-verified on this box; phone behavior
   unverified). scrcpy does phone-audio-out; nobody does *mic-in* to the Linux

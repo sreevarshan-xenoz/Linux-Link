@@ -8,7 +8,7 @@ use crate::hyprland::{HyprMonitor, HyprWindow, HyprlandIpc};
 /// `local_at` is the crop rect origin in the monitor's own coordinate space
 /// (what the capture stream carries), `at` stays global for input remapping.
 #[derive(serde::Serialize)]
-struct WindowEntry {
+pub(crate) struct WindowEntry {
     #[serde(flatten)]
     window: HyprWindow,
     local_at: [i32; 2],
@@ -19,7 +19,7 @@ fn monitor_of<'a>(monitors: &'a [HyprMonitor], index: i32) -> Option<&'a HyprMon
     usize::try_from(index).ok().and_then(|i| monitors.get(i))
 }
 
-fn entries(windows: Vec<HyprWindow>, monitors: &[HyprMonitor]) -> Vec<WindowEntry> {
+pub(crate) fn entries(windows: Vec<HyprWindow>, monitors: &[HyprMonitor]) -> Vec<WindowEntry> {
     windows
         .into_iter()
         .map(|w| {
@@ -38,7 +38,7 @@ fn entries(windows: Vec<HyprWindow>, monitors: &[HyprMonitor]) -> Vec<WindowEntr
 
 /// Layout bounding box of all monitors as `[x, y, width, height]` — the
 /// space normalized direct-touch input maps across.
-fn screen_box(monitors: &[HyprMonitor]) -> Option<[i32; 4]> {
+pub(crate) fn screen_box(monitors: &[HyprMonitor]) -> Option<[i32; 4]> {
     let min_x = monitors.iter().map(|m| m.x).min()?;
     let min_y = monitors.iter().map(|m| m.y).min()?;
     let max_x = monitors.iter().map(|m| m.x + m.width).max()?;
