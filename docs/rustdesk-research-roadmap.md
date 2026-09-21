@@ -231,8 +231,25 @@ From **scrcpy** (code-level OK, Apache-2.0):
   original accept line (kill VAAPI mid-session → x264 within 2 s, HUD notes
   the switch) is device-observable; checks in
   docs/device-verification-checklist.md §2.
-- **C3 · NVENC power pin (idea #5),** gated to sessions with an NVIDIA
-  encoder active; document the `nvidia-smi` calls, restore on session end.
+- **C3 · NVENC power pin (idea #5).** ✅ **Landed 2026-09-21** (**hardware-
+  gated — no NVIDIA GPU on this box, so only the pure command-shape/parse
+  logic is unit-verified; the `nvidia-smi` calls have never run here**).
+  New `core/src/streaming/nvenc_power.rs`: an RAII `NvencPowerGuard` the
+  NVENC sidecar encoder acquires when it opens and drops at session end.
+  It queries GPU 0's max graphics clock
+  (`nvidia-smi -i 0 --query-gpu=clocks.max.graphics`), enables persistence
+  mode (`-pm 1`), then locks clocks to that ceiling
+  (`--lock-gpu-clocks=MAX,MAX`) so adaptive power management can't ramp the
+  GPU down between bursty encode frames (the latency jitter); Drop runs
+  `--reset-gpu-clocks`. Every path self-declines to a no-op — no
+  `nvidia-smi`, an unparsable clock (`N/A`), or a refused lock (unprivileged)
+  leaves the session running unpinned with a log line, so a mis-privileged
+  desktop never strands a clock lock it didn't take. Wired as an
+  `Option<NvencPowerGuard>` field on `SidecarEncoder`, constructed only when
+  `hardware_encoder == Nvenc` (VAAPI/software/this-box untouched). Pure
+  `parse_max_clock`/`query_args`/`lock_args`/`reset_args`/`persistence_args`
+  unit-tested; the subprocess path needs a real NVIDIA + root. Server-side
+  only (`encode` feature) — no wire/JNI/Kotlin change (57 exports).
 - **C4 · Re-open R2#3** (in-process VAAPI/NVENC `AVHWDeviceContext`) on a
   machine where VAAPI initializes — this box can't (see AGENTS); Sunshine's
   matrix says the architecture is sound. Device + desktop gated.

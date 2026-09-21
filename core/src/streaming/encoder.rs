@@ -203,6 +203,10 @@ pub struct SidecarEncoder {
     stderr: BufReader<ChildStderr>,
     /// Accumulated output buffer from stdout.
     output_buffer: Vec<u8>,
+    /// NVENC high-power pin (R4 C3) — held only when the clock lock actually
+    /// took; Drop restores, so both session end and a degraded-dropped
+    /// encoder clean up.
+    _power_pin: Option<super::nvenc_power::NvencPowerGuard>,
 }
 
 impl SidecarEncoder {
@@ -264,6 +268,14 @@ impl SidecarEncoder {
             stdout,
             stderr: BufReader::new(stderr),
             output_buffer: Vec::with_capacity(64 * 1024), // 64 KB initial capacity
+            // C3: only NVENC sessions get the GPU pinned; every other backend
+            // (and non-NVIDIA / unprivileged hosts, where acquire() self-
+            // declines) leaves this None.
+            _power_pin: if config.hardware_encoder == HardwareEncoder::Nvenc {
+                super::nvenc_power::NvencPowerGuard::acquire()
+            } else {
+                None
+            },
         })
     }
 
