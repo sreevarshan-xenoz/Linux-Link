@@ -44,7 +44,7 @@ async fn main() -> Result<()> {
             let identity = kde::host_identity();
             service::connect_peer(peer, port, &identity).await
         }
-        cli::Commands::Pair { pin } => service::pair(pin).await,
+        cli::Commands::Pair { pin, grant } => service::pair(pin, grant).await,
         cli::Commands::Unpair { device_id } => service::unpair(device_id).await,
     }
 }

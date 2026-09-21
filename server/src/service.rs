@@ -770,7 +770,7 @@ pub async fn print_capabilities() -> Result<()> {
     Ok(())
 }
 
-pub async fn pair(pin: Option<String>) -> Result<()> {
+pub async fn pair(pin: Option<String>, grant: Option<u64>) -> Result<()> {
     let pin_value = match pin {
         Some(value) => {
             if !is_valid_pin(&value) {
@@ -787,12 +787,39 @@ pub async fn pair(pin: Option<String>) -> Result<()> {
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
     let stamp = cli_pin_timestamp();
-    std::fs::write(&path, format!("{pin_value}\n{stamp}\n"))
+    // R4 D3: an optional third line carries the grant TTL (secs) that
+    // pairing with this PIN stores in the TrustStore — the PIN file itself
+    // still lives 5 minutes like always.
+    let grant_line = match grant {
+        Some(secs) => format!("{secs}\n"),
+        None => String::new(),
+    };
+    std::fs::write(&path, format!("{pin_value}\n{stamp}\n{grant_line}"))
         .with_context(|| format!("failed to write {}", path.display()))?;
 
     println!("Pairing PIN: {}", pin_value);
-    println!("Stored at {} (valid 5 minutes)", path.display());
+    match grant {
+        Some(secs) => println!(
+            "Stored at {} (valid 5 minutes; pairing grants {} of trust)",
+            path.display(),
+            humantime(secs)
+        ),
+        None => println!("Stored at {} (valid 5 minutes)", path.display()),
+    }
     Ok(())
+}
+
+/// Compact rendering of a grant duration for CLI output.
+fn humantime(secs: u64) -> String {
+    if secs % 86400 == 0 {
+        format!("{}d", secs / 86400)
+    } else if secs % 3600 == 0 {
+        format!("{}h", secs / 3600)
+    } else if secs % 60 == 0 {
+        format!("{}m", secs / 60)
+    } else {
+        format!("{}s", secs)
+    }
 }
 
 /// Unix seconds stamp paired with a CLI PIN file, so the daemon's

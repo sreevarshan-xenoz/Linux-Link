@@ -201,10 +201,16 @@ From **scrcpy** (code-level OK, Apache-2.0):
   "phone is watching" indicator (waybar module doc / `notify-send` on start +
   a `linux-link status` line), and `linux-link kick <device>` to drop a
   session — parity with RustDesk's confirm dialog without a GUI daemon.
-- **D3 · One-time access PIN with scope.** `linux-link pair --grant 15m`
-  style: a time-boxed, auto-expiring TrustStore entry for one-off support
-  sessions (PIN plumbing already exists; this is TTL + a `unpair --after`
-  scheduler).
+- **D3 · One-time access PIN with scope.** ✅ **Landed 2026-09-21**
+  (device behavior unverified). `linux-link pair --grant 15m` writes a
+  third PIN-file line; pairing with that PIN stores a time-boxed TrustStore
+  *grant* (per-device unix expiry) instead of permanent trust. Expiry is
+  lazy — grants are filtered out at store load, which every gate
+  (TCP/v2/QUIC) performs per check — so there is no scheduler to run or
+  crash. Permanent trust can never be demoted by a grant; `unpair` removes
+  both. Re-pairing a granted device with a normal PIN promotes it to
+  permanent (existing semantics), expiring a grant just blocks *new*
+  pairings/sessions — live sessions run to their own end (kick is D2).
 - **D4 · Protocol versioning discipline** (KDE Connect lesson: their
   protocol doc is explicitly *not a spec* and can change without notice).
   Tag our `kdeconnect.linuxlink.*` packets with a `llVersion` field, parse

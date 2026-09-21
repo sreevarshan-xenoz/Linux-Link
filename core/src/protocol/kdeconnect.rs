@@ -315,6 +315,18 @@ impl PluginRegistry {
 pub struct TrustStore {
     path: PathBuf,
     trusted_device_ids: HashSet<String>,
+    /// R4 D3: deviceId -> unix-seconds expiry for *time-boxed* trust
+    /// (one-off support grants from `linux-link pair --grant 15m`).
+    /// Entries here are trusted only until they expire; expiry is applied
+    /// lazily at load, so no scheduler is required anywhere.
+    grants: HashMap<String, u64>,
+}
+
+fn unix_now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 impl TrustStore {
@@ -332,6 +344,7 @@ impl TrustStore {
             return Ok(Self {
                 path,
                 trusted_device_ids: HashSet::new(),
+                grants: HashMap::new(),
             });
         }
 
@@ -339,36 +352,77 @@ impl TrustStore {
             std::fs::read(&path).with_context(|| format!("failed to read {}", path.display()))?;
         let decoded: TrustStoreFile = serde_json::from_slice(&bytes)
             .with_context(|| format!("failed to parse {}", path.display()))?;
+        let now = unix_now_secs();
 
         Ok(Self {
             path,
             trusted_device_ids: decoded.trusted_device_ids.into_iter().collect(),
+            // Load-time GC: an expired grant is simply not loaded, and the
+            // next persist drops it from the file.
+            grants: decoded
+                .grants
+                .into_iter()
+                .filter(|(_, expires)| *expires > now)
+                .collect(),
         })
     }
 
     pub fn is_trusted(&self, device_id: &str) -> bool {
-        self.trusted_device_ids.contains(device_id)
+        self.trusted_device_ids.contains(device_id) || self.grants.contains_key(device_id)
     }
 
     pub fn trust_device(&mut self, device_id: impl Into<String>) -> Result<()> {
-        self.trusted_device_ids.insert(device_id.into());
+        let id = device_id.into();
+        self.grants.remove(&id);
+        self.trusted_device_ids.insert(id);
+        self.persist()
+    }
+
+    /// Trust a device until `ttl` has elapsed (R4 D3). A device that is
+    /// already permanently trusted stays permanent — a scoped grant can
+    /// never *demote* existing trust.
+    pub fn trust_device_with_ttl(
+        &mut self,
+        device_id: impl Into<String>,
+        ttl: std::time::Duration,
+    ) -> Result<()> {
+        let id = device_id.into();
+        if self.trusted_device_ids.contains(&id) {
+            return Ok(());
+        }
+        self.grants
+            .insert(id, unix_now_secs() + ttl.as_secs().max(1));
         self.persist()
     }
 
     pub fn untrust_device(&mut self, device_id: &str) -> Result<()> {
         self.trusted_device_ids.remove(device_id);
+        self.grants.remove(device_id);
         self.persist()
     }
 
     pub fn trusted_devices(&self) -> Vec<String> {
         let mut values: Vec<String> = self.trusted_device_ids.iter().cloned().collect();
+        values.extend(self.grants.keys().cloned());
         values.sort();
+        values.dedup();
         values
     }
 
+    /// Seconds remaining on a device's time-boxed grant (`None` = no grant:
+    /// either permanently trusted or not trusted at all).
+    pub fn grant_remaining(&self, device_id: &str) -> Option<u64> {
+        self.grants
+            .get(device_id)
+            .map(|expires| expires.saturating_sub(unix_now_secs()))
+    }
+
     fn persist(&self) -> Result<()> {
+        let mut permanent: Vec<String> = self.trusted_device_ids.iter().cloned().collect();
+        permanent.sort();
         let payload = TrustStoreFile {
-            trusted_device_ids: self.trusted_devices(),
+            trusted_device_ids: permanent,
+            grants: self.grants.clone(),
         };
         let bytes = serde_json::to_vec_pretty(&payload)?;
         std::fs::write(&self.path, bytes)
@@ -381,6 +435,8 @@ impl TrustStore {
 struct TrustStoreFile {
     #[serde(default)]
     trusted_device_ids: Vec<String>,
+    #[serde(default)]
+    grants: HashMap<String, u64>,
 }
 
 #[derive(Default)]
@@ -478,6 +534,89 @@ mod tests {
         let reloaded = TrustStore::load_or_create(&path).expect("reload trust store");
         assert!(reloaded.is_trusted("device-a"));
 
+        let _ = std::fs::remove_file(path);
+    }
+
+    fn temp_store_path(tag: &str) -> PathBuf {
+        let unique = format!(
+            "linux-link-trust-{}-{}-{}.json",
+            tag,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        );
+        std::env::temp_dir().join(unique)
+    }
+
+    #[test]
+    fn grant_is_trusted_until_expiry() {
+        let path = temp_store_path("grant");
+        let mut store = TrustStore::load_or_create(&path).expect("create");
+        store
+            .trust_device_with_ttl("phone-x", std::time::Duration::from_secs(60))
+            .expect("grant");
+        assert!(store.is_trusted("phone-x"));
+        assert!(store.grant_remaining("phone-x").unwrap() > 0);
+
+        // Survives a reload while live.
+        let reloaded = TrustStore::load_or_create(&path).expect("reload");
+        assert!(reloaded.is_trusted("phone-x"));
+
+        // An already-expired grant is dropped at load (lazy expiry).
+        let raw: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let mut expired = raw.as_object().unwrap().clone();
+        let grants = expired["grants"].as_object().unwrap().clone();
+        let (id, _) = grants.iter().next().unwrap();
+        expired.insert(
+            "grants".into(),
+            serde_json::json!({ id: unix_now_secs() - 1 }),
+        );
+        std::fs::write(&path, serde_json::to_vec_pretty(&expired).unwrap()).unwrap();
+        let stale = TrustStore::load_or_create(&path).expect("reload expired");
+        assert!(!stale.is_trusted("phone-x"));
+        assert!(stale.trusted_devices().is_empty());
+
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn permanent_trust_wins_over_grant_and_clears_it() {
+        let path = temp_store_path("permanent");
+        let mut store = TrustStore::load_or_create(&path).expect("create");
+        store
+            .trust_device_with_ttl("phone-y", std::time::Duration::from_secs(60))
+            .expect("grant");
+        // Granting a device that is permanently trusted is a no-op...
+        store.trust_device("phone-y").expect("trust permanent");
+        store
+            .trust_device_with_ttl("phone-y", std::time::Duration::from_secs(60))
+            .expect("grant on permanent");
+        let file: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(file["grants"].as_object().unwrap().is_empty());
+        assert!(file["trusted_device_ids"].as_array().unwrap().contains(&serde_json::json!("phone-y")));
+        // ...and untrust removes from both.
+        store.untrust_device("phone-y").expect("untrust");
+        assert!(!store.is_trusted("phone-y"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn legacy_store_file_without_grants_loads() {
+        // Pre-D3 on-disk shape: only trusted_device_ids.
+        let path = temp_store_path("legacy");
+        std::fs::write(
+            &path,
+            br#"{"trusted_device_ids": ["old-phone"]}"#,
+        )
+        .unwrap();
+        let store = TrustStore::load_or_create(&path).expect("load legacy");
+        assert!(store.is_trusted("old-phone"));
+        assert_eq!(store.grant_remaining("old-phone"), None);
         let _ = std::fs::remove_file(path);
     }
 }

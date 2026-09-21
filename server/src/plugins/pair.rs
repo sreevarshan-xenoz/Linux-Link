@@ -102,9 +102,11 @@ fn pin_expired(entry: &PinEntry) -> bool {
     entry.created.elapsed() > PIN_TTL
 }
 
-/// Read the CLI-written PIN file (`<pin>\n<unix-secs>`; a bare PIN with no
-/// timestamp line never expires so old CLI output keeps working).
-fn cli_pin() -> Option<String> {
+/// Read the CLI-written PIN file: `<pin>\n<unix-secs>[\n<grant-secs>]`
+/// (a bare PIN with no timestamp line never expires so old CLI output keeps
+/// working; the R4 D3 third line time-boxes the trust pairing grants).
+/// Returns `(pin, grant_secs)`.
+fn cli_pin() -> Option<(String, Option<u64>)> {
     let raw = std::fs::read_to_string(state::pair_pin_path().ok()?).ok()?;
     let mut lines = raw.lines().map(str::trim);
     let pin = lines.next()?.to_string();
@@ -117,7 +119,8 @@ fn cli_pin() -> Option<String> {
             return None;
         }
     }
-    Some(pin)
+    let grant = lines.next().and_then(|s| s.parse::<u64>().ok());
+    Some((pin, grant))
 }
 
 fn desktop_id_field() -> String {
@@ -231,15 +234,31 @@ async fn handle_pair(conn: &str, packet: &NetworkPacket, sender: &dyn DeviceSend
         .get(conn)
         .filter(|e| !pin_expired(e))
         .is_some_and(|e| e.pin == pin);
-    let matches_cli = cli_pin().is_some_and(|cli| cli == pin);
+    // R4 D3: only a CLI PIN can carry a scoped grant; the push flow (a PIN
+    // this desktop generated itself) keeps trusting permanently.
+    let cli_grant: Option<Option<u64>> = cli_pin()
+        .filter(|(cli, _)| cli == pin)
+        .map(|(_, grant)| grant);
+    let matches_cli = cli_grant.is_some();
 
     if matches_pending || matches_cli {
         pins().lock().expect("pair state").remove(conn);
-        match TrustStore::load_or_create(state::trust_store_path().expect("state dir"))
-            .and_then(|mut store| store.trust_device(phone_id.clone()))
-        {
+        let grant_secs = cli_grant.flatten();
+        let outcome = TrustStore::load_or_create(state::trust_store_path().expect("state dir"))
+            .and_then(|mut store| match grant_secs {
+                Some(secs) => {
+                    store.trust_device_with_ttl(phone_id.clone(), Duration::from_secs(secs))
+                }
+                None => store.trust_device(phone_id.clone()),
+            });
+        match outcome {
             Ok(()) => {
-                tracing::info!("Paired phone {phone_id} on connection {conn}");
+                match grant_secs {
+                    Some(secs) => tracing::info!(
+                        "Paired phone {phone_id} on connection {conn} (scoped grant: {secs}s)"
+                    ),
+                    None => tracing::info!("Paired phone {phone_id} on connection {conn}"),
+                }
                 trusted_connections()
                     .lock()
                     .expect("pair state")
@@ -299,7 +318,8 @@ mod tests {
 
     #[test]
     fn cli_pin_format_roundtrip() {
-        // Format written by `linux-link pair`: PIN line + unix-secs line.
+        // Format written by `linux-link pair`: PIN line + unix-secs line
+        // (+ optional D3 grant-secs line, parsed by cli_pin's `lines` walk).
         let raw = "123456\n9999999999\n";
         let mut lines = raw.lines().map(str::trim);
         let pin = lines.next().unwrap();
