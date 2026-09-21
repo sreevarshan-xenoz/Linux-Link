@@ -19,6 +19,12 @@ pub struct Config {
     /// dispatched (R3 Tier-2 #11b). Set false in config.toml for open-LAN use.
     #[serde(default = "default_pairing_required")]
     pub pairing_required: bool,
+    /// Allow H.265/HEVC when a connecting client declares it can decode it
+    /// (R4 C1). Off by default: sessions stay H.264. Turning this on assumes
+    /// the box has a working HEVC encoder (libx265 or a HW hevc path) — if
+    /// opening it fails at runtime the session still falls back (C2).
+    #[serde(default)]
+    pub allow_hevc: bool,
 }
 
 fn default_pairing_required() -> bool {
@@ -33,6 +39,7 @@ impl Default for Config {
             log_level: "info".to_string(),
             video_quality: VideoQualityPreset::Balanced,
             pairing_required: true,
+            allow_hevc: false,
         }
     }
 }

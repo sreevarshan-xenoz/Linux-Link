@@ -923,10 +923,13 @@ pub async fn list_remote_files(
 ///
 /// `monitor_index` selects which display to stream (0 = primary).
 /// Pass `None` to use the default monitor.
+/// `codec_caps` advertises the decodable video codecs to the server
+/// (R4 C1: bit 0 = HEVC; H.264 is assumed). 0 keeps a plain H.264 session.
 pub async fn connect_streaming(
     address: String,
     port: u16,
     monitor_index: Option<u32>,
+    codec_caps: u8,
 ) -> Result<(), String> {
     // If the control port (1716) is passed, automatically switch to the default streaming port (4716).
     // In a real KDE Connect implementation, this would be negotiated or discovery-based.
@@ -998,6 +1001,7 @@ pub async fn connect_streaming(
         cert_manager,
         monitor_index,
         Some(&client_identity().device_id),
+        Some(codec_caps),
     )
     .await
     .map_err(|e| {
@@ -1023,6 +1027,7 @@ pub async fn connect_streaming_wan(
     address: String,
     identity_json: String,
     monitor_index: Option<u32>,
+    codec_caps: u8,
 ) -> Result<(), String> {
     let identity: serde_json::Value =
         serde_json::from_str(&identity_json).map_err(|e| format!("Invalid WAN identity: {e}"))?;
@@ -1086,6 +1091,7 @@ pub async fn connect_streaming_wan(
         dial.connection(),
         monitor_index,
         Some(&client_identity().device_id),
+        Some(codec_caps),
     )
     .await;
 
@@ -1344,6 +1350,7 @@ pub async fn reconnect_streaming(
     port: u16,
     monitor_index: Option<u32>,
     attempt: u32,
+    codec_caps: u8,
 ) -> Result<(), String> {
     let next_retry = crate::RECONNECT_BACKOFF.lock().unwrap().next_delay();
     let next_retry_ms = next_retry.as_millis() as u64;
@@ -1362,7 +1369,7 @@ pub async fn reconnect_streaming(
     tokio::time::sleep(next_retry).await;
 
     // Delegate to idempotent connect_streaming
-    connect_streaming(address, port, monitor_index).await
+    connect_streaming(address, port, monitor_index, codec_caps).await
 }
 
 /// Stop the v2 multiplexed connection and clear its handle.

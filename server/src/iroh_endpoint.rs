@@ -118,6 +118,7 @@ pub async fn spawn_wan_endpoint(
     input_tx: broadcast::Sender<InputPacket>,
     cert_manager: Arc<CertManager>,
     pairing_required: bool,
+    allow_hevc: bool,
 ) -> Result<Endpoint> {
     let secret_key =
         load_or_create_secret_key(&key_path()?).context("failed to load iroh identity key")?;
@@ -170,6 +171,7 @@ pub async fn spawn_wan_endpoint(
                     StreamingServer::new(config, StreamTransportConfig::default(), cert_manager);
                 streaming_server.set_input_channel(input_tx);
                 streaming_server.set_session_telemetry(true);
+                streaming_server.set_hevc_allowed(allow_hevc);
                 if pairing_required {
                     streaming_server.set_pairing_gate(|device_id| {
                         device_id

@@ -16,3 +16,8 @@ video_quality = "balanced"
 # Require PIN pairing before the control channel serves plugin requests.
 # Set false to let any device on the trusted network connect without pairing.
 # pairing_required = true
+
+# Allow H.265/HEVC when a connecting phone declares it can decode it (R4 C1).
+# Default false: sessions stay H.264. Only turn this on if the box actually
+# has a working HEVC encoder (libx265 or a hardware hevc path).
+# allow_hevc = false

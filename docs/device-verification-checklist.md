@@ -53,6 +53,15 @@ place.
       or upside-down frames (YInvert handling).
 - [ ] R4 B1 multi-monitor: pick monitor N in the picker → log line "Screencopy capture: output at
       (x,y)" shows that monitor's wl_output origin and frames are its size.
+- [ ] R4 C1 codec negotiation, default off: connect normally → server log shows
+      "Client codec caps negotiated" with `codec=H.264` even on a HEVC-capable phone
+      (allow_hevc defaults false); video unaffected.
+- [ ] R4 C1 forced HEVC round-trip: `allow_hevc = true` in config.toml, restart server,
+      reconnect → log shows `codec=H.265 (HEVC)`; phone decodes (sniffed `video/hevc`)
+      with video within ~1 s and input still mapped. A pre-C1 phone build (no caps
+      stream) must still get H.264.
+- [ ] R4 C1 HEVC + window crop: pick a window during a HEVC session → encoder rebuild at
+      window size keeps HEVC and the phone reconfigures on size change without codec change.
 
 ## 3. Input paths (R2#4, Tier 1 #2)
 

@@ -249,6 +249,7 @@ pub async fn run(config: Config) -> Result<()> {
         input_tx.clone(),
         Arc::clone(&cert_manager),
         config.pairing_required,
+        config.allow_hevc,
     )
     .await
     {
@@ -347,6 +348,7 @@ pub async fn run(config: Config) -> Result<()> {
                     let streaming_config = streaming_config.clone();
                     let input_tx = input_tx.clone();
                     let pairing_required = config.pairing_required;
+                    let allow_hevc = config.allow_hevc;
 
                     tokio::spawn(async move {
                         let conn = match incoming.await {
@@ -378,6 +380,7 @@ pub async fn run(config: Config) -> Result<()> {
                                 );
                                 streaming_server.set_input_channel(input_tx);
                                 streaming_server.set_session_telemetry(true);
+                                streaming_server.set_hevc_allowed(allow_hevc);
                                 if pairing_required {
                                     // The stream transport's TLS is anonymous — the
                                     // gate judges the deviceId the client announces

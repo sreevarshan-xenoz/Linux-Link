@@ -1,5 +1,6 @@
 package dev.linuxlink.android.bridge
 
+import android.media.MediaCodecList
 import org.json.JSONObject
 import java.io.File
 import java.nio.ByteBuffer
@@ -37,11 +38,17 @@ object RustCore {
     private external fun nativeForgetTrustedPeer(label: String): String
     private external fun nativeStopV2(): String
     private external fun nativeStopStreaming(): String
-    private external fun nativeConnectStreaming(address: String, port: Int, monitorIndex: Int): String
+    private external fun nativeConnectStreaming(
+        address: String,
+        port: Int,
+        monitorIndex: Int,
+        codecCaps: Int,
+    ): String
     private external fun nativeConnectStreamingWan(
         address: String,
         identityJson: String,
         monitorIndex: Int,
+        codecCaps: Int,
     ): String
     private external fun nativeGetWanIdentity(): String
     private external fun nativeReconnectStreaming(
@@ -49,6 +56,7 @@ object RustCore {
         port: Int,
         monitorIndex: Int,
         attempt: Int,
+        codecCaps: Int,
     ): String
 
     private external fun nativeResetReconnectBackoff()
@@ -209,7 +217,7 @@ object RustCore {
 
     /** `monitorIndex = -1` selects the server default. */
     fun connectStreaming(address: String, port: Int, monitorIndex: Int = -1): Result<Unit> =
-        envelope(nativeConnectStreaming(address, port, monitorIndex)).map { }
+        envelope(nativeConnectStreaming(address, port, monitorIndex, videoCodecCaps())).map { }
 
     /**
      * Connect over the iroh WAN path using a cached endpoint identity — the
@@ -217,7 +225,7 @@ object RustCore {
      * the control channel (see [getWanIdentity]).
      */
     fun connectStreamingWan(address: String, identityJson: String, monitorIndex: Int = -1): Result<Unit> =
-        envelope(nativeConnectStreamingWan(address, identityJson, monitorIndex)).map { }
+        envelope(nativeConnectStreamingWan(address, identityJson, monitorIndex, videoCodecCaps())).map { }
 
     /** The connected desktop's cached iroh WAN identity, or null if none announced. */
     fun getWanIdentity(): String? = runCatching {
@@ -229,7 +237,30 @@ object RustCore {
     }.getOrNull()
 
     fun reconnectStreaming(address: String, port: Int, attempt: Int, monitorIndex: Int = -1): Result<Unit> =
-        envelope(nativeReconnectStreaming(address, port, monitorIndex, attempt)).map { }
+        envelope(nativeReconnectStreaming(address, port, monitorIndex, attempt, videoCodecCaps())).map { }
+
+    /**
+     * Codec capability bits advertised to the server at stream connect
+     * (R4 C1; mirrors `CODEC_CAP_HEVC` in core client.rs). Bit 0 = the
+     * device exposes a H.265/HEVC decoder via MediaCodec; H.264 is assumed
+     * for every device. Cached — decoder availability cannot change mid-app.
+     */
+    @Volatile
+    private var cachedCodecCaps = -1
+
+    private fun videoCodecCaps(): Int {
+        var caps = cachedCodecCaps
+        if (caps < 0) {
+            caps = runCatching {
+                val hevc = MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos.any { info ->
+                    info.isDecoder && info.supportedTypes.any { it == "video/hevc" }
+                }
+                if (hevc) 0b1 else 0
+            }.getOrDefault(0)
+            cachedCodecCaps = caps
+        }
+        return caps
+    }
 
     fun resetReconnectBackoff() = nativeResetReconnectBackoff()
 

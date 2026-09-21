@@ -170,13 +170,22 @@ From **scrcpy** (code-level OK, Apache-2.0):
   that implement it, portal elsewhere, X11 last) + config override.
 
 ### Phase C — Encoder ladder & hardware paths (M–L) — *partly box-limited*
-- **C1 · Capability negotiation at session start.** Client sends decodable
-  set (Android reports MediaCodec caps: H264 always, HEVC/AV1 per device);
-  server picks H.264 today's default, HEVC/AV1 when both ends agree. Server:
-  `InputPacket`-era config stream gains a codec field (versioned — see D4).
-  Client: `H264Decoder.kt` becomes codec-parameterized (mime string + SPS
-  handling). Accept: forced-HEVC session round-trips on a device that
-  declares it; old clients unaffected (absent field = H.264).
+- **C1 · Capability negotiation at session start.** ✅ **Landed 2026-09-21**
+  (device behavior unverified). Client announces a decodable-codec bitmask on
+  a third pre-pipeline uni-stream `[0xFD, 0x00, caps]` (bit 0 = HEVC; absent
+  = legacy H.264-only, so old clients are unaffected); Android reports
+  MediaCodecList's HEVC-decoder presence through the connect/reconnect JNI
+  exports. Server picks H.265 only when the client declares it **and** the
+  operator allowed it (`allow_hevc` in config.toml, default off — HEVC encoder
+  availability is the box's business); the negotiated codec reaches the
+  encoder via the existing `StreamingConfig.codec` field. `H264Decoder.kt` is
+  codec-parameterized: MediaCodec configure is deferred to the first keyframe
+  and the MIME (`video/avc`/`video/hevc`) is sniffed from its Annex-B NAL
+  header (VPS/SPS type + layer byte), so no extra server→client message is
+  needed and the codec can never mismatch the actual bitstream. Accept:
+  loopback wire round-trip test asserts caps+monitor+deviceId streams
+  negotiate an H.265 session; forced-HEVC on a real device pending the
+  device-checklist pass.
 - **C2 · Runtime fallback discipline (RustDesk lesson).** Encoder open
   failure or mid-session encoder stall → rebuild at H.264/software with a
   keyframe, notify client via config channel. Accept: kill VAAPI mid-session

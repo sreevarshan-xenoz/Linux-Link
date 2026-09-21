@@ -252,6 +252,7 @@ pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeStopStre
 }
 
 /// Start a QUIC streaming session. `monitor_index` < 0 selects the default.
+/// `codec_caps` is the client's decodable codec bitmask (R4 C1: bit 0 = HEVC).
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeConnectStreaming(
     mut env: JNIEnv<'_>,
@@ -259,6 +260,7 @@ pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeConnectS
     address: JString<'_>,
     port: jint,
     monitor_index: jint,
+    codec_caps: jint,
 ) -> jstring {
     let address = jstring_to_string(&mut env, &address);
     let monitor = if monitor_index < 0 {
@@ -266,8 +268,12 @@ pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeConnectS
     } else {
         Some(monitor_index as u32)
     };
-    let json =
-        envelope_unit(RUNTIME.block_on(api::connect_streaming(address, port as u16, monitor)));
+    let json = envelope_unit(RUNTIME.block_on(api::connect_streaming(
+        address,
+        port as u16,
+        monitor,
+        codec_caps as u8,
+    )));
     to_jstring(&mut env, json)
 }
 
@@ -281,6 +287,7 @@ pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeConnectS
     address: JString<'_>,
     identity_json: JString<'_>,
     monitor_index: jint,
+    codec_caps: jint,
 ) -> jstring {
     let address = jstring_to_string(&mut env, &address);
     let identity = jstring_to_string(&mut env, &identity_json);
@@ -289,8 +296,12 @@ pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeConnectS
     } else {
         Some(monitor_index as u32)
     };
-    let json =
-        envelope_unit(RUNTIME.block_on(api::connect_streaming_wan(address, identity, monitor)));
+    let json = envelope_unit(RUNTIME.block_on(api::connect_streaming_wan(
+        address,
+        identity,
+        monitor,
+        codec_caps as u8,
+    )));
     to_jstring(&mut env, json)
 }
 
@@ -314,6 +325,7 @@ pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeReconnec
     port: jint,
     monitor_index: jint,
     attempt: jint,
+    codec_caps: jint,
 ) -> jstring {
     let address = jstring_to_string(&mut env, &address);
     let monitor = if monitor_index < 0 {
@@ -326,6 +338,7 @@ pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeReconnec
         port as u16,
         monitor,
         attempt.max(0) as u32,
+        codec_caps as u8,
     )));
     to_jstring(&mut env, json)
 }

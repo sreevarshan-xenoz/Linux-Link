@@ -22,7 +22,7 @@ use super::encoder::VideoEncoder;
 use super::input_packet::InputPacket;
 use super::session_telemetry::{SessionOutcome, SessionRecorder};
 use super::transport::{self, CertManager, StreamServer, StreamTransportConfig};
-use super::{EncodedPacket, StreamingConfig, VideoFrame};
+use super::{EncodedPacket, StreamingConfig, VideoCodec, VideoFrame};
 
 /// R4 A3: bitrate ceiling applied while an iroh session rides a relay —
 /// relay bandwidth is shared and not ours to saturate. Conservative on
@@ -57,6 +57,11 @@ pub struct StreamingServer {
     /// R4 A3 user override of the relay bitrate floor: set by
     /// `InputPacket::FullQuality`, read by the relay-guard task.
     full_quality: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// R4 C1 server half of the codec negotiation: even when the client
+    /// declares HEVC support, H.265 is only picked if the operator allowed
+    /// it (`Config::allow_hevc` — HEVC encoder availability is the
+    /// operator's box, and the fallback ladder for a failed open is C2).
+    hevc_allowed: bool,
 }
 
 impl StreamingServer {
@@ -80,6 +85,7 @@ impl StreamingServer {
             telemetry: false,
             view_only: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             full_quality: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            hevc_allowed: false,
         }
     }
 
@@ -95,6 +101,12 @@ impl StreamingServer {
         adaptive.attach(self.bitrate_tx.clone());
         self.adaptive_bitrate = Some(adaptive);
         self
+    }
+
+    /// Permit H.265/HEVC when the connecting client declares it can decode
+    /// it (R4 C1). Off by default: sessions stay H.264.
+    pub fn set_hevc_allowed(&mut self, allowed: bool) {
+        self.hevc_allowed = allowed;
     }
 
     /// Set a channel to receive input events from the remote client.
@@ -220,7 +232,7 @@ impl StreamingServer {
     /// Run the full streaming pipeline for a single connection
     async fn run_pipeline(&mut self, connection: SharedConnection) -> Result<()> {
         // Read optional client config streams before starting the pipeline.
-        let device_id = read_client_config(&connection, &mut self.config).await;
+        let device_id = read_client_config(&connection, &mut self.config, self.hevc_allowed).await;
 
         // R4 A2 session telemetry: a shared recorder observes the connection
         // on a slow poll and an RAII guard emits the outcome report when the
@@ -872,20 +884,22 @@ fn trace_packet_stats(packet: &EncodedPacket) {
 
 /// Read the client's pre-pipeline config streams from the QUIC connection.
 ///
-/// The client may send up to two small uni-streams immediately after
-/// connecting: a monitor-index config (`[0xFF, 0x00] + u32 LE`) and a device
-/// identity (`[0xFE, 0x00] + len u8 + utf8`, see `client::DEVICE_ID_MARKER`).
-/// Each read is bounded by a short timeout so the pipeline is not blocked
-/// when a stream (or the whole handshake, for older clients) is absent.
+/// The client may send up to three small uni-streams immediately after
+/// connecting: a monitor-index config (`[0xFF, 0x00] + u32 LE`), a device
+/// identity (`[0xFE, 0x00] + len u8 + utf8`, see `client::DEVICE_ID_MARKER`)
+/// and codec capabilities (`[0xFD, 0x00] + u8`, R4 C1). Each read is bounded
+/// by a short timeout so the pipeline is not blocked when a stream (or the
+/// whole handshake, for older clients) is absent.
 /// Returns the announced device id, if any.
 async fn read_client_config(
     connection: &SharedConnection,
     config: &mut StreamingConfig,
+    hevc_allowed: bool,
 ) -> Option<String> {
-    use super::client::{DEVICE_ID_MARKER, MONITOR_CONFIG_MARKER};
+    use super::client::{CODEC_CAPS_MARKER, DEVICE_ID_MARKER, MONITOR_CONFIG_MARKER};
 
     let mut device_id: Option<String> = None;
-    for _ in 0..2 {
+    for _ in 0..3 {
         let stream = tokio::select! {
             biased;
             result = connection.accept_uni() => result,
@@ -924,11 +938,36 @@ async fn read_client_config(
                 }
                 Err(e) => debug!("Malformed device identity stream: {e}"),
             }
+        } else if marker == CODEC_CAPS_MARKER {
+            let mut caps = [0u8; 1];
+            if !read_with_timeout(&mut *stream, &mut caps).await {
+                break;
+            }
+            if let Some(codec) = negotiate_codec(caps[0], hevc_allowed, config.codec) {
+                config.codec = codec;
+            }
+            info!(
+                caps = caps[0],
+                codec = config.codec.display_name(),
+                "Client codec caps negotiated"
+            );
         } else {
             debug!("Unknown config marker: {:02X?}", &marker);
         }
     }
     device_id
+}
+
+/// R4 C1: pick the session codec from the client's capability bits and the
+/// server's policy. Pure so the negotiation is unit-testable without a
+/// pipeline. Returns `None` to keep the current config codec (H.264 default).
+fn negotiate_codec(caps: u8, hevc_allowed: bool, current: VideoCodec) -> Option<VideoCodec> {
+    use super::client::CODEC_CAP_HEVC;
+    if hevc_allowed && caps & CODEC_CAP_HEVC != 0 && current == VideoCodec::H264 {
+        Some(VideoCodec::H265)
+    } else {
+        None
+    }
 }
 
 /// `read_exact` bounded by a short timeout; false on timeout or error.
@@ -1196,5 +1235,67 @@ mod tests {
 
         let bytes = header.as_bytes();
         assert_eq!(bytes.len(), 18);
+    }
+
+    /// R4 C1 wire round-trip: a real `StreamingClient::connect` with a
+    /// monitor index, device id and HEVC capability must land in
+    /// `read_client_config` as a negotiated H.265 session.
+    #[tokio::test]
+    async fn client_config_streams_negotiate_codec_over_loopback() {
+        // reqwest (aws-lc-rs) and quinn (ring) link two rustls providers;
+        // pick ring explicitly, same as the connection trait test does.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        use super::super::client::{CODEC_CAP_HEVC, StreamingClient};
+
+        let certs = std::sync::Arc::new(CertManager::new().expect("certs"));
+        let alpn = vec![StreamTransportConfig::default().alpn];
+        let server_endpoint = quinn::Endpoint::server(
+            certs.server_config(alpn.clone()).expect("server config"),
+            "127.0.0.1:0".parse().unwrap(),
+        )
+        .expect("bind");
+        let addr = server_endpoint.local_addr().unwrap();
+        let accept = tokio::spawn(async move {
+            let incoming = server_endpoint.accept().await.expect("incoming");
+            QuinnConnection::shared(incoming.await.expect("accept"))
+        });
+
+        let (_client, _frames, _audio) = StreamingClient::connect(
+            &addr.to_string(),
+            certs,
+            Some(2),
+            Some("device-c1"),
+            Some(CODEC_CAP_HEVC),
+        )
+        .await
+        .expect("connect");
+
+        let server_conn = accept.await.expect("accept task");
+        let mut config = StreamingConfig::default();
+        let device_id = read_client_config(&server_conn, &mut config, true).await;
+
+        assert_eq!(device_id.as_deref(), Some("device-c1"));
+        assert_eq!(config.monitor_index, 2);
+        assert_eq!(config.codec, VideoCodec::H265);
+    }
+
+    #[test]
+    fn codec_negotiation_matrix() {
+        use super::super::client::CODEC_CAP_HEVC;
+        // Absent/zero caps or a server that did not allow HEVC stay H.264.
+        assert_eq!(negotiate_codec(0, true, VideoCodec::H264), None);
+        assert_eq!(
+            negotiate_codec(CODEC_CAP_HEVC, false, VideoCodec::H264),
+            None
+        );
+        // Both ends agree → HEVC.
+        assert_eq!(
+            negotiate_codec(CODEC_CAP_HEVC, true, VideoCodec::H264),
+            Some(VideoCodec::H265)
+        );
+        // A server already configured for H.265 is untouched; unknown future
+        // capability bits alone must not change anything.
+        assert_eq!(negotiate_codec(0b10, true, VideoCodec::H265), None);
+        assert_eq!(negotiate_codec(0b10, true, VideoCodec::H264), None);
     }
 }

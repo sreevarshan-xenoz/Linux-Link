@@ -9,8 +9,9 @@ import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Low-latency H.264 decoder that drains encoded access units from the Rust
- * bridge ([RustCore.receiveFrames]) and renders them straight to a [Surface].
+ * Low-latency H.264/H.265 decoder that drains encoded access units from the
+ * Rust bridge ([RustCore.receiveFrames]) and renders them straight to a
+ * [Surface].
  *
  * Runs on a dedicated thread ([start] blocks); stop it by clearing [running]
  * and joining via [RustCore.stopStreaming] on the caller side. The stream is
@@ -18,12 +19,19 @@ import java.util.concurrent.atomic.AtomicBoolean
  * so buffers are fed to MediaCodec as-is; the decoder signals the real format
  * on the first output buffer.
  *
+ * R4 C1: the codec is not known at start — the server only upgrades to
+ * HEVC when both ends negotiate it — so configuration is deferred to the
+ * first keyframe, whose NAL header is sniffed for `video/avc` vs
+ * `video/hevc` (`sniffMime`). Frames before the first IDR are dropped (the
+ * server always starts a pipeline with an IDR, so this is a few ms at most).
+ *
  * [width]/[height] are only the initial guess — window-crop rebuilds the
  * server encoder at the window's resolution mid-session, so when
  * INFO_OUTPUT_FORMAT_CHANGED reports different dimensions the codec is
  * reconfigured and the cached keyframe re-seeds it (the server always emits
- * an IDR as the first packet after a rebuild). The new size is announced via
- * [onVideoSize] so the UI can re-layout.
+ * an IDR as the first packet after a rebuild; the codec itself never changes
+ * mid-session). The new size is announced via [onVideoSize] so the UI can
+ * re-layout.
  */
 class H264Decoder(
     private val surface: Surface,
@@ -36,6 +44,8 @@ class H264Decoder(
     private var codec: MediaCodec? = null
     private var configW = width
     private var configH = height
+    private var mime = MIME_AVC
+
     /** Latest keyframe bytes, kept for reconfigure re-seeding. */
     private var lastKeyframe: ByteArray? = null
 
@@ -48,10 +58,11 @@ class H264Decoder(
      * honored end to end.
      */
     private fun buildFormat(
+        mime: String,
         width: Int,
         height: Int,
     ): MediaFormat {
-        val format = MediaFormat.createVideoFormat(MIME, width, height)
+        val format = MediaFormat.createVideoFormat(mime, width, height)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
         }
@@ -62,31 +73,40 @@ class H264Decoder(
     }
 
     /**
-     * Blocking decode loop. Configure the codec, then repeatedly pull a batch
-     * of frames and feed them, rendering every decoded output buffer to the
-     * surface immediately.
+     * Blocking decode loop. Waits for the first keyframe to learn the codec,
+     * configures MediaCodec, then repeatedly pulls a batch of frames and
+     * feeds them, rendering every decoded output buffer to the surface
+     * immediately.
      */
     fun start() {
-        val mediaCodec = MediaCodec.createDecoderByType(MIME)
-        codec = mediaCodec
+        running.set(true)
+        var mediaCodec: MediaCodec? = null
         try {
-            mediaCodec.configure(buildFormat(configW, configH), surface, null, 0)
-            mediaCodec.start()
-            running.set(true)
-
             val bufferInfo = MediaCodec.BufferInfo()
             while (running.get()) {
                 val frames = RustCore.receiveFrames(timeoutMs = POLL_TIMEOUT_MS)
                 if (frames.isEmpty()) continue
                 for (frame in frames) {
                     if (!running.get()) break
+                    if (mediaCodec == null) {
+                        // Annex-B access-unit sniffing needs a keyframe header.
+                        if (!frame.isKeyframe) continue
+                        mime = sniffMime(frame.data)
+                        mediaCodec = MediaCodec.createDecoderByType(mime).also {
+                            codec = it
+                            it.configure(buildFormat(mime, configW, configH), surface, null, 0)
+                            it.start()
+                        }
+                    }
                     feed(mediaCodec, bufferInfo, frame.data, frame.isKeyframe)
                 }
             }
         } finally {
             running.set(false)
-            runCatching { mediaCodec.stop() }
-            runCatching { mediaCodec.release() }
+            mediaCodec?.let { opened ->
+                runCatching { opened.stop() }
+                runCatching { opened.release() }
+            }
             codec = null
         }
     }
@@ -146,7 +166,7 @@ class H264Decoder(
         configH = h
         runCatching {
             codec.stop()
-            codec.configure(buildFormat(w, h), surface, null, 0)
+            codec.configure(buildFormat(mime, w, h), surface, null, 0)
             codec.start()
         }.onFailure { return true }
         onVideoSize?.invoke(w, h)
@@ -173,9 +193,31 @@ class H264Decoder(
     }
 
     companion object {
-        private const val MIME = "video/avc"
+        private const val MIME_AVC = "video/avc"
+        private const val MIME_HEVC = "video/hevc"
         private const val MAX_INPUT_SIZE = 4 * 1024 * 1024
         private const val POLL_TIMEOUT_MS = 50
         private const val INPUT_TIMEOUT_US = 10_000L
+
+        /**
+         * R4 C1: decide the codec from the first NAL header of an Annex-B
+         * keyframe access unit. Our encoders start H.264 keyframes with SPS
+         * (nal_unit_type 7 → first byte 0x67) and HEVC keyframes with VPS/SPS
+         * (nal_unit_type 32/33 in bits 1..6 → 0x40/0x42, followed by the
+         * layer/temporal byte 0x01). Anything unrecognized stays H.264 —
+         * the negotiated default.
+         */
+        fun sniffMime(data: ByteArray): String {
+            var i = 0
+            while (i < data.size && data[i].toInt() == 0) i++
+            // Skip the start-code 0x01 after the zero run (3- or 4-byte code).
+            if (i >= data.size || data[i].toInt() != 1) return MIME_AVC
+            i++
+            if (i + 1 >= data.size) return MIME_AVC
+            val b0 = data[i].toInt() and 0xFF
+            val b1 = data[i + 1].toInt() and 0xFF
+            val hevcType = (b0 shr 1) and 0x3F
+            return if ((hevcType == 32 || hevcType == 33) && b1 == 0x01) MIME_HEVC else MIME_AVC
+        }
     }
 }

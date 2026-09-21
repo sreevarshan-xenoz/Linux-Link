@@ -29,13 +29,21 @@ pub(crate) const MONITOR_CONFIG_MARKER: [u8; 2] = [0xFF, 0x00];
 /// video session to the device that paired over the control channel.
 pub(crate) const DEVICE_ID_MARKER: [u8; 2] = [0xFE, 0x00];
 
+/// Marker bytes for a client-to-server codec-capability QUIC stream (R4 C1):
+/// `[0xFD, 0x00, caps:u8]`. Absent = legacy client that only decodes H.264.
+pub(crate) const CODEC_CAPS_MARKER: [u8; 2] = [0xFD, 0x00];
+
+/// `CODEC_CAPS_MARKER` bit 0: the client can decode H.265/HEVC Annex-B.
+/// H.264 is assumed for every client; future bits cover AV1 etc.
+pub const CODEC_CAP_HEVC: u8 = 0b0000_0001;
+
 /// QUIC Stream Client — connects to a StreamingServer and receives H.264 video frames.
 ///
 /// # Usage
 ///
 /// ```ignore
 /// let cert_manager = std::sync::Arc::new(CertManager::new().unwrap());
-/// let (mut client, packet_rx) = StreamingClient::connect("100.64.0.1:4716", cert_manager, None, None).await?;
+/// let (mut client, packet_rx) = StreamingClient::connect("100.64.0.1:4716", cert_manager, None, None, None).await?;
 /// // Spawn a task to consume packets from packet_rx
 /// tokio::spawn(consume_packets(packet_rx));
 /// client.start().await; // runs until cancelled
@@ -80,12 +88,15 @@ impl StreamingClient {
     /// The address should be in the form `"host:port"`, e.g. `"100.64.0.1:4716"`.
     /// Optionally sends a `monitor_index` to the server for multi-monitor selection.
     /// `device_id` is announced in-band so the server can apply its pairing gate.
+    /// `codec_caps` (R4 C1, see [`CODEC_CAP_HEVC`]) advertises the client's
+    /// decodable set; `None` (older callers) means H.264-only.
     /// Returns the client and receiver channels for consuming video frames and audio packets.
     pub async fn connect(
         addr: &str,
         cert_manager: std::sync::Arc<CertManager>,
         monitor_index: Option<u32>,
         device_id: Option<&str>,
+        codec_caps: Option<u8>,
     ) -> Result<(
         Self,
         mpsc::Receiver<EncodedPacket>,
@@ -129,6 +140,7 @@ impl StreamingClient {
                 QuinnConnection::shared(quic_connection),
                 monitor_index,
                 device_id,
+                codec_caps,
                 session_id,
             )
             .await;
@@ -147,6 +159,7 @@ impl StreamingClient {
         connection: SharedConnection,
         monitor_index: Option<u32>,
         device_id: Option<&str>,
+        codec_caps: Option<u8>,
     ) -> (
         Self,
         mpsc::Receiver<EncodedPacket>,
@@ -156,6 +169,7 @@ impl StreamingClient {
             connection,
             monitor_index,
             device_id,
+            codec_caps,
             uuid::Uuid::new_v4().to_string(),
         )
         .await
@@ -165,6 +179,7 @@ impl StreamingClient {
         connection: SharedConnection,
         monitor_index: Option<u32>,
         device_id: Option<&str>,
+        codec_caps: Option<u8>,
         session_id: String,
     ) -> (
         Self,
@@ -221,6 +236,27 @@ impl StreamingClient {
                 }
             } else {
                 warn!("Device id too long to announce — pairing gate will reject");
+            }
+        }
+
+        // Advertise our decodable codec set (R4 C1). Absent = H.264-only.
+        if let Some(caps) = codec_caps
+            && caps != 0
+        {
+            match connection.open_uni().await {
+                Ok(mut caps_stream) => {
+                    let buf = [CODEC_CAPS_MARKER[0], CODEC_CAPS_MARKER[1], caps];
+                    if let Err(e) = caps_stream.write_all(&buf).await {
+                        warn!(error = %e, "Failed to send codec caps");
+                    }
+                    if let Err(e) = caps_stream.finish() {
+                        warn!(error = %e, "Failed to finish codec caps stream");
+                    }
+                    info!(caps, "Sent codec capabilities to server");
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to open codec caps stream");
+                }
             }
         }
 
