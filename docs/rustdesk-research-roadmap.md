@@ -166,8 +166,28 @@ From **scrcpy** (code-level OK, Apache-2.0):
   back to output frames mid-session without dropping the stream. Accept
   criterion met: window frames come from the compositor, occlusion-correct,
   no software crop applied.
-- **B3 · Portal fallback ordering.** Auto (screencopy on Hyprland/wlroots
-  that implement it, portal elsewhere, X11 last) + config override.
+- **B3 · Portal fallback ordering.** ✅ **Landed 2026-09-21** (ordering
+  unit-verified; end-to-end backend selection needs a real session).
+  `start_capture_auto`'s hard-coded Wayland/X11 branch became a data-driven
+  attempt list: a pure `capture_attempts(backend, detected) ->
+  Result<Vec<CaptureBackend>>` returns, for `Auto`, `[screencopy, portal]` on
+  Wayland (screencopy is present only on wlroots/Hyprland; any pre-first-frame
+  setup failure — including `LINUX_LINK_SCREENCOPY=0` — falls to the portal),
+  `[x11]` on bare X11, and errors on headless. The runner clones the cheap
+  `frame_tx`/`cancel`/`window_rx`/`window_mode` per attempt and returns the
+  first backend that opens; only the screencopy attempt consumes the window
+  watch/Arc (portal and X11 ignore them). A new `capture_backend` key in
+  config.toml (`"auto"` default | `"screencopy"` | `"portal"` | `"x11"`) pins
+  the pipeline to a single attempt, so a runtime failure surfaces instead of
+  silently switching — the operator escape hatch when screencopy misbehaves.
+  Explicit-but-impossible pairs are rejected at selection time (e.g.
+  `screencopy` on non-Wayland); `x11` on Wayland is allowed with the
+  XWayland-only-root caveat documented, `portal` on X11 is honoured as intent.
+  Threaded through `StreamingServer::set_capture_backend` and applied at BOTH
+  the LAN (`service.rs`) and WAN (`iroh_endpoint.rs`) construction sites,
+  mirroring the existing `set_hevc_allowed` clone-per-connection pattern. 4
+  tests (auto ordering per display server, explicit single-pin, impossible
+  combos error, config TOML parse + default + unknown-rejects).
 
 ### Phase C — Encoder ladder & hardware paths (M–L) — *partly box-limited*
 - **C1 · Capability negotiation at session start.** ✅ **Landed 2026-09-21**

@@ -519,47 +519,122 @@ fn check_x11_available() -> bool {
     }
 }
 
+/// Which capture backend the server should use. `Auto` (the default) keeps the
+/// historical detect-then-fallback behaviour; the explicit variants are a
+/// config override (`capture_backend` in config.toml) to pin or reorder the
+/// pipeline — e.g. force the portal when screencopy misbehaves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CaptureBackend {
+    /// Detect the display server and try the best backend, falling back.
+    #[default]
+    Auto,
+    /// wlroots `zwlr_screencopy` (Hyprland): native, no portal grant dialog.
+    Screencopy,
+    /// XDG Desktop Portal + PipeWire.
+    Portal,
+    /// Direct X11 `GetImage` (works on Wayland only through XWayland's root).
+    X11,
+}
+
 /// Auto-detect display server and start the appropriate capture method.
 ///
-/// Tries PipeWire/XDP first for Wayland, then falls back to X11 if applicable.
+/// With `CaptureBackend::Auto` this tries screencopy first on wlroots
+/// compositors, then the PipeWire portal, then X11 — falling back on any setup
+/// failure reported before the first frame. An explicit backend pins the
+/// pipeline (single attempt); a runtime failure then surfaces rather than
+/// silently switching. Split from [`capture_attempts`] so the ordering is
+/// unit-testable without touching real capture.
+#[allow(clippy::too_many_arguments)]
 pub async fn start_capture_auto(
     config: StreamingConfig,
     frame_tx: mpsc::Sender<VideoFrame>,
     cancel: CancellationToken,
     window_rx: tokio::sync::watch::Receiver<u64>,
     window_mode: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    backend: CaptureBackend,
 ) -> Result<CaptureSession> {
-    match detect_display_server() {
-        DisplayServer::Wayland => {
-            // R4 B1: on wlroots compositors (Hyprland) the screencopy
-            // protocol captures natively — no portal grant dialog. Any
-            // setup failure (including non-wlroots Wayland) is reported
-            // before the first frame, so falling back here is clean.
-            match super::capture_screencopy::start_screencopy_capture(
+    let attempts = capture_attempts(backend, detect_display_server())?;
+    let mut last_err: Option<anyhow::Error> = None;
+    for attempt in attempts {
+        let result = match attempt {
+            CaptureBackend::Auto => continue,
+            // window_rx/window_mode are cheap to clone (watch Receiver + Arc)
+            // and only the screencopy backend uses them.
+            CaptureBackend::Screencopy => super::capture_screencopy::start_screencopy_capture(
                 config.clone(),
                 frame_tx.clone(),
                 cancel.clone(),
-                window_rx,
-                window_mode,
-            ) {
-                Ok(session) => {
-                    info!("Starting Wayland screencopy capture (no portal)");
-                    Ok(session)
-                }
-                Err(e) => {
-                    info!("Screencopy unavailable ({e:#}); using Wayland/PipeWire portal capture");
-                    start_capture(config, frame_tx, cancel).await
-                }
+                window_rx.clone(),
+                window_mode.clone(),
+            ),
+            CaptureBackend::Portal => {
+                start_capture(config.clone(), frame_tx.clone(), cancel.clone()).await
+            }
+            CaptureBackend::X11 => {
+                start_x11_capture(config.clone(), frame_tx.clone(), cancel.clone()).await
+            }
+        };
+        match result {
+            Ok(session) => {
+                info!("Capture started via backend {attempt:?}");
+                return Ok(session);
+            }
+            Err(e) => {
+                info!("Capture backend {attempt:?} unavailable ({e:#}); trying next");
+                last_err = Some(e);
             }
         }
-        DisplayServer::X11 => {
-            info!("Starting X11 capture");
-            start_x11_capture(config, frame_tx, cancel).await
-        }
-        DisplayServer::None => {
-            bail!("No display server detected — cannot start capture");
-        }
     }
+    Err(last_err.unwrap_or_else(|| anyhow::Error::msg("no capture backend available")))
+}
+
+/// Pure decision table: which backends to try, in order, for a configured
+/// `backend` given the `detected` display server. `Err` means the combination
+/// cannot work. Keeping this separate from [`start_capture_auto`] makes the
+/// ordering testable without spawning real capture.
+fn capture_attempts(
+    backend: CaptureBackend,
+    detected: DisplayServer,
+) -> Result<Vec<CaptureBackend>> {
+    let wayland = detected == DisplayServer::Wayland;
+    let x11 = detected == DisplayServer::X11;
+    let list = match backend {
+        CaptureBackend::Auto => {
+            if wayland {
+                vec![CaptureBackend::Screencopy, CaptureBackend::Portal]
+            } else if x11 {
+                vec![CaptureBackend::X11]
+            } else {
+                bail!("No display server detected — cannot start capture");
+            }
+        }
+        CaptureBackend::Screencopy => {
+            if wayland {
+                vec![CaptureBackend::Screencopy]
+            } else {
+                bail!("capture_backend = \"screencopy\" requires a Wayland compositor");
+            }
+        }
+        CaptureBackend::Portal => {
+            if wayland || x11 {
+                // The portal also fronts X11 sessions; an explicit request is
+                // honoured and a real portal failure surfaces at runtime.
+                vec![CaptureBackend::Portal]
+            } else {
+                bail!("capture_backend = \"portal\" requires a desktop session");
+            }
+        }
+        CaptureBackend::X11 => {
+            if x11 || wayland {
+                // On Wayland this captures only XWayland's root window.
+                vec![CaptureBackend::X11]
+            } else {
+                bail!("capture_backend = \"x11\" requires an X11 (or XWayland) display");
+            }
+        }
+    };
+    Ok(list)
 }
 
 // ---------------------------------------------------------------------------
@@ -818,5 +893,49 @@ mod tests {
         assert_eq!(config.width, 1920);
         assert_eq!(config.height, 1080);
         assert_eq!(config.fps, 60);
+    }
+
+    #[test]
+    fn auto_ordering_by_display_server() {
+        use CaptureBackend::{Portal, Screencopy, X11};
+        // Wayland: screencopy first, portal fallback.
+        assert_eq!(
+            capture_attempts(CaptureBackend::Auto, DisplayServer::Wayland).unwrap(),
+            vec![Screencopy, Portal]
+        );
+        // Bare X11: GetImage only.
+        assert_eq!(
+            capture_attempts(CaptureBackend::Auto, DisplayServer::X11).unwrap(),
+            vec![X11]
+        );
+        // Headless: nothing to try.
+        assert!(capture_attempts(CaptureBackend::Auto, DisplayServer::None).is_err());
+    }
+
+    #[test]
+    fn explicit_backend_pins_single_attempt() {
+        use CaptureBackend::{Portal, Screencopy, X11};
+        assert_eq!(
+            capture_attempts(Screencopy, DisplayServer::Wayland).unwrap(),
+            vec![Screencopy]
+        );
+        assert_eq!(
+            capture_attempts(Portal, DisplayServer::X11).unwrap(),
+            vec![Portal]
+        );
+        // X11 is allowed on Wayland (XWayland root), documented caveat.
+        assert_eq!(
+            capture_attempts(X11, DisplayServer::Wayland).unwrap(),
+            vec![X11]
+        );
+    }
+
+    #[test]
+    fn impossible_backend_combinations_error() {
+        use CaptureBackend::{Portal, Screencopy, X11};
+        assert!(capture_attempts(Screencopy, DisplayServer::X11).is_err());
+        assert!(capture_attempts(Screencopy, DisplayServer::None).is_err());
+        assert!(capture_attempts(Portal, DisplayServer::None).is_err());
+        assert!(capture_attempts(X11, DisplayServer::None).is_err());
     }
 }

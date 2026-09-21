@@ -45,9 +45,18 @@ place.
 - [ ] Status chip: kill the server → "Down: <reason>" chip + Retry rebuilds after restarting the server.
 - [ ] R4 B1 screencopy backend (desktop-observable): starting a stream on
       Hyprland must NOT raise the portal screen-share grant dialog; server log shows
-      "Starting Wayland screencopy capture (no portal)". If it shows "Screencopy unavailable (…);
-      using Wayland/PipeWire portal capture" instead, the reason is in the line — that's the
-      fallback working, but note it as a finding. `LINUX_LINK_SCREENCOPY=0` forces the portal path.
+      "Capture started via backend Screencopy". If instead it shows "Capture backend
+      Screencopy unavailable (…); trying next" followed by "Capture started via backend
+      Portal", the reason is in the line — that's the fallback working, but note it as a
+      finding. `LINUX_LINK_SCREENCOPY=0` forces the portal path.
+- [ ] R4 B3 capture_backend config override: set `capture_backend = "portal"` in
+      config.toml, restart, start a stream → log shows "Capture started via backend Portal"
+      and NO screencopy attempt line (pipeline pinned). With `capture_backend = "screencopy"`
+      on a NON-wlroots/portal-only Wayland, the server must fail the session with a
+      "Capture backend Screencopy unavailable" error rather than silently falling back to the
+      portal (explicit intent surfaces). Omitting the key (or `"auto"`) restores the
+      screencopy→portal fallback above. An unknown value (e.g. `"v4l2"`) makes the server
+      refuse to start with a TOML parse error.
 - [ ] R4 B1 idle pacing + freshness: keep the desktop static → `src` fps drops to ≤10
       (damage-driven VFR); move a window → back to target fps within a frame or two, no tearing
       or upside-down frames (YInvert handling).

@@ -68,6 +68,9 @@ pub struct StreamingServer {
     /// it (`Config::allow_hevc` — HEVC encoder availability is the
     /// operator's box, and the fallback ladder for a failed open is C2).
     hevc_allowed: bool,
+    /// R4 B3 capture backend selection: `Auto` detects + falls back, an
+    /// explicit variant pins the pipeline (`Config::capture_backend`).
+    capture_backend: super::CaptureBackend,
 }
 
 impl StreamingServer {
@@ -93,6 +96,7 @@ impl StreamingServer {
             view_only: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             full_quality: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             hevc_allowed: false,
+            capture_backend: super::CaptureBackend::default(),
         }
     }
 
@@ -114,6 +118,12 @@ impl StreamingServer {
     /// it (R4 C1). Off by default: sessions stay H.264.
     pub fn set_hevc_allowed(&mut self, allowed: bool) {
         self.hevc_allowed = allowed;
+    }
+
+    /// Choose the capture backend (R4 B3). `Auto` (default) detects the
+    /// display server and falls back; an explicit variant pins the pipeline.
+    pub fn set_capture_backend(&mut self, backend: super::CaptureBackend) {
+        self.capture_backend = backend;
     }
 
     /// Set a channel to receive input events from the remote client.
@@ -319,6 +329,7 @@ impl StreamingServer {
             capture_cancel,
             window_rx.clone(),
             window_mode.clone(),
+            self.capture_backend,
         )
         .await
         .context("Failed to start screen capture")?;

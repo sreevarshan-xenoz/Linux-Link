@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use linux_link_core::DEFAULT_CONTROL_PORT;
+use linux_link_core::streaming::CaptureBackend;
 use linux_link_core::streaming::VideoQualityPreset;
 use linux_link_core::streaming::client::DEFAULT_STREAMING_PORT;
 use serde::Deserialize;
@@ -25,6 +26,13 @@ pub struct Config {
     /// opening it fails at runtime the session still falls back (C2).
     #[serde(default)]
     pub allow_hevc: bool,
+    /// Capture backend selection (R4 B3). `"auto"` (default) detects the
+    /// display server and falls back (screencopy → portal on Wayland, X11 on
+    /// bare X11). `"screencopy"`, `"portal"` or `"x11"` pins the pipeline —
+    /// useful to force the portal when screencopy misbehaves, or to stay on
+    /// XWayland capture.
+    #[serde(default)]
+    pub capture_backend: CaptureBackend,
 }
 
 fn default_pairing_required() -> bool {
@@ -40,6 +48,7 @@ impl Default for Config {
             video_quality: VideoQualityPreset::Balanced,
             pairing_required: true,
             allow_hevc: false,
+            capture_backend: CaptureBackend::Auto,
         }
     }
 }
@@ -73,4 +82,21 @@ const fn default_streaming_port() -> u16 {
 
 fn default_log_level() -> String {
     "info".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capture_backend_defaults_to_auto_and_parses_override() {
+        let default: Config = toml::from_str("").unwrap();
+        assert!(matches!(default.capture_backend, CaptureBackend::Auto));
+
+        let pinned: Config = toml::from_str("capture_backend = \"portal\"").unwrap();
+        assert!(matches!(pinned.capture_backend, CaptureBackend::Portal));
+
+        let bad = toml::from_str::<Config>("capture_backend = \"v4l2\"");
+        assert!(bad.is_err(), "unknown backend must fail to parse");
+    }
 }
