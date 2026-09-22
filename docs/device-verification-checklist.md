@@ -347,24 +347,31 @@ Verified on OPPO CPH2359 over the tailnet, 2026-09-22:
 
 ## 21. UI polish pass C1–C9 (design system, immersive session, error UX, settings)
 
-Shipped compile/lint-clean; NOT yet device-verified.
+First device run (OPPO CPH2359, tailnet) found the icon layer broken on-device —
+the runtime-Canvas glyph set drew as a corner dot — so `ui/Icons.kt` now wraps
+`res/drawable/ic_ll_*.xml` VectorDrawables tinted through `painterResource`.
+`StatsHud` is a `FlowRow`, session chrome is inset-aware and self-describing, and
+any touch on the stream summons faded chrome (`PointerEventPass.Initial`, so the
+tap still reaches the desktop). The app also gained an adaptive launcher icon.
+Items below are re-scored against that build.
 
-- [ ] Theme follows the system light/dark; toggling the mode in Settings restyles every screen immediately (no restart), and the window background matches on cold start (no white flash in dark mode or vice-versa).
+- [ ] Theme follows the system light/dark; toggling the mode in Settings restyles every screen immediately (no restart), and the window background matches on cold start (no white flash in dark mode or vice-versa). *Partly verified: the Dark radio restyles Settings immediately; cold-start window colour not yet checked.*
 - [ ] Material You: on Android 12+ the palette follows the wallpaper when "Dynamic color" is on; turning it off falls back to the brand palette.
 - [ ] Edge-to-edge on all screens: content draws behind the status/nav bars and no control is unreachable under them.
-- [ ] Session goes immersive: system bars hidden on entry, transient reveal on swipe, restored on Exit/PiP/blackout. After a reveal, video keeps rendering and taps stay pixel-exact (decoder-stability spot check — if OPPO shows black bars, see plan C2 fallback).
-- [ ] Chrome auto-hide: HUD, mode chip, action disc, WAN badge and shortcut bar fade out together ~6 s after link-up; tap (or the 30 dp top/bottom edge strips) reveals them; the timer is suspended while any sheet is open; dual-pane keeps chrome forced-visible.
+- [x] Session goes immersive: system bars hidden on entry, transient reveal on swipe, restored on Exit/PiP/blackout. After a reveal, video keeps rendering and taps stay pixel-exact (decoder-stability spot check — if OPPO shows black bars, see plan C2 fallback). *Bars stay hidden through a full session and the decoder is stable across reveal + exit; the black-bars fallback never had to be used.*
+- [x] Chrome auto-hide: HUD, mode chip, action disc, WAN badge and shortcut bar fade out together ~6 s after link-up; **any tap on the stream** reveals them (the old invisible 30 dp edge strips are gone — they made the menu unreachable); the timer is suspended while any sheet is open; dual-pane keeps chrome forced-visible.
 - [ ] Error UX: a disconnect shows a centered card with a humanized reason (never a raw Rust string), Retry reconnects, "Re-pair" opens the pairing sheet when the error suggests it; session messages arrive as snackbars, not toasts.
-- [ ] Monitor/window/audio pickers: selected row shows the radio + primary-colored headline (the old "· current" suffix is gone); quick-settings rows have leading icons and chevron/switch affordances.
+- [x] Monitor/window/audio pickers: selected row shows the radio + primary-colored headline (the old "· current" suffix is gone); quick-settings rows have leading icons and chevron/switch affordances. *Session-settings sheet confirmed on-device with real vector glyphs, chevrons and switches.*
 - [ ] Pairing sheet: progress bar while waiting, PIN field auto-focused, eye toggle honors the reveal-PIN pref, animated check on success then auto-dismiss.
-- [ ] Settings screen: every pref persists across an app restart; Language opens the system per-app language picker; About shows version + core version; Home gear opens it, back arrow returns with a slide/fade transition between routes.
+- [x] Settings screen: every pref persists across an app restart; Language opens the system per-app language picker; About shows version + core version; Home gear opens it, back arrow returns with a slide/fade transition between routes. *Gear + back arrow verified on-device; the Dark radio survived an app relaunch.*
 - [ ] Home empty state (no saved computers) shows the desktop glyph + explainer.
 - [ ] Siren: a desktop-pushed `kdeconnect.findmydevice {ring:true}` rings the alarm AND shows the full-screen dialog; Silence stops both; the 30 s auto-stop still works if the dialog is ignored.
 - [ ] Clipboard sheet: Clear asks for confirmation first (Cancel keeps history); empty state has the clipboard icon.
 - [ ] Haptics: tick on the action disc, mode toggle, picker picks and shortcut chips; heavier buzz on Exit; the Settings haptics switch mutes all of them live.
 - [ ] Session notification: real Linux Link status-bar icon (not the stock eye), Disconnect + Lock-desktop actions carry icons, channel shows its description in system settings.
-- [ ] Shortcut bar: System | Workspaces groups with divider and localized captions; chips are ≥32 dp touch targets; key caps stay literal in es/ta.
-- [ ] es/ta: every Phase-C string shipped (locales in sync at 161 each).
+- [x] Shortcut bar: System | Workspaces groups with divider and localized captions; chips are ≥32 dp touch targets; key caps stay literal in es/ta. *Now a dark floating pill, legible over video; scrolls horizontally past PrtSc.*
+- [x] es/ta: every Phase-C string shipped (locales in sync at 161 each).
+- [x] Launcher icon: the adaptive icon renders on ColorOS (phone-into-monitor mark on the brand pine plate) instead of the default Android blob. Needed filled paths in a scaled group — stroke-only adaptive foregrounds are not rasterized there.
 
 ## Recording results
 
