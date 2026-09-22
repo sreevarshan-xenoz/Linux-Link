@@ -89,8 +89,14 @@ pub async fn run(config: Config) -> Result<()> {
     // desktop when one starts, and consume `linux-link kick` requests.
     tokio::spawn(crate::live_sessions::run_watcher());
 
-    // Prepare shared state for v2 multiplexer and v1 streaming
-    let cert_manager = Arc::new(CertManager::new().context("Failed to create CertManager")?);
+    // Prepare shared state for v2 multiplexer and v1 streaming.
+    // The QUIC identity must be STABLE across restarts: clients pin it with
+    // TOFU, so a regenerated cert makes every phone reject LAN streaming
+    // until its pin is cleared.
+    let identity_dir = crate::state::state_dir()?.join("certs");
+    let cert_manager = Arc::new(
+        CertManager::load_or_create(&identity_dir).context("Failed to create CertManager")?,
+    );
     let registry = Arc::new(kde_service.registry.clone_for_dispatch());
     let local_v2_identity = IdentityPacketV2 {
         device_id: kde_service
