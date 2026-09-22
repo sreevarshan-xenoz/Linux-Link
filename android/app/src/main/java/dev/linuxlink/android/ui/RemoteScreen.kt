@@ -24,10 +24,13 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -48,14 +51,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import dev.linuxlink.android.HostStore
 import dev.linuxlink.android.R
 import dev.linuxlink.android.bridge.RustCore
@@ -179,21 +184,12 @@ fun RemoteScreen(
             delay(1_000)
         }
     }
-    // UI refresh: the stats/workspace HUD fades to a ghost a few seconds
-    // after the link comes up so the desktop itself is what's on screen;
-    // tapping the ghost brings it back and re-arms the timer.
-    var hudFocused by remember { mutableStateOf(true) }
-    LaunchedEffect(hudFocused, status) {
-        if (hudFocused && status is StreamStatus.Up) {
-            delay(6_000)
-            hudFocused = false
-        }
-    }
-    val hudAlpha by animateFloatAsState(
-        targetValue = if (hudFocused) 1f else 0.3f,
-        animationSpec = tween(400),
-        label = "hudFade",
-    )
+    // UI refresh: the whole session chrome (HUD, mode row, action disc,
+    // shortcut bar, Exit) auto-hides a few seconds after the link comes up
+    // — Chrome Remote Desktop style — and comes back on a tap of the
+    // transparent top-edge strip (or the HUD itself while it is visible).
+    // The timer re-arms whenever the sheets close or the link (re)connects.
+    var chromeVisible by remember { mutableStateOf(true) }
     // Tier-2 #11b: PIN pairing state. Unpaired sessions open the sheet —
     // with pairing enforced, the control channel only answers the handshake.
     var pairedServerId by remember(address) { mutableStateOf(HostStore.pairedDesktopId(context, address)) }
@@ -669,59 +665,22 @@ fun RemoteScreen(
             )
         }
 
+        // UI refresh: chrome auto-hide timer. Sticky (never fades) while any
+        // sheet is open or the dual-pane dock is on screen — the dock is a
+        // permanent control surface, and fading the stream chrome next to it
+        // would look broken, not immersive.
+        val chromeSticky = showQuick || showPicker || showMonitorPicker ||
+            showPairing || showAudio || showHistory || dualPane
+        LaunchedEffect(chromeVisible, status, chromeSticky) {
+            if (chromeVisible && !chromeSticky && status is StreamStatus.Up) {
+                delay(6_000)
+                chromeVisible = false
+            }
+        }
+
         // Every chrome element is hidden while the activity is in picture-in-picture:
         // the window is thumb-sized and touch input there goes to the system, not us.
         if (!inPictureInPicture) {
-            // Connect-status chip: shown until the video link is up (and again
-            // if it fails, with the LAN/WAN reasons + a retry). A live WAN link
-            // keeps a small badge reporting *how* it is connected (R4 A1) —
-            // punched-direct vs relayed, since relayed is a normal first-class
-            // state iroh keeps trying to upgrade, not an error.
-            if (status is StreamStatus.Up && status.kind == StreamTransportKind.Wan) {
-                val label = when (linkState) {
-                    "wan_direct" -> stringResource(R.string.wan_link_direct)
-                    "wan_relayed" -> stringResource(R.string.wan_link_relayed)
-                    else -> stringResource(R.string.wan_link_punching)
-                }
-                Column(
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .padding(top = 4.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Text(
-                        label,
-                        color = Color.White,
-                        style = MaterialTheme.typography.labelSmall,
-                    )
-                    // One-tap escape hatch from the server's relay bitrate floor
-                    // (R4 A3): relaying is shared bandwidth, but the user may
-                    // still want every bit of it.
-                    if (linkState == "wan_relayed") {
-                        TextButton(
-                            onClick = {
-                                val next = !fullQuality
-                                fullQuality = next
-                                scope.launch(Dispatchers.IO) {
-                                    RustCore.setFullQuality(next)
-                                        .onFailure { fullQualityError = it.message }
-                                }
-                            },
-                        ) {
-                            val fqLabel = if (fullQuality) {
-                                stringResource(R.string.full_quality_on)
-                            } else {
-                                stringResource(R.string.full_quality_off)
-                            }
-                            Text(
-                                fqLabel,
-                                color = if (fullQuality) Color(0xFFFFC080) else Color.White,
-                                style = MaterialTheme.typography.labelSmall,
-                            )
-                        }
-                    }
-                }
-            }
             if (status !is StreamStatus.Up) {
                 // UI refresh: the small top-center chip became a centered
                 // card — spinner + staged copy while connecting, a
@@ -789,72 +748,158 @@ fun RemoteScreen(
                 }
             }
 
-            Column(
+            // Transparent top-edge strip: the reveal target when the chrome
+            // has faded (30 dp — thin enough that no meaningful desktop
+            // click lives under it; taps go to the strip, never the video).
+            Box(
                 modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(8.dp)
-                    .graphicsLayer { alpha = hudAlpha }
-                    .pointerInput(Unit) { detectTapGestures { hudFocused = true } },
-            ) {
-                StatsHud(address = address, controlPort = controlPort)
-                WorkspaceHud(
-                    address = address,
-                    port = port,
-                    modifier = Modifier.padding(top = 6.dp),
-                    croppedAddress = cropWindow?.address,
-                    onPullWindow = pullWindow,
-                )
-            }
+                    .align(Alignment.TopCenter)
+                    .fillMaxWidth()
+                    .height(30.dp)
+                    .pointerInput(Unit) { detectTapGestures { chromeVisible = true } },
+            )
 
-            TextButton(
-                onClick = onExit,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(4.dp),
+            // Top chrome: HUDs + WAN badge + Exit, as one fading slide-down
+            // group. AnimatedVisibility removes the subtree when hidden, so
+            // invisible chrome never eats a desktop tap.
+            AnimatedVisibility(
+                visible = chromeVisible,
+                enter = fadeIn(tween(160)) + slideInVertically(tween(240)) { -it / 3 },
+                exit = fadeOut(tween(240)) + slideOutVertically(tween(240)) { -it / 3 },
+                modifier = Modifier.fillMaxSize(),
             ) {
-                Text(stringResource(R.string.exit), color = Color.White)
-            }
-        }
-
-        if (!inPictureInPicture) {
-            Column(modifier = Modifier.align(Alignment.BottomCenter)) {
-                // UI refresh: the 16 flat TextButtons collapsed into one
-                // floating action disc opening QuickSettingsSheet. Input mode
-                // stays outside — it is the toggle used mid-gesture — and
-                // doubles as the current-mode readout.
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 2.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    TextButton(onClick = ::toggleMode) {
-                        val label =
-                            if (mode == InputMode.DirectTouch) {
-                                stringResource(R.string.mode_direct_touch)
-                            } else {
-                                stringResource(R.string.mode_trackpad)
+                Box(modifier = Modifier.fillMaxSize()) {
+                    // A live WAN link keeps a small badge reporting *how* it
+                    // is connected (R4 A1) — punched-direct vs relayed, since
+                    // relayed is a normal first-class state iroh keeps trying
+                    // to upgrade, not an error.
+                    if (status is StreamStatus.Up && status.kind == StreamTransportKind.Wan) {
+                        val label = when (linkState) {
+                            "wan_direct" -> stringResource(R.string.wan_link_direct)
+                            "wan_relayed" -> stringResource(R.string.wan_link_relayed)
+                            else -> stringResource(R.string.wan_link_punching)
+                        }
+                        Column(
+                            modifier = Modifier
+                                .align(Alignment.TopCenter)
+                                .padding(top = 34.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            Text(
+                                label,
+                                color = Color.White,
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                            // One-tap escape hatch from the server's relay bitrate
+                            // floor (R4 A3): relaying is shared bandwidth, but the
+                            // user may still want every bit of it.
+                            if (linkState == "wan_relayed") {
+                                TextButton(
+                                    onClick = {
+                                        val next = !fullQuality
+                                        fullQuality = next
+                                        scope.launch(Dispatchers.IO) {
+                                            RustCore.setFullQuality(next)
+                                                .onFailure { fullQualityError = it.message }
+                                        }
+                                    },
+                                ) {
+                                    val fqLabel = if (fullQuality) {
+                                        stringResource(R.string.full_quality_on)
+                                    } else {
+                                        stringResource(R.string.full_quality_off)
+                                    }
+                                    Text(
+                                        fqLabel,
+                                        color = if (fullQuality) Color(0xFFFFC080) else Color.White,
+                                        style = MaterialTheme.typography.labelSmall,
+                                    )
+                                }
                             }
-                        Text(label, color = Color.White)
+                        }
                     }
-                    FloatingActionButton(onClick = { showQuick = true }) {
-                        Text(
-                            "⋮",
-                            fontSize = 26.sp,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                            modifier = Modifier.padding(bottom = 6.dp),
+
+                    Column(modifier = Modifier.padding(8.dp)) {
+                        StatsHud(address = address, controlPort = controlPort)
+                        WorkspaceHud(
+                            address = address,
+                            port = port,
+                            modifier = Modifier.padding(top = 6.dp),
+                            croppedAddress = cropWindow?.address,
+                            onPullWindow = pullWindow,
+                        )
+                    }
+
+                    IconButton(
+                        onClick = onExit,
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(4.dp),
+                    ) {
+                        LlIcon(
+                            LlIcons.Close,
+                            stringResource(R.string.exit),
+                            tint = Color.White,
+                            size = 22.dp,
                         )
                     }
                 }
-                // In dual-pane the shortcut bar lives in the dock beside the
-                // trackpad; here it stays under the stream.
-                if (!dualPane) {
-                    ShortcutBar(
-                        address = address,
-                        port = port,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
+            }
+
+            // Transparent bottom-edge strip + the bottom chrome group:
+            // mode toggle, the action disc opening QuickSettingsSheet, and
+            // (single-pane) the shortcut bar.
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .height(30.dp)
+                    .pointerInput(Unit) { detectTapGestures { chromeVisible = true } },
+            )
+            AnimatedVisibility(
+                visible = chromeVisible,
+                enter = fadeIn(tween(160)) + slideInVertically(tween(240)) { it / 3 },
+                exit = fadeOut(tween(240)) + slideOutVertically(tween(240)) { it / 3 },
+                modifier = Modifier.align(Alignment.BottomCenter),
+            ) {
+                Column {
+                    // The 16 flat TextButtons collapsed into one floating
+                    // action disc opening QuickSettingsSheet. Input mode stays
+                    // outside — it is the toggle used mid-gesture — and
+                    // doubles as the current-mode readout.
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp, vertical = 2.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        TextButton(onClick = ::toggleMode) {
+                            val label =
+                                if (mode == InputMode.DirectTouch) {
+                                    stringResource(R.string.mode_direct_touch)
+                                } else {
+                                    stringResource(R.string.mode_trackpad)
+                                }
+                            Text(label, color = Color.White)
+                        }
+                        FloatingActionButton(onClick = { showQuick = true }) {
+                            LlIcon(
+                                LlIcons.MoreVert,
+                                stringResource(R.string.session_menu),
+                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                            )
+                        }
+                    }
+                    // In dual-pane the shortcut bar lives in the dock beside the
+                    // trackpad; here it stays under the stream.
+                    if (!dualPane) {
+                        ShortcutBar(
+                            address = address,
+                            port = port,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
                 }
             }
         }

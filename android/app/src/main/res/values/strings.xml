@@ -166,4 +166,5 @@
     <string name="err_generic">Something went wrong reaching the desktop.</string>
     <string name="connecting_still">Still trying… check that the desktop is awake and running Linux Link.</string>
     <string name="repair_pairing">Pair again</string>
+    <string name="session_menu">Session menu</string>
 </resources>

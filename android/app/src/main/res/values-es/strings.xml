@@ -159,4 +159,5 @@
     <string name="err_generic">Algo salió mal al contactar el escritorio.</string>
     <string name="connecting_still">Siguiendo intentándolo… verifica que el escritorio esté despierto con Linux Link activo.</string>
     <string name="repair_pairing">Emparejar de nuevo</string>
+    <string name="session_menu">Menú de sesión</string>
 </resources>
