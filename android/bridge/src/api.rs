@@ -517,12 +517,12 @@ fn paired_channel(
     let mut writer = sock.try_clone().map_err(|e| e.to_string())?;
     let mut reader = std::io::BufReader::new(sock.try_clone().map_err(|e| e.to_string())?);
     writer
-        .write_all(b"LINUX_LINK_HELLO\n")
+        .write_all(format!("{}\n", linux_link_core::protocol::HANDSHAKE_HELLO).as_bytes())
         .map_err(|e| e.to_string())?;
     writer.flush().map_err(|e| e.to_string())?;
     let mut ok = String::new();
     reader.read_line(&mut ok).map_err(|e| e.to_string())?;
-    if ok.trim() != "LINUX_LINK_OK" {
+    if ok.trim() != linux_link_core::protocol::HANDSHAKE_OK {
         return Err(format!("Bad handshake response: {}", ok.trim()));
     }
     let identity = client_identity();
@@ -2058,22 +2058,31 @@ pub async fn send_mouse_abs(x_norm: u16, y_norm: u16) -> Result<(), String> {
         }
     };
 
-    let conn = quic_conn
-        .ok_or_else(|| "Absolute input requires an active QUIC streaming connection".to_string())?;
+    let conn = quic_conn.ok_or_else(|| {
+        tracing::warn!("send_mouse_abs: no active QUIC streaming connection");
+        "Absolute input requires an active QUIC streaming connection".to_string()
+    })?;
 
     let data = InputPacket::MouseMoveAbs { x_norm, y_norm }.encode();
-    let mut send_stream = conn
-        .open_uni()
-        .await
-        .map_err(|e| format!("QUIC open stream: {e}"))?;
-    send_stream
-        .write_all(&data)
-        .await
-        .map_err(|e| format!("QUIC write: {e}"))?;
-    send_stream
-        .finish()
-        .map_err(|e| format!("QUIC finish: {e}"))?;
-    Ok(())
+    let send = async {
+        let mut send_stream = conn
+            .open_uni()
+            .await
+            .map_err(|e| format!("QUIC open stream: {e}"))?;
+        send_stream
+            .write_all(&data)
+            .await
+            .map_err(|e| format!("QUIC write: {e}"))?;
+        send_stream
+            .finish()
+            .map_err(|e| format!("QUIC finish: {e}"))?;
+        Ok(())
+    }
+    .await;
+    if let Err(e) = &send {
+        tracing::warn!(error = %e, "send_mouse_abs failed");
+    }
+    send
 }
 
 /// Send a mouse button press/release over QUIC.

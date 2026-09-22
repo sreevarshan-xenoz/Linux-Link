@@ -187,7 +187,14 @@ class H264Decoder(
         val format = codec.outputFormat
         val w = format.getInteger(MediaFormat.KEY_WIDTH)
         val h = format.getInteger(MediaFormat.KEY_HEIGHT)
-        if (w <= 0 || h <= 0 || (w == configW && h == configH)) return false
+        if (w <= 0 || h <= 0) return false
+        if (w == configW && h == configH) {
+            // First format change also confirms the guessed size: report it
+            // so the UI letterboxes (and maps direct-touch taps) against the
+            // real frame, not the container.
+            onVideoSize?.invoke(w, h)
+            return false
+        }
         configW = w
         configH = h
         runCatching {
