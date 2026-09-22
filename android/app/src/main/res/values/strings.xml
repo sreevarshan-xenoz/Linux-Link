@@ -123,6 +123,7 @@
     <string name="pair_waiting">Waiting for desktop…</string>
     <string name="pair_show_pin">Show PIN on desktop</string>
     <string name="pair_pin_label">6-digit PIN</string>
+    <string name="pair_reveal_pin">Show PIN</string>
     <string name="pair_enter_pin">Enter PIN from desktop</string>
     <string name="cancel">Cancel</string>
 

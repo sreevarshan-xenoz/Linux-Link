@@ -116,6 +116,7 @@
     <string name="pair_waiting">Esperando al escritorio…</string>
     <string name="pair_show_pin">Mostrar PIN en el escritorio</string>
     <string name="pair_pin_label">PIN de 6 dígitos</string>
+    <string name="pair_reveal_pin">Mostrar PIN</string>
     <string name="pair_enter_pin">Introducir PIN del escritorio</string>
     <string name="cancel">Cancelar</string>
 

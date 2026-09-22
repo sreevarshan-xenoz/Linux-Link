@@ -116,6 +116,7 @@
     <string name="pair_waiting">டெஸ்க்டாப்பிற்காகக் காத்திருக்கிறது…</string>
     <string name="pair_show_pin">டெஸ்க்டாப்பில் PIN காட்டு</string>
     <string name="pair_pin_label">6-இலக்க PIN</string>
+    <string name="pair_reveal_pin">PIN-ஐக் காட்டு</string>
     <string name="pair_enter_pin">டெஸ்க்டாப் PIN ஐ உள்ளிடுங்கள்</string>
     <string name="cancel">ரத்து</string>
 
