@@ -167,6 +167,10 @@
     <string name="clipboard_empty">Nothing captured yet — copy something or turn on clipboard sync.</string>
     <string name="clipboard_clear_message">This deletes every saved clipboard entry from this phone.</string>
 
+    <!-- Shortcut bar group captions (C9); key caps stay literal -->
+    <string name="shortcut_system">System</string>
+    <string name="shortcut_workspaces">Workspaces</string>
+
     <!-- Find-my-device siren dialog (C8) -->
     <string name="siren_ringing_title">Your computer is finding this phone</string>
     <string name="siren_ringing_text">The alarm plays until you silence it or 30 seconds pass.</string>

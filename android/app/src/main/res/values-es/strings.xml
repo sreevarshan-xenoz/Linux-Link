@@ -160,6 +160,10 @@
     <string name="clipboard_empty">Aún no se ha capturado nada: copia algo o activa la sincronización del portapapeles.</string>
     <string name="clipboard_clear_message">Esto elimina todas las entradas guardadas del portapapeles en este teléfono.</string>
 
+    <!-- Shortcut bar group captions (C9); key caps stay literal -->
+    <string name="shortcut_system">Sistema</string>
+    <string name="shortcut_workspaces">Áreas de trabajo</string>
+
     <!-- Find-my-device siren dialog (C8) -->
     <string name="siren_ringing_title">Tu ordenador está buscando este teléfono</string>
     <string name="siren_ringing_text">La alarma suena hasta que la silencies o pasen 30 segundos.</string>
