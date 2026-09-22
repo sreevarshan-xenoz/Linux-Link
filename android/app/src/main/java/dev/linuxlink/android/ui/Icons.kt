@@ -298,6 +298,11 @@ object LlIcons {
         strokeBox(c, 2.5f, 4.5f, 21.5f, 17.5f, 1.8f)
         box(c, 12f, 10.5f, 19.5f, 16f)
     }
+    val Info: LlGlyph = glyph { c ->
+        ring(c, 12f, 12f, 9f, 1.8f)
+        dot(c, 12f, 7.6f, 1.3f)
+        line(c, 12f, 11f, 12f, 16.5f, 2.2f)
+    }
 }
 
 /**

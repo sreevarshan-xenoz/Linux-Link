@@ -13,6 +13,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -28,7 +29,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import androidx.core.net.toUri
 import dev.linuxlink.android.HostStore
 import dev.linuxlink.android.R
 import dev.linuxlink.android.bridge.RustCore
@@ -46,6 +46,7 @@ import kotlinx.coroutines.withContext
 fun HomeScreen(
     onConnect: (HostStore.Host) -> Unit,
     onAdd: () -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -64,15 +65,26 @@ fun HomeScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 20.dp, vertical = 28.dp),
+            .padding(horizontal = 20.dp, vertical = 16.dp),
     ) {
-        Text(stringResource(R.string.app_name), style = MaterialTheme.typography.headlineMedium)
-        Spacer(Modifier.height(4.dp))
-        Text(
-            stringResource(R.string.home_subtitle),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column {
+                Text(stringResource(R.string.app_name), style = MaterialTheme.typography.headlineMedium)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    stringResource(R.string.home_subtitle),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            IconButton(onClick = onOpenSettings) {
+                LlIcon(LlIcons.Settings, stringResource(R.string.settings_title))
+            }
+        }
         Spacer(Modifier.height(20.dp))
 
         if (hosts.isEmpty()) {
@@ -83,9 +95,21 @@ fun HomeScreen(
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
+                LlIcon(
+                    LlIcons.Desktop,
+                    null,
+                    size = 72.dp,
+                    tint = MaterialTheme.colorScheme.primaryContainer,
+                )
+                Spacer(Modifier.height(16.dp))
                 Text(
                     stringResource(R.string.no_computers),
                     style = MaterialTheme.typography.bodyLarge,
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    stringResource(R.string.home_explainer),
+                    style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(Modifier.height(16.dp))
@@ -142,8 +166,6 @@ fun HomeScreen(
                 )
             }
         }
-
-        LanguageAndVersionFooter()
     }
 
     removing?.let { host ->
@@ -230,37 +252,5 @@ private fun HostCard(
                 }
             }
         }
-    }
-}
-
-/** Language shortcut + core version, shared by the home and add screens. */
-@Composable
-fun LanguageAndVersionFooter(modifier: Modifier = Modifier) {
-    val context = LocalContext.current
-    Column(
-        modifier = modifier.fillMaxWidth(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            TextButton(
-                onClick = {
-                    runCatching {
-                        context.startActivity(
-                            android.content.Intent(
-                                android.provider.Settings.ACTION_APP_LOCALE_SETTINGS,
-                                ("package:${context.packageName}").toUri(),
-                            ),
-                        )
-                    }
-                },
-            ) {
-                Text(stringResource(R.string.language))
-            }
-        }
-        Text(
-            stringResource(R.string.rust_core_version, RustCore.version),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }

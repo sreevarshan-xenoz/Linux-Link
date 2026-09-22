@@ -194,7 +194,6 @@ fun ConnectScreen(
             )
         }
         Spacer(Modifier.height(16.dp))
-        LanguageAndVersionFooter()
     }
 }
 

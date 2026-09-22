@@ -9,6 +9,13 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -26,7 +33,15 @@ import dev.linuxlink.android.bridge.RustCore
 import dev.linuxlink.android.ui.ConnectScreen
 import dev.linuxlink.android.ui.HomeScreen
 import dev.linuxlink.android.ui.RemoteScreen
+import dev.linuxlink.android.ui.SettingsScreen
 import dev.linuxlink.android.ui.theme.LinuxLinkTheme
+
+/** Home-family destinations; plain strings so rememberSaveable just works. */
+private object Route {
+    const val HOME = "home"
+    const val FORM = "form"
+    const val SETTINGS = "settings"
+}
 
 class MainActivity : ComponentActivity() {
     companion object {
@@ -81,8 +96,9 @@ class MainActivity : ComponentActivity() {
             LinuxLinkTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     var sessionKey by rememberSaveable { mutableStateOf<String?>(null) }
-                    // Home card list vs the add-computer form (UI refresh).
-                    var showForm by rememberSaveable { mutableStateOf(false) }
+                    // Home-family route (home list / add form / settings),
+                    // kept as a name so it survives process save/restore.
+                    var route by rememberSaveable { mutableStateOf(Route.HOME) }
 
                     LaunchedEffect(Unit) {
                         if (sessionKey == null &&
@@ -105,32 +121,51 @@ class MainActivity : ComponentActivity() {
                         // session below runs edge-to-edge + immersive on
                         // purpose, so the inset padding is scoped here.
                         null -> Box(Modifier.windowInsetsPadding(WindowInsets.safeDrawing)) {
-                            if (showForm) {
-                                ConnectScreen(
-                                    initial = null,
-                                    autoConnect = HostStore.autoConnect(this@MainActivity),
-                                    onBack = { showForm = false },
-                                    onConnect = { address, port, controlPort, rememberHost ->
-                                        HostStore.save(
-                                            this@MainActivity,
-                                            HostStore.Host(address, port, controlPort),
-                                        )
-                                        HostStore.setAutoConnect(this@MainActivity, rememberHost)
-                                        maybeRequestNotificationPermission()
-                                        showForm = false
-                                        sessionKey = "$address|$port|$controlPort"
-                                    },
-                                )
-                            } else {
-                                HomeScreen(
-                                    onConnect = { host ->
-                                        HostStore.save(this@MainActivity, host)
-                                        maybeRequestNotificationPermission()
-                                        sessionKey =
-                                            "${host.address}|${host.port}|${host.controlPort}"
-                                    },
-                                    onAdd = { showForm = true },
-                                )
+                            AnimatedContent(
+                                targetState = route,
+                                transitionSpec = {
+                                    (
+                                        fadeIn(tween(180)) +
+                                            slideInHorizontally(tween(260)) { it / 6 }
+                                        ) togetherWith (
+                                        fadeOut(tween(120)) +
+                                            slideOutHorizontally(tween(260)) { -it / 6 }
+                                    )
+                                },
+                                label = "home-route",
+                            ) { current ->
+                                when (current) {
+                                    Route.FORM -> ConnectScreen(
+                                        initial = null,
+                                        autoConnect = HostStore.autoConnect(this@MainActivity),
+                                        onBack = { route = Route.HOME },
+                                        onConnect = { address, port, controlPort, rememberHost ->
+                                            HostStore.save(
+                                                this@MainActivity,
+                                                HostStore.Host(address, port, controlPort),
+                                            )
+                                            HostStore.setAutoConnect(this@MainActivity, rememberHost)
+                                            maybeRequestNotificationPermission()
+                                            route = Route.HOME
+                                            sessionKey = "$address|$port|$controlPort"
+                                        },
+                                    )
+
+                                    Route.SETTINGS -> SettingsScreen(
+                                        onBack = { route = Route.HOME },
+                                    )
+
+                                    else -> HomeScreen(
+                                        onConnect = { host ->
+                                            HostStore.save(this@MainActivity, host)
+                                            maybeRequestNotificationPermission()
+                                            sessionKey =
+                                                "${host.address}|${host.port}|${host.controlPort}"
+                                        },
+                                        onAdd = { route = Route.FORM },
+                                        onOpenSettings = { route = Route.SETTINGS },
+                                    )
+                                }
                             }
                         }
 
