@@ -14,6 +14,7 @@ import android.os.SystemClock
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,8 +26,12 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FloatingActionButton
@@ -51,6 +56,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -648,7 +654,21 @@ fun RemoteScreen(
             vertical -> Modifier.fillMaxHeight().fillMaxWidth(0.5f).align(Alignment.CenterStart)
             else -> Modifier.fillMaxWidth().fillMaxHeight(0.5f).align(Alignment.TopCenter)
         }
-        Box(modifier = streamMod) {
+        // Any touch on the stream brings the chrome back. Observing on the
+        // Initial pass means the parent sees the down before the video's own
+        // gesture handlers and never consumes it, so the tap still reaches the
+        // desktop — no swallowed input, no invisible edge strip to hunt for.
+        Box(
+            modifier = streamMod.pointerInput(Unit) {
+                awaitEachGesture {
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        if (event.changes.any { it.pressed }) chromeVisible = true
+                        if (event.changes.all { !it.pressed }) break
+                    }
+                }
+            },
+        ) {
         if (showStream) {
             RemoteDesktopView(
                 address = address,
@@ -749,17 +769,6 @@ fun RemoteScreen(
                 }
             }
 
-            // Transparent top-edge strip: the reveal target when the chrome
-            // has faded (30 dp — thin enough that no meaningful desktop
-            // click lives under it; taps go to the strip, never the video).
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .fillMaxWidth()
-                    .height(30.dp)
-                    .pointerInput(Unit) { detectTapGestures { chromeVisible = true } },
-            )
-
             // Top chrome: HUDs + WAN badge + Exit, as one fading slide-down
             // group. AnimatedVisibility removes the subtree when hidden, so
             // invisible chrome never eats a desktop tap.
@@ -767,7 +776,9 @@ fun RemoteScreen(
                 visible = chromeVisible,
                 enter = fadeIn(tween(160)) + slideInVertically(tween(240)) { -it / 3 },
                 exit = fadeOut(tween(240)) + slideOutVertically(tween(240)) { -it / 3 },
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .windowInsetsPadding(WindowInsets.systemBars),
             ) {
                 Box(modifier = Modifier.fillMaxSize()) {
                     // A live WAN link keeps a small badge reporting *how* it
@@ -850,23 +861,17 @@ fun RemoteScreen(
                 }
             }
 
-            // Transparent bottom-edge strip + the bottom chrome group:
-            // mode toggle, the action disc opening QuickSettingsSheet, and
-            // (single-pane) the shortcut bar.
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .height(30.dp)
-                    .pointerInput(Unit) { detectTapGestures { chromeVisible = true } },
-            )
+            // Bottom chrome group: mode toggle, the action disc opening
+            // QuickSettingsSheet, and (single-pane) the shortcut bar.
             AnimatedVisibility(
                 visible = chromeVisible,
                 enter = fadeIn(tween(160)) + slideInVertically(tween(240)) { it / 3 },
                 exit = fadeOut(tween(240)) + slideOutVertically(tween(240)) { it / 3 },
-                modifier = Modifier.align(Alignment.BottomCenter),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .windowInsetsPadding(WindowInsets.navigationBars),
             ) {
-                Column {
+                Column(modifier = Modifier.padding(bottom = 8.dp)) {
                     // The 16 flat TextButtons collapsed into one floating
                     // action disc opening QuickSettingsSheet. Input mode stays
                     // outside — it is the toggle used mid-gesture — and
@@ -887,7 +892,11 @@ fun RemoteScreen(
                                 }
                             Text(label, color = Color.White)
                         }
-                        FloatingActionButton(onClick = { haptics.tap(); showQuick = true }) {
+                        FloatingActionButton(
+                            onClick = { haptics.tap(); showQuick = true },
+                            shape = CircleShape,
+                            containerColor = MaterialTheme.colorScheme.primaryContainer,
+                        ) {
                             LlIcon(
                                 LlIcons.MoreVert,
                                 stringResource(R.string.session_menu),
@@ -901,7 +910,9 @@ fun RemoteScreen(
                         ShortcutBar(
                             address = address,
                             port = port,
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 8.dp, vertical = 6.dp),
                         )
                     }
                 }

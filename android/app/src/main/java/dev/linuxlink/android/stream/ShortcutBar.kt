@@ -21,6 +21,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -38,6 +40,11 @@ import kotlinx.coroutines.launch
  * workspace switching on the server). Key-cap labels stay literal by
  * design (see the i18n exemption note in strings.xml); only the group
  * captions are localized.
+ *
+ * Rendered as a dark, rounded floating pill rather than a theme-coloured
+ * sheet: it lives on top of remote video (or the dock) where a surfaceVariant
+ * fill is unreadable, and the fixed dark fill keeps the key-caps legible in
+ * both light and dark themes without a second palette.
  */
 @Composable
 fun ShortcutBar(
@@ -45,25 +52,27 @@ fun ShortcutBar(
     port: Int,
     modifier: Modifier = Modifier,
 ) {
+    val content = Color.White
     Surface(
-        modifier = modifier,
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f),
-        tonalElevation = 2.dp,
+        modifier = modifier.shadow(8.dp, PillShape),
+        shape = PillShape,
+        color = Color.Black.copy(alpha = 0.62f),
+        tonalElevation = 0.dp,
     ) {
         Row(
             modifier = Modifier
                 .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 6.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                .padding(horizontal = 8.dp, vertical = 5.dp),
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             val press = KeyEvent.KEYCODE_META_LEFT
-            GroupLabel(stringResource(R.string.shortcut_system))
-            Shortcut("Super") { RustCore.tapKey(address, port, press) }
-            Shortcut("Alt+Tab") {
+            GroupLabel(stringResource(R.string.shortcut_system), content)
+            Shortcut("Super", content) { RustCore.tapKey(address, port, press) }
+            Shortcut("Alt+Tab", content) {
                 RustCore.hotkey(address, port, KeyEvent.KEYCODE_TAB, KeyEvent.KEYCODE_ALT_LEFT)
             }
-            Shortcut("Ctrl+Alt+Del") {
+            Shortcut("Ctrl+Alt+Del", content) {
                 RustCore.hotkey(
                     address,
                     port,
@@ -72,12 +81,12 @@ fun ShortcutBar(
                     KeyEvent.KEYCODE_ALT_LEFT,
                 )
             }
-            Shortcut("PrtSc") { RustCore.tapKey(address, port, KeyEvent.KEYCODE_SYSRQ) }
-            Shortcut("Esc") { RustCore.tapKey(address, port, KeyEvent.KEYCODE_ESCAPE) }
-            Divider()
-            GroupLabel(stringResource(R.string.shortcut_workspaces))
+            Shortcut("PrtSc", content) { RustCore.tapKey(address, port, KeyEvent.KEYCODE_SYSRQ) }
+            Shortcut("Esc", content) { RustCore.tapKey(address, port, KeyEvent.KEYCODE_ESCAPE) }
+            Divider(content)
+            GroupLabel(stringResource(R.string.shortcut_workspaces), content)
             (1..9).forEach { workspace ->
-                Shortcut("W$workspace") {
+                Shortcut("W$workspace", content) {
                     RustCore.hotkey(
                         address,
                         port,
@@ -90,29 +99,35 @@ fun ShortcutBar(
     }
 }
 
+private val PillShape = RoundedCornerShape(18.dp)
+
 @Composable
-private fun GroupLabel(text: String) {
+private fun GroupLabel(text: String, color: Color) {
     Text(
         text,
         style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        color = color.copy(alpha = 0.65f),
         modifier = Modifier.padding(horizontal = 4.dp),
     )
 }
 
 @Composable
-private fun Divider() {
+private fun Divider(color: Color) {
     Box(
         modifier = Modifier
             .width(1.dp)
             .height(20.dp)
             .padding(horizontal = 4.dp)
-            .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)),
+            .background(color.copy(alpha = 0.3f)),
     )
 }
 
 @Composable
-private fun Shortcut(label: String, action: () -> Result<Unit>) {
+private fun Shortcut(
+    label: String,
+    color: Color,
+    action: () -> Result<Unit>,
+) {
     val scope = rememberCoroutineScope()
     val haptics = rememberLlHaptics()
     Box(
@@ -120,7 +135,7 @@ private fun Shortcut(label: String, action: () -> Result<Unit>) {
             .height(32.dp)
             .widthIn(min = 32.dp)
             .clip(RoundedCornerShape(16.dp))
-            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+            .background(color.copy(alpha = 0.14f))
             .clickable {
                 haptics.tap()
                 scope.launch(Dispatchers.IO) { action() }
@@ -132,7 +147,7 @@ private fun Shortcut(label: String, action: () -> Result<Unit>) {
             label,
             fontSize = 12.sp,
             textAlign = TextAlign.Center,
-            color = MaterialTheme.colorScheme.onSurface,
+            color = color,
         )
     }
 }

@@ -2,7 +2,8 @@ package dev.linuxlink.android.stream
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -31,7 +32,12 @@ import org.json.JSONObject
  * Rust core. When an [address]/[controlPort] are given, the desktop's battery
  * is polled slowly alongside (Tier-2 #11). Place on top of [RemoteDesktopView]
  * inside a Box.
+ *
+ * A [FlowRow], not a plain Row: on a narrow phone in landscape the six items
+ * are wider than the screen, and a Row would squash the trailing ones into a
+ * one-character-per-line column.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun StatsHud(
     modifier: Modifier = Modifier,
@@ -75,12 +81,14 @@ fun StatsHud(
     }
 
     val s = stats ?: return
-    Row(
+    FlowRow(
         modifier = modifier
             .clip(RoundedCornerShape(8.dp))
             .background(Color.Black.copy(alpha = 0.55f))
             .padding(horizontal = 10.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+        maxItemsInEachRow = 6,
     ) {
         HudItem("fps", "%.0f".format(s.fps))
         HudItem("kbps", "%,d".format(s.bitrateKbps))
@@ -95,6 +103,7 @@ fun StatsHud(
 private fun HudItem(label: String, value: String) {
     Text(
         text = "$label $value",
+        maxLines = 1,
         style = MaterialTheme.typography.labelSmall.copy(
             fontFamily = FontFamily.Monospace,
             fontSize = 11.sp,
