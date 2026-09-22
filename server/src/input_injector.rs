@@ -8,13 +8,12 @@ use anyhow::{Context, Result};
 use enigo::{Coordinate, Enigo, Key, Keyboard, Mouse, Settings};
 use evdev::uinput::{VirtualDevice, VirtualDeviceBuilder};
 use evdev::{
-    AbsInfo, AbsoluteAxisCode, AttributeSet, InputEvent, KeyCode, PropType, RelativeAxisCode,
-    UinputAbsSetup,
+    AbsInfo, AbsoluteAxisCode, AttributeSet, InputEvent, KeyCode, RelativeAxisCode, UinputAbsSetup,
 };
 use linux_link_core::streaming::input_packet::InputPacket;
 use std::path::Path;
 use std::sync::Mutex;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Event type constants from evdev kernel API
 const EV_KEY: u16 = 0x01;
@@ -67,20 +66,18 @@ enum InputBackend {
     Uinput(Mutex<UinputState>),
 }
 
-/// Kernel-level backend state: the keyboard/mouse device plus an on-demand
-/// direct-touch device used for absolute (normalized) pointer injection.
+/// Kernel-level backend state: the keyboard/mouse device plus an
+/// absolute-pointer device used for absolute (normalized) pointer injection.
 #[derive(Debug)]
 struct UinputState {
     main: VirtualDevice,
-    /// Single-touch virtual device, created lazily on first absolute motion.
-    touch: Option<VirtualDevice>,
-    /// Whether the virtual finger is currently down.
-    touch_down: bool,
+    /// `ABS_X`/`ABS_Y` virtual pointer. Hyprland's libinput drops uinput MT
+    /// touchscreens on this box, but an ABS pointer maps 1:1 onto the layout
+    /// and moves the real cursor (verified with `hyprctl cursorpos`).
+    abs: Option<VirtualDevice>,
 }
 
 const EV_ABS: u16 = 0x03;
-const BTN_TOUCH: u16 = 330;
-const BTN_TOOL_DOUBLETAP: u16 = 333;
 /// Direct-touch axis range; normalized wire coordinates (0..=65535) map 1:1.
 const ABS_MAX_COORD: i32 = 65535;
 
@@ -105,10 +102,22 @@ impl Drop for InputInjector {
 impl InputInjector {
     /// Create a new input injector.
     ///
-    /// Tries enigo (X11/XWayland) first. If that fails, falls back to
-    /// uinput (kernel-level virtual input device).
+    /// Under a Wayland compositor uinput is tried first: enigo's XTEST only
+    /// reaches XWayland's internal pointer, so native clients never see it
+    /// (verified on Hyprland — cursor warps logged fine, real cursor stuck).
+    /// Otherwise (bare X11) or if /dev/uinput is inaccessible, enigo is
+    /// tried first with uinput as the fallback.
     pub fn new() -> Result<Self> {
-        // Try enigo first (works on X11 and XWayland)
+        let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
+        if wayland {
+            match Self::new_uinput() {
+                Ok(inj) => return Ok(inj),
+                Err(e) => {
+                    warn!(error = %e, "uinput unavailable under Wayland, falling back to enigo (XWayland-only injection)");
+                }
+            }
+        }
+
         if let Ok(enigo) = Enigo::new(&Settings::default()) {
             info!("Input injector: using enigo (X11/XWayland)");
             return Ok(Self {
@@ -163,11 +172,14 @@ impl InputInjector {
             )?;
 
         info!("Input injector: using uinput (kernel-level, works on all compositors)");
+        // The abs pointer is built eagerly: libinput opens new devices
+        // asynchronously after UI_DEV_CREATE, so a device created on the
+        // first absolute motion loses that very event (the phone's first
+        // tap silently no-op'd).
         Ok(Self {
             backend: InputBackend::Uinput(Mutex::new(UinputState {
                 main: device,
-                touch: None,
-                touch_down: false,
+                abs: Some(build_abs_device()?),
             })),
         })
     }
@@ -196,7 +208,7 @@ impl InputInjector {
 
     /// Move the pointer to a normalized absolute position (0..=65535 per axis).
     ///
-    /// uinput injects through a lazily-created direct-touch device, so no
+    /// uinput injects through the ABS pointer device, so no
     /// display resolution is needed on either side of the wire.
     pub fn move_mouse_normalized_abs(&mut self, x_norm: u16, y_norm: u16) -> Result<()> {
         match &mut self.backend {
@@ -213,64 +225,19 @@ impl InputInjector {
             }
             InputBackend::Uinput(state) => {
                 let mut state = state.get_mut().unwrap();
-                let mut events = Vec::with_capacity(7);
-                events.push(InputEvent::new(EV_ABS, AbsoluteAxisCode::ABS_MT_SLOT.0, 0));
-                if !state.touch_down {
-                    events.push(InputEvent::new(
-                        EV_ABS,
-                        AbsoluteAxisCode::ABS_MT_TRACKING_ID.0,
-                        0,
-                    ));
-                    events.push(InputEvent::new(EV_KEY, BTN_TOUCH, 1));
-                    events.push(InputEvent::new(EV_KEY, BTN_TOOL_DOUBLETAP, 1));
-                }
-                events.push(InputEvent::new(
-                    EV_ABS,
-                    AbsoluteAxisCode::ABS_MT_POSITION_X.0,
-                    x_norm as i32,
-                ));
-                events.push(InputEvent::new(
-                    EV_ABS,
-                    AbsoluteAxisCode::ABS_MT_POSITION_Y.0,
-                    y_norm as i32,
-                ));
-                events.push(InputEvent::new(EV_SYN, SYN_REPORT, 0));
-                emit_touch(&mut state, &events)?;
-                state.touch_down = true;
+                let events = [
+                    InputEvent::new(EV_ABS, AbsoluteAxisCode::ABS_X.0, x_norm as i32),
+                    InputEvent::new(EV_ABS, AbsoluteAxisCode::ABS_Y.0, y_norm as i32),
+                    InputEvent::new(EV_SYN, SYN_REPORT, 0),
+                ];
+                emit_abs(&mut state, &events)?;
                 Ok(())
             }
         }
     }
 
-    /// Lift the virtual finger if a direct-touch sequence is in progress.
-    fn release_touch_if_down(&mut self) -> Result<()> {
-        if let InputBackend::Uinput(state) = &mut self.backend {
-            let mut state = state.get_mut().unwrap();
-            if state.touch_down {
-                let events = [
-                    InputEvent::new(EV_ABS, AbsoluteAxisCode::ABS_MT_SLOT.0, 0),
-                    InputEvent::new(
-                        EV_ABS,
-                        AbsoluteAxisCode::ABS_MT_TRACKING_ID.0,
-                        -1, // end of contact
-                    ),
-                    InputEvent::new(EV_KEY, BTN_TOUCH, 0),
-                    InputEvent::new(EV_KEY, BTN_TOOL_DOUBLETAP, 0),
-                    InputEvent::new(EV_SYN, SYN_REPORT, 0),
-                ];
-                emit_touch(&mut state, &events)?;
-                state.touch_down = false;
-            }
-        }
-        Ok(())
-    }
-
     /// Press or release a mouse button
     pub fn mouse_button(&mut self, button: MouseKey, pressed: bool) -> Result<()> {
-        // In direct-touch mode the client signals tap-end as a left release.
-        if matches!(button, MouseKey::Left) && !pressed {
-            self.release_touch_if_down()?;
-        }
         match &mut self.backend {
             InputBackend::Enigo(enigo) => {
                 let e = enigo.get_mut().unwrap();
@@ -482,66 +449,54 @@ impl InputInjector {
     }
 }
 
-/// Emit events on the direct-touch device, creating it lazily on first use.
-fn emit_touch(state: &mut UinputState, events: &[InputEvent]) -> Result<()> {
-    if state.touch.is_none() {
-        state.touch = Some(build_touch_device()?);
+/// Emit events on the absolute-pointer device, creating it lazily on first use.
+fn emit_abs(state: &mut UinputState, events: &[InputEvent]) -> Result<()> {
+    if state.abs.is_none() {
+        state.abs = Some(build_abs_device()?);
     }
     state
-        .touch
+        .abs
         .as_mut()
         .unwrap()
         .emit(events)
-        .context("uinput direct-touch emit failed")
+        .context("uinput absolute-pointer emit failed")
 }
 
-/// Build a single-touch `MT` device. Coordinates arrive normalized
+/// Build an `ABS_X`/`ABS_Y` virtual pointer. Coordinates arrive normalized
 /// 0..=65535 from the client, so the axis ranges map the wire values 1:1 and
-/// libinput scales them to the screen (DIRECT property).
-fn build_touch_device() -> Result<VirtualDevice> {
+/// libinput scales them onto the layout. (An MT touchscreen device is the
+/// other obvious choice, but Hyprland's libinput silently drops uinput
+/// touchscreens on this box; the ABS pointer path is what verifiably moves
+/// the real cursor.)
+fn build_abs_device() -> Result<VirtualDevice> {
     let mut keys = AttributeSet::<KeyCode>::new();
-    keys.insert(KeyCode(BTN_TOUCH));
-    keys.insert(KeyCode(BTN_TOOL_DOUBLETAP));
+    // Buttons registered so the device classifies as a full pointer;
+    // clicks are emitted on the main device (same merged core pointer).
+    for keycode in 272..=276u16 {
+        keys.insert(KeyCode(keycode));
+    }
 
-    let mut props = AttributeSet::<PropType>::new();
-    props.insert(PropType::DIRECT);
-
-    let slot = UinputAbsSetup::new(
-        AbsoluteAxisCode::ABS_MT_SLOT,
-        AbsInfo::new(0, 0, 1, 0, 0, 0),
-    );
-    // Kernel requires TRACKING_ID minimum of -1 (release sentinel).
-    let tracking = UinputAbsSetup::new(
-        AbsoluteAxisCode::ABS_MT_TRACKING_ID,
-        AbsInfo::new(0, -1, 10, 0, 0, 0),
-    );
     let abs_x = UinputAbsSetup::new(
-        AbsoluteAxisCode::ABS_MT_POSITION_X,
+        AbsoluteAxisCode::ABS_X,
         AbsInfo::new(0, 0, ABS_MAX_COORD, 0, 0, 0),
     );
     let abs_y = UinputAbsSetup::new(
-        AbsoluteAxisCode::ABS_MT_POSITION_Y,
+        AbsoluteAxisCode::ABS_Y,
         AbsInfo::new(0, 0, ABS_MAX_COORD, 0, 0, 0),
     );
 
     #[allow(deprecated)]
     let device = VirtualDeviceBuilder::new()
-        .context("Failed to create touch device builder")?
+        .context("Failed to create abs pointer builder")?
         .with_keys(&keys)
-        .context("Failed to set up touch keys")?
-        .with_absolute_axis(&slot)
-        .context("Failed to set up ABS_MT_SLOT")?
-        .with_absolute_axis(&tracking)
-        .context("Failed to set up ABS_MT_TRACKING_ID")?
+        .context("Failed to set up abs pointer buttons")?
         .with_absolute_axis(&abs_x)
-        .context("Failed to set up ABS_MT_POSITION_X")?
+        .context("Failed to set up ABS_X")?
         .with_absolute_axis(&abs_y)
-        .context("Failed to set up ABS_MT_POSITION_Y")?
-        .with_properties(&props)
-        .context("Failed to set up touch properties")?
-        .name(b"Linux Link Virtual Touch")
+        .context("Failed to set up ABS_Y")?
+        .name(b"Linux Link Virtual Abs Pointer")
         .build()
-        .context("Failed to build uinput direct-touch device")?;
+        .context("Failed to build uinput absolute pointer device")?;
 
     Ok(device)
 }
