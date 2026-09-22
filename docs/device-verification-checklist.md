@@ -309,6 +309,15 @@ not part of C4.
 - [ ] Blackout still covers BOTH panes (whole window), not just the stream.
 - [ ] es/ta: "Pane:" and trackpad hint localize.
 
+## 18. Login autostart + tailnet access (server-side)
+
+- [ ] Reboot the desktop → after reaching the Hyprland session, `systemctl --user status linux-link` is active without any manual start (WantedBy=graphical-session.target).
+- [ ] Phone reconnects to the auto-started server WITHOUT re-pairing (QUIC identity persisted in `~/.local/state/linux-link/certs/`; a regenerated cert would trip the TOFU pin).
+- [ ] Log out / session end → service stops with the session (PartOf), never orphaned.
+- [ ] `install.sh` run → unit lands in `~/.config/systemd/user/`, ExecStart points at the real prefix path, prompt enables it; `--status` reports the user unit; `--uninstall` removes it and any legacy `/etc/systemd/system` unit.
+- [ ] Phone on the tailnet (not on the LAN): connect to the laptop's 100.x Tailscale IP → pairing + video + taps work end to end. **(verified 2026-09-22: oppo-reno8-5g 100.82.170.9 → 100.117.27.83)**
+- [ ] Phone on cellular (Wi-Fi off): same connect via tailnet IP works (Tailscale traverses NAT). Then iroh WAN fallback (`## 11`) with the two machines on genuinely different networks — still pending (phone cellular was OUT_OF_SERVICE at test time).
+
 ## Recording results
 
 Update `AGENTS.md` Current Status (mark verified items / list failures) and

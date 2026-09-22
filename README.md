@@ -193,11 +193,20 @@ pairing_required = true    # PIN-pair devices before the control channel or stre
 
 ### systemd Service
 
+The server captures the desktop session (Wayland/X11) and talks to PipeWire, so
+it runs as a **systemd user service** — a system unit started at boot could
+never see the graphical session. `install.sh` drops the unit into
+`~/.config/systemd/user/` and enables it for you; from a desktop session:
+
 ```bash
-sudo systemctl enable --now linux-link
-systemctl status linux-link
-journalctl -u linux-link -f
+systemctl --user enable --now linux-link
+systemctl --user status linux-link
+journalctl --user -u linux-link -f
 ```
+
+The unit is `WantedBy=graphical-session.target`, so it starts at login and
+stops with the session. To run it without a login session (headless), enable
+lingering first: `sudo loginctl enable-linger $USER`.
 
 ### CLI Commands
 

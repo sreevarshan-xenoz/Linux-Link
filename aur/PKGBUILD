@@ -19,7 +19,9 @@ build() {
 package() {
   cd "${srcdir}/${pkgname}-${pkgver}"
   install -Dm755 "target/release/linux-link" "${pkgdir}/usr/bin/linux-link"
-  install -Dm644 "linux-link.service" "${pkgdir}/usr/lib/systemd/system/linux-link.service"
+  # Session-bound USER unit: shipped under /usr/lib/systemd/user so each user
+  # can `systemctl --user enable --now linux-link` from their desktop session.
+  install -Dm644 "linux-link.service" "${pkgdir}/usr/lib/systemd/user/linux-link.service"
   install -Dm644 "config.toml.example" "${pkgdir}/usr/share/doc/${pkgname}/config.toml.example"
   install -Dm644 "README.md" "${pkgdir}/usr/share/doc/${pkgname}/README.md"
   install -Dm644 "CHANGELOG.md" "${pkgdir}/usr/share/doc/${pkgname}/CHANGELOG.md"

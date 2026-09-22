@@ -93,11 +93,34 @@ section() { echo -e "\n${BOLD}═══ $* ═══${RESET}"; }
 
 # ─── Resolve paths after prefix is known ────────────────────────────────────
 
+# The server captures the desktop (Wayland/X11) and talks to PipeWire, so it
+# runs as a *systemd user* unit tied to the graphical session — a system unit
+# can never see those. The target user is whoever owns the install: root's
+# account when the script runs under sudo, else the invoking user.
 resolve_paths() {
-  SERVICE_FILE="/etc/systemd/system/${BINARY_NAME}.service"
+  SERVICE_USER="${SUDO_USER:-$USER}"
+  SERVICE_UID="$(id -u "$SERVICE_USER")"
+  SERVICE_GROUP="$(id -gn "$SERVICE_USER")"
+  SERVICE_USER_HOME="$(getent passwd "$SERVICE_UID" | cut -d: -f6)"
+  SERVICE_FILE="${SERVICE_USER_HOME}/.config/systemd/user/${BINARY_NAME}.service"
   CONFIG_FILE="${CONFIG_DIR}/config.toml"
   STATE_FILE="${CONFIG_DIR}/.install-state"
   BACKUP_DIR="${CONFIG_DIR}/.backups"
+}
+
+# Run 'systemctl --user' as the service user from a root/sudo context: the
+# user manager needs XDG_RUNTIME_DIR + the session bus to be reachable.
+user_systemctl() {
+  sudo -u "$SERVICE_USER" env \
+    "XDG_RUNTIME_DIR=/run/user/${SERVICE_UID}" \
+    "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${SERVICE_UID}/bus" \
+    systemctl --user "$@"
+}
+
+# Is the target user's session manager actually up? Enabling/starting a user
+# unit requires it; the unit file itself can always be installed.
+user_session_live() {
+  [ -S "/run/user/${SERVICE_UID}/bus" ] && user_systemctl is-system-running &>/dev/null
 }
 
 # ─── Argument parsing ────────────────────────────────────────────────────────
@@ -261,11 +284,11 @@ cmd_status() {
   fi
 
   if [ -f "$SERVICE_FILE" ]; then
-    ok "Service file: ${SERVICE_FILE}"
-    if command -v systemctl &>/dev/null; then
-      if systemctl is-active --quiet "$BINARY_NAME" 2>/dev/null; then
+    ok "Service file (user unit): ${SERVICE_FILE}"
+    if command -v systemctl &>/dev/null && user_session_live; then
+      if user_systemctl is-active --quiet "$BINARY_NAME" 2>/dev/null; then
         ok "Service status: active"
-      elif systemctl is-enabled --quiet "$BINARY_NAME" 2>/dev/null; then
+      elif user_systemctl is-enabled --quiet "$BINARY_NAME" 2>/dev/null; then
         warn "Service status: enabled (not running)"
       else
         warn "Service status: disabled"
@@ -417,14 +440,25 @@ cmd_uninstall() {
     info "DRY RUN — showing what would be removed."
   fi
 
-  # Stop and disable service
-  if systemctl is-active --quiet "$BINARY_NAME" 2>/dev/null; then
-    info "Stopping ${BINARY_NAME} service..."
-    [ "$DRY_RUN" = true ] || sudo systemctl stop "$BINARY_NAME"
+  # Stop and disable the user service
+  if command -v systemctl &>/dev/null && user_session_live; then
+    if user_systemctl is-active --quiet "$BINARY_NAME" 2>/dev/null; then
+      info "Stopping ${BINARY_NAME} user service..."
+      [ "$DRY_RUN" = true ] || user_systemctl stop "$BINARY_NAME"
+    fi
+    if user_systemctl is-enabled --quiet "$BINARY_NAME" 2>/dev/null; then
+      info "Disabling ${BINARY_NAME} user service..."
+      [ "$DRY_RUN" = true ] || user_systemctl disable "$BINARY_NAME"
+    fi
   fi
-  if systemctl is-enabled --quiet "$BINARY_NAME" 2>/dev/null; then
-    info "Disabling ${BINARY_NAME} service..."
-    [ "$DRY_RUN" = true ] || sudo systemctl disable "$BINARY_NAME"
+
+  # Remove any leftover system unit from older installs
+  local legacy_unit="/etc/systemd/system/${BINARY_NAME}.service"
+  if [ -f "$legacy_unit" ]; then
+    info "Removing legacy system unit ${legacy_unit}..."
+    [ "$DRY_RUN" = true ] || sudo systemctl disable --now "$BINARY_NAME" 2>/dev/null || true
+    [ "$DRY_RUN" = true ] || sudo rm -f "$legacy_unit"
+    [ "$DRY_RUN" = true ] || sudo systemctl daemon-reload
   fi
 
   # Remove binary
@@ -436,8 +470,8 @@ cmd_uninstall() {
   # Remove service file
   if [ -f "$SERVICE_FILE" ]; then
     info "Removing service file ${SERVICE_FILE}..."
-    [ "$DRY_RUN" = true ] || sudo rm -f "$SERVICE_FILE"
-    [ "$DRY_RUN" = true ] || sudo systemctl daemon-reload
+    [ "$DRY_RUN" = true ] || rm -f "$SERVICE_FILE"
+    [ "$DRY_RUN" = true ] || { command -v systemctl &>/dev/null && user_session_live && user_systemctl daemon-reload; } || true
   fi
 
   # Remove docs
@@ -1113,9 +1147,10 @@ cmd_install() {
   section "Installing"
 
   # Stop service before upgrade
-  if [ "$UPGRADE" = true ] && systemctl is-active --quiet "$BINARY_NAME" 2>/dev/null; then
+  if [ "$UPGRADE" = true ] && command -v systemctl &>/dev/null && user_session_live \
+    && user_systemctl is-active --quiet "$BINARY_NAME" 2>/dev/null; then
     info "Stopping service for upgrade..."
-    [ "$DRY_RUN" = true ] || sudo systemctl stop "$BINARY_NAME"
+    [ "$DRY_RUN" = true ] || user_systemctl stop "$BINARY_NAME"
   fi
 
   # Backup config before upgrade
@@ -1140,13 +1175,20 @@ cmd_install() {
   info "Installing binary to ${INSTALL_PREFIX}/bin/${BINARY_NAME}..."
   [ "$DRY_RUN" = true ] || sudo install -Dm755 "${extracted_dir}/${BINARY_NAME}" "${INSTALL_PREFIX}/bin/${BINARY_NAME}"
 
-  # Install service
+  # Install service (systemd *user* unit — the server needs the graphical
+  # session's Wayland/PipeWire, which a system unit cannot reach)
   if [ "$NO_SERVICE" = true ]; then
     info "Skipping service installation (--no-service)."
   elif [ -f "${extracted_dir}/${BINARY_NAME}.service" ]; then
-    info "Installing systemd service..."
-    [ "$DRY_RUN" = true ] || sudo install -Dm644 "${extracted_dir}/${BINARY_NAME}.service" "$SERVICE_FILE"
-    [ "$DRY_RUN" = true ] || sudo systemctl daemon-reload
+    info "Installing systemd user service for ${SERVICE_USER}..."
+    if [ "$DRY_RUN" != true ]; then
+      sudo install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m755 \
+        "${SERVICE_USER_HOME}/.config/systemd/user"
+      sed "s|^ExecStart=.*|ExecStart=${INSTALL_PREFIX}/bin/${BINARY_NAME} start|" \
+        "${extracted_dir}/${BINARY_NAME}.service" | sudo tee "$SERVICE_FILE" >/dev/null
+      sudo chmod 644 "$SERVICE_FILE"
+      user_systemctl daemon-reload || true
+    fi
   else
     warn "Service file not found in release archive."
   fi
@@ -1193,33 +1235,38 @@ cmd_install() {
     save_state "$VERSION" "$prev_version"
   fi
 
-  # Post-install: enable and start service
+  # Post-install: enable and start the user service
   section "Post-install"
   if [ "$NO_SERVICE" = true ]; then
     info "Skipping service setup (--no-service)."
   elif command -v systemctl &>/dev/null; then
-    if [ "$UPGRADE" = true ]; then
+    if ! user_session_live; then
+      warn "No live systemd session for user '${SERVICE_USER}' — cannot enable the"
+      warn "user service from here. Unit file is installed; from the desktop session run:"
+      warn "  systemctl --user enable --now ${BINARY_NAME}"
+    elif [ "$UPGRADE" = true ]; then
       info "Restarting ${BINARY_NAME} service..."
-      [ "$DRY_RUN" = true ] || sudo systemctl restart "$BINARY_NAME"
+      [ "$DRY_RUN" = true ] || user_systemctl restart "$BINARY_NAME"
     elif [ "$NON_INTERACTIVE" = true ]; then
       info "Non-interactive mode — enabling service..."
-      [ "$DRY_RUN" = true ] || sudo systemctl enable "$BINARY_NAME"
-      [ "$DRY_RUN" = true ] || sudo systemctl start "$BINARY_NAME"
+      [ "$DRY_RUN" = true ] || user_systemctl enable "$BINARY_NAME"
+      [ "$DRY_RUN" = true ] || user_systemctl start "$BINARY_NAME"
     else
       echo ""
-      echo -n "Enable and start ${BINARY_NAME} service? [Y/n] "
+      echo -n "Enable and start ${BINARY_NAME} service (user session)? [Y/n] "
       read -r -t 10 enable_service || true
       if [[ ! "$enable_service" =~ ^[Nn]$ ]]; then
         info "Enabling and starting ${BINARY_NAME} service..."
-        [ "$DRY_RUN" = true ] || sudo systemctl enable "$BINARY_NAME"
-        [ "$DRY_RUN" = true ] || sudo systemctl start "$BINARY_NAME"
+        [ "$DRY_RUN" = true ] || user_systemctl enable "$BINARY_NAME"
+        [ "$DRY_RUN" = true ] || user_systemctl start "$BINARY_NAME"
       else
-        info "Service not started. Run 'sudo systemctl enable --now ${BINARY_NAME}' manually."
+        info "Service not started. Run 'systemctl --user enable --now ${BINARY_NAME}' manually."
       fi
     fi
 
     # Verify service health
-    if [ "$DRY_RUN" != true ] && systemctl is-active --quiet "$BINARY_NAME" 2>/dev/null; then
+    if [ "$DRY_RUN" != true ] && user_session_live \
+      && user_systemctl is-active --quiet "$BINARY_NAME" 2>/dev/null; then
       ok "Service is running."
     fi
   elif [ -d /etc/init.d ] && command -v rc-status &>/dev/null; then
@@ -1261,13 +1308,13 @@ cmd_install() {
   echo ""
   echo "  Binary:   ${INSTALL_PREFIX}/bin/${BINARY_NAME} (${installed_ver})"
   echo "  Config:   ${CONFIG_FILE}"
-  echo "  Service:  ${SERVICE_FILE}"
+  echo "  Service:  ${SERVICE_FILE} (systemd --user)"
   echo ""
   echo "Next steps:"
   echo "  1. Edit config:   nano ${CONFIG_FILE}"
-  echo "  2. Start daemon:  sudo systemctl enable --now ${BINARY_NAME}"
-  echo "  3. Check status:  systemctl status ${BINARY_NAME}"
-  echo "  4. View logs:     journalctl -u ${BINARY_NAME} -f"
+  echo "  2. Start daemon:  systemctl --user enable --now ${BINARY_NAME}"
+  echo "  3. Check status:  systemctl --user status ${BINARY_NAME}"
+  echo "  4. View logs:     journalctl --user -u ${BINARY_NAME} -f"
   echo "  5. Read docs:     man ${BINARY_NAME}"
   echo ""
 
