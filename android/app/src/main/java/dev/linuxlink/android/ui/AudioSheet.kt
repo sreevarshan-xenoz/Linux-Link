@@ -1,6 +1,5 @@
 package dev.linuxlink.android.ui
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -11,8 +10,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -213,39 +214,50 @@ fun AudioControlSheet(
                         )
                         LazyColumn(modifier = Modifier.padding(bottom = 24.dp)) {
                             items(s.sinks, key = { it.name }) { sink ->
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable {
-                                            clearError()
-                                            scope.launch {
-                                                if (
-                                                    call(
-                                                        JSONObject()
-                                                            .put("action", "selectSink")
-                                                            .put("name", sink.name),
-                                                    ) != null
-                                                ) {
-                                                    refreshAll()
+                                ListItem(
+                                    headlineContent = {
+                                        Text(
+                                            sink.description.ifBlank { sink.name },
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            color = if (sink.isDefault) {
+                                                MaterialTheme.colorScheme.primary
+                                            } else {
+                                                MaterialTheme.colorScheme.onSurface
+                                            },
+                                        )
+                                    },
+                                    supportingContent = {
+                                        Text(
+                                            sink.name,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    },
+                                    leadingContent = { LlIcon(LlIcons.Volume, null) },
+                                    trailingContent = {
+                                        RadioButton(
+                                            selected = sink.isDefault,
+                                            onClick = {
+                                                clearError()
+                                                scope.launch {
+                                                    if (
+                                                        call(
+                                                            JSONObject()
+                                                                .put("action", "selectSink")
+                                                                .put("name", sink.name),
+                                                        ) != null
+                                                    ) {
+                                                        refreshAll()
+                                                    }
                                                 }
-                                            }
-                                        }
-                                        .padding(vertical = 10.dp),
-                                ) {
-                                    Text(
-                                        sink.description.ifBlank { sink.name },
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                    Text(
-                                        sink.name + if (sink.isDefault) "  ·  ${stringResource(R.string.sink_default)}" else "",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                }
+                                            },
+                                        )
+                                    },
+                                )
                                 HorizontalDivider()
                             }
                         }

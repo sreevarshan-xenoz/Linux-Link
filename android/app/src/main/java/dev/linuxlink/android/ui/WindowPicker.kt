@@ -10,10 +10,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -145,18 +146,20 @@ fun WindowPickerSheet(
     }
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(modifier = Modifier.padding(horizontal = 16.dp)) {
-            Text(stringResource(R.string.stream_window), style = MaterialTheme.typography.titleMedium)
-            TextButton(onClick = onFullDesktop) {
-                Text(
-                    if (selected == null) {
-                        stringResource(R.string.whole_desktop_current)
-                    } else {
-                        stringResource(R.string.whole_desktop)
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            }
+        Column(modifier = Modifier.padding(horizontal = 8.dp)) {
+            Text(
+                stringResource(R.string.stream_window),
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(start = 8.dp, bottom = 4.dp),
+            )
+            ListItem(
+                headlineContent = {
+                    Text(stringResource(R.string.whole_desktop), style = MaterialTheme.typography.bodyLarge)
+                },
+                leadingContent = { LlIcon(LlIcons.Desktop, null) },
+                trailingContent = { RadioButton(selected = selected == null, onClick = onFullDesktop) },
+                modifier = Modifier.clickable(onClick = onFullDesktop),
+            )
             HorizontalDivider()
             when {
                 error != null ->
@@ -180,33 +183,46 @@ fun WindowPickerSheet(
                 else -> LazyColumn(modifier = Modifier.padding(bottom = 24.dp)) {
                     items(listing!!.windows, key = { it.address }) { w ->
                         val label = w.title.ifBlank { w.app.ifBlank { w.address } }
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { onPick(w, listing!!.screen) }
-                                .padding(vertical = 10.dp),
-                        ) {
-                            Text(
-                                label,
-                                style = MaterialTheme.typography.bodyLarge,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            Text(
-                                buildString {
-                                    val focusedTag = stringResource(R.string.window_focused)
-                                    append(w.app.ifBlank { "?" })
-                                    if (w.workspaceName.isNotBlank()) {
-                                        append("  ·  ws ")
-                                        append(w.workspaceName)
-                                    }
-                                    append("  ·  ${w.size[0]}x${w.size[1]}")
-                                    if (w.active) append("  ·  $focusedTag")
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
+                        val picked = w == selected
+                        ListItem(
+                            headlineContent = {
+                                Text(
+                                    label,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    color = if (picked) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurface
+                                    },
+                                )
+                            },
+                            supportingContent = {
+                                Text(
+                                    buildString {
+                                        val focusedTag = stringResource(R.string.window_focused)
+                                        append(w.app.ifBlank { "?" })
+                                        if (w.workspaceName.isNotBlank()) {
+                                            append("  ·  ws ")
+                                            append(w.workspaceName)
+                                        }
+                                        append("  ·  ${w.size[0]}x${w.size[1]}")
+                                        if (w.active) append("  ·  $focusedTag")
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            },
+                            leadingContent = { LlIcon(LlIcons.Monitor, null) },
+                            trailingContent = {
+                                RadioButton(
+                                    selected = picked,
+                                    onClick = { onPick(w, listing!!.screen) },
+                                )
+                            },
+                            modifier = Modifier.clickable { onPick(w, listing!!.screen) },
+                        )
                         HorizontalDivider()
                     }
                 }

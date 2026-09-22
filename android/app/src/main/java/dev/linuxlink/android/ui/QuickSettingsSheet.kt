@@ -1,17 +1,15 @@
 package dev.linuxlink.android.ui
 
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Switch
@@ -20,6 +18,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.linuxlink.android.R
 
@@ -65,40 +64,41 @@ fun QuickSettingsSheet(
             modifier = Modifier
                 .fillMaxWidth()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp)
+                .padding(horizontal = 8.dp)
                 .padding(bottom = 24.dp),
         ) {
             Text(
                 stringResource(R.string.quick_settings_title),
                 style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.padding(bottom = 8.dp),
+                modifier = Modifier.padding(start = 8.dp, bottom = 8.dp),
             )
 
             GroupHeader(stringResource(R.string.group_input))
-            ValueRow(stringResource(R.string.row_input_mode), inputModeValue, onCycleInputMode)
-            ToggleRow(stringResource(R.string.row_view_only), viewOnly, onSetViewOnly)
+            ValueRow(LlIcons.Keyboard, stringResource(R.string.row_input_mode), inputModeValue, onCycleInputMode)
+            ToggleRow(LlIcons.Eye, stringResource(R.string.row_view_only), viewOnly, onSetViewOnly)
 
             GroupHeader(stringResource(R.string.group_stream))
-            ValueRow(stringResource(R.string.row_quality), qualityValue, onCycleQuality)
-            ValueRow(stringResource(R.string.row_window), windowValue, onPickWindow)
-            ValueRow(stringResource(R.string.row_monitor), monitorValue, onPickMonitor)
-            ValueRow(stringResource(R.string.row_pane), paneValue, onCyclePane)
+            ValueRow(LlIcons.Wifi, stringResource(R.string.row_quality), qualityValue, onCycleQuality)
+            ValueRow(LlIcons.Desktop, stringResource(R.string.row_window), windowValue, onPickWindow)
+            ValueRow(LlIcons.Monitor, stringResource(R.string.row_monitor), monitorValue, onPickMonitor)
+            ValueRow(LlIcons.Lan, stringResource(R.string.row_pane), paneValue, onCyclePane)
 
             GroupHeader(stringResource(R.string.group_desktop))
-            ToggleRow(stringResource(R.string.row_clipboard), clipboardSync, onSetClipboardSync)
-            ActionRow(stringResource(R.string.row_history), onOpenHistory)
-            ActionRow(stringResource(R.string.row_audio), onOpenAudio)
-            ToggleRow(stringResource(R.string.row_mic), micOn, onSetMic)
-            ToggleRow(stringResource(R.string.row_privacy), privacyGrab, onSetPrivacy)
+            ToggleRow(LlIcons.Clipboard, stringResource(R.string.row_clipboard), clipboardSync, onSetClipboardSync)
+            ActionRow(LlIcons.History, stringResource(R.string.row_history), onOpenHistory)
+            ActionRow(LlIcons.Volume, stringResource(R.string.row_audio), onOpenAudio)
+            ToggleRow(LlIcons.Mic, stringResource(R.string.row_mic), micOn, onSetMic)
+            ToggleRow(LlIcons.Lock, stringResource(R.string.row_privacy), privacyGrab, onSetPrivacy)
             ValueRow(
+                LlIcons.Pin,
                 stringResource(R.string.row_pairing),
                 stringResource(if (paired) R.string.value_paired else R.string.value_unpaired),
                 onOpenPairing,
             )
-            ActionRow(stringResource(R.string.ring_pc), onRing)
-            ActionRow(stringResource(R.string.lock_pc), onLock)
-            ActionRow(stringResource(R.string.blackout), onBlackout)
-            ActionRow(stringResource(R.string.pip), onPip)
+            ActionRow(LlIcons.Notifications, stringResource(R.string.ring_pc), onRing)
+            ActionRow(LlIcons.Power, stringResource(R.string.lock_pc), onLock)
+            ActionRow(LlIcons.Moon, stringResource(R.string.blackout), onBlackout)
+            ActionRow(LlIcons.Pip, stringResource(R.string.pip), onPip)
         }
     }
 }
@@ -109,57 +109,48 @@ private fun GroupHeader(label: String) {
         label,
         style = MaterialTheme.typography.labelLarge,
         color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(top = 14.dp, bottom = 2.dp),
+        modifier = Modifier.padding(start = 8.dp, top = 12.dp, bottom = 2.dp),
     )
 }
 
 @Composable
-private fun ToggleRow(label: String, checked: Boolean, onToggle: (Boolean) -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onToggle(!checked) }
-            .padding(vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
-        Text(label, style = MaterialTheme.typography.bodyLarge)
-        Switch(checked = checked, onCheckedChange = onToggle)
-    }
-}
-
-@Composable
-private fun ValueRow(label: String, value: String, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
-        Text(label, style = MaterialTheme.typography.bodyLarge)
-        Text(
-            value,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-            modifier = Modifier.padding(start = 12.dp),
-        )
-    }
-}
-
-@Composable
-private fun ActionRow(label: String, onClick: () -> Unit) {
-    Text(
-        label,
-        style = MaterialTheme.typography.bodyLarge,
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = 12.dp),
+private fun ToggleRow(icon: LlGlyph, label: String, checked: Boolean, onToggle: (Boolean) -> Unit) {
+    ListItem(
+        headlineContent = { Text(label, style = MaterialTheme.typography.bodyLarge) },
+        leadingContent = { LlIcon(icon, null) },
+        trailingContent = { Switch(checked = checked, onCheckedChange = onToggle) },
+        modifier = Modifier.clickable { onToggle(!checked) },
     )
-    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-    Spacer(Modifier.height(0.dp))
+}
+
+@Composable
+private fun ValueRow(icon: LlGlyph, label: String, value: String, onClick: () -> Unit) {
+    ListItem(
+        headlineContent = { Text(label, style = MaterialTheme.typography.bodyLarge) },
+        leadingContent = { LlIcon(icon, null) },
+        trailingContent = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    value,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = 130.dp),
+                )
+                LlIcon(LlIcons.ChevronRight, null)
+            }
+        },
+        modifier = Modifier.clickable(onClick = onClick),
+    )
+}
+
+@Composable
+private fun ActionRow(icon: LlGlyph, label: String, onClick: () -> Unit) {
+    ListItem(
+        headlineContent = { Text(label, style = MaterialTheme.typography.bodyLarge) },
+        leadingContent = { LlIcon(icon, null) },
+        trailingContent = { LlIcon(LlIcons.ChevronRight, null) },
+        modifier = Modifier.clickable(onClick = onClick),
+    )
 }

@@ -121,7 +121,6 @@
 
     <!-- Window picker -->
     <string name="stream_window">சாளரத்தை ஸ்ட்ரீம் செய்</string>
-    <string name="whole_desktop_current">முழுப் பணித்தளம் (தற்போது)</string>
     <string name="whole_desktop">முழுப் பணித்தளம்</string>
     <string name="malformed_windows">சீர்கேடான சாளரப் பட்டியல்</string>
     <string name="window_query_failed">சாளர வினவல் தோல்வி</string>
@@ -129,12 +128,10 @@
 
     <!-- Monitor picker -->
     <string name="stream_monitor">மானிட்டரை ஸ்ட்ரீம் செய்</string>
-    <string name="auto_primary_current">தானியங்கி — முதன்மை (தற்போது)</string>
     <string name="auto_primary">தானியங்கி — முதன்மை</string>
     <string name="malformed_monitors">சீர்கேடான மானிட்டர் பட்டியல்</string>
     <string name="monitor_query_failed">மானிட்டர் வினவல் தோல்வி</string>
     <string name="monitor_primary">முதன்மை</string>
-    <string name="monitor_current">தற்போது</string>
 
     <!-- Clipboard history sheet -->
     <string name="clipboard_history">க்ளிப் போர்டு வரலாறு</string>
@@ -147,7 +144,6 @@
     <string name="audio_muted">(அணைக்கப்பட்டது)</string>
     <string name="mute">அணை</string>
     <string name="output_device">வெளியீட்டுச் சாதனம்</string>
-    <string name="sink_default">இயல்பு</string>
     <string name="audio_rejected">டெஸ்க்டாப் கோரிக்கையை மறுத்தது</string>
     <string name="audio_failed">ஒலிக் கட்டுப்பாடு தோல்வி</string>
     <string name="err_host_unreachable">அந்த முகவரியில் எதுவும் பதிலளிக்கவில்லை. டெஸ்க்டாப்பில் Linux Link இயங்குகிறதா?</string>

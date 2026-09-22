@@ -121,7 +121,6 @@
 
     <!-- Window picker -->
     <string name="stream_window">Transmitir una ventana</string>
-    <string name="whole_desktop_current">Escritorio completo (actual)</string>
     <string name="whole_desktop">Escritorio completo</string>
     <string name="malformed_windows">Lista de ventanas malformada</string>
     <string name="window_query_failed">Error al consultar las ventanas</string>
@@ -129,12 +128,10 @@
 
     <!-- Monitor picker -->
     <string name="stream_monitor">Transmitir un monitor</string>
-    <string name="auto_primary_current">Automático — principal (actual)</string>
     <string name="auto_primary">Automático — principal</string>
     <string name="malformed_monitors">Lista de monitores malformada</string>
     <string name="monitor_query_failed">Error al consultar los monitores</string>
     <string name="monitor_primary">principal</string>
-    <string name="monitor_current">actual</string>
 
     <!-- Clipboard history sheet -->
     <string name="clipboard_history">Historial del portapapeles</string>
@@ -147,7 +144,6 @@
     <string name="audio_muted">(silenciado)</string>
     <string name="mute">Silenciar</string>
     <string name="output_device">Dispositivo de salida</string>
-    <string name="sink_default">predeterminada</string>
     <string name="audio_rejected">El escritorio rechazó la solicitud</string>
         <string name="audio_failed">Error de control de audio</string>
     <string name="err_host_unreachable">Nadie respondió en esa dirección. ¿Está Linux Link activo en el escritorio?</string>

@@ -11,10 +11,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -89,13 +90,20 @@ fun MonitorPickerSheet(
     }
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(modifier = Modifier.padding(horizontal = 16.dp)) {
-            Text(stringResource(R.string.stream_monitor), style = MaterialTheme.typography.titleMedium)
-            TextButton(onClick = { onPick(-1) }) {
-                val label =
-                    if (selected == -1) stringResource(R.string.auto_primary_current) else stringResource(R.string.auto_primary)
-                Text(label, style = MaterialTheme.typography.bodyMedium)
-            }
+        Column(modifier = Modifier.padding(horizontal = 8.dp)) {
+            Text(
+                stringResource(R.string.stream_monitor),
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(start = 8.dp, bottom = 4.dp),
+            )
+            ListItem(
+                headlineContent = {
+                    Text(stringResource(R.string.auto_primary), style = MaterialTheme.typography.bodyLarge)
+                },
+                leadingContent = { LlIcon(LlIcons.Desktop, null) },
+                trailingContent = { RadioButton(selected = selected == -1, onClick = { onPick(-1) }) },
+                modifier = Modifier.clickable { onPick(-1) },
+            )
             HorizontalDivider()
             when {
                 error != null ->
@@ -118,30 +126,36 @@ fun MonitorPickerSheet(
 
                 else -> LazyColumn(modifier = Modifier.padding(bottom = 24.dp)) {
                     items(monitors!!, key = { it.index }) { m ->
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { onPick(m.index) }
-                                .padding(vertical = 10.dp),
-                        ) {
-                            Text(
-                                m.name,
-                                style = MaterialTheme.typography.bodyLarge,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            Text(
-                                buildString {
-                                    val primaryTag = stringResource(R.string.monitor_primary)
-                                    val currentTag = stringResource(R.string.monitor_current)
-                                    append("${m.width}x${m.height}")
-                                    if (m.isPrimary) append("  ·  $primaryTag")
-                                    if (m.index == selected) append("  ·  $currentTag")
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
+                        val picked = m.index == selected
+                        ListItem(
+                            headlineContent = {
+                                Text(
+                                    m.name,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    color = if (picked) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurface
+                                    },
+                                )
+                            },
+                            supportingContent = {
+                                Text(
+                                    buildString {
+                                        val primaryTag = stringResource(R.string.monitor_primary)
+                                        append("${m.width}x${m.height}")
+                                        if (m.isPrimary) append("  ·  $primaryTag")
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            },
+                            leadingContent = { LlIcon(LlIcons.Monitor, null) },
+                            trailingContent = { RadioButton(selected = picked, onClick = { onPick(m.index) }) },
+                            modifier = Modifier.clickable { onPick(m.index) },
+                        )
                         HorizontalDivider()
                     }
                 }

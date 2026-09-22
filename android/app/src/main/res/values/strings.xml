@@ -128,7 +128,6 @@
 
     <!-- Window picker -->
     <string name="stream_window">Stream a window</string>
-    <string name="whole_desktop_current">Whole desktop (current)</string>
     <string name="whole_desktop">Whole desktop</string>
     <string name="malformed_windows">Malformed window list</string>
     <string name="window_query_failed">Window query failed</string>
@@ -136,12 +135,10 @@
 
     <!-- Monitor picker -->
     <string name="stream_monitor">Stream a monitor</string>
-    <string name="auto_primary_current">Auto — primary (current)</string>
     <string name="auto_primary">Auto — primary</string>
     <string name="malformed_monitors">Malformed monitor list</string>
     <string name="monitor_query_failed">Monitor query failed</string>
     <string name="monitor_primary">primary</string>
-    <string name="monitor_current">current</string>
 
     <!-- Clipboard history sheet -->
     <string name="clipboard_history">Clipboard history</string>
@@ -154,7 +151,6 @@
     <string name="audio_muted">(muted)</string>
     <string name="mute">Mute</string>
     <string name="output_device">Output device</string>
-    <string name="sink_default">default</string>
     <string name="audio_rejected">Desktop rejected the request</string>
     <string name="audio_failed">Audio control failed</string>
     <string name="err_host_unreachable">Nothing answered on that address. Is Linux Link running on the desktop?</string>

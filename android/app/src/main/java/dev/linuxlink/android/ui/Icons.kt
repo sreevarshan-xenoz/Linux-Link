@@ -289,6 +289,15 @@ object LlIcons {
             color = c,
         )
     }
+    val History: LlGlyph = glyph { c ->
+        ring(c, 12f, 12f, 8.5f, 1.8f)
+        line(c, 12f, 12f, 12f, 7.5f, 1.8f)
+        line(c, 12f, 12f, 15.5f, 13.5f, 1.8f)
+    }
+    val Pip: LlGlyph = glyph { c ->
+        strokeBox(c, 2.5f, 4.5f, 21.5f, 17.5f, 1.8f)
+        box(c, 12f, 10.5f, 19.5f, 16f)
+    }
 }
 
 /**
