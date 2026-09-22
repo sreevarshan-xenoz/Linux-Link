@@ -392,6 +392,29 @@ fun RemoteScreen(
         if (inPictureInPicture) blackout = false
     }
 
+    // UI refresh: the session runs immersive — the system bars are hidden on
+    // entry (swipe reveals them transiently, Chrome-Remote-Desktop style)
+    // and restored when the session ends or the activity floats into PiP.
+    // Keyed on PiP only, so this fires exactly twice per session at most:
+    // a mid-session inset flip is the one thing the SurfaceView must not
+    // see per recomposition.
+    DisposableEffect(inPictureInPicture) {
+        val window = activity?.window
+        if (window == null || inPictureInPicture) {
+            onDispose {}
+        } else {
+            val controller = androidx.core.view.WindowCompat
+                .getInsetsController(window, window.decorView)
+            controller.systemBarsBehavior =
+                androidx.core.view.WindowInsetsControllerCompat
+                    .BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            onDispose {
+                controller.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            }
+        }
+    }
+
     DisposableEffect(blackout) {
         val window = context.findActivity()?.window
         fun applySecure(secure: Boolean) {
@@ -562,9 +585,14 @@ fun RemoteScreen(
         }
         context.startForegroundService(start)
         val window = context.findActivity()?.window
-        window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        val keepOn = dev.linuxlink.android.Prefs.keepScreenOn(context)
+        if (keepOn) {
+            window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
         onDispose {
-            window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            if (keepOn) {
+                window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
             context.stopService(Intent(context, SessionForegroundService::class.java))
         }
     }

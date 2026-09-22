@@ -7,8 +7,13 @@ import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -70,6 +75,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         RustCore.start(filesDir)
         setContent {
             LinuxLinkTheme {
@@ -95,7 +101,10 @@ class MainActivity : ComponentActivity() {
                     }
 
                     when (val session = parseSession(sessionKey)) {
-                        null -> {
+                        // Home-family screens stay clear of the bars; the
+                        // session below runs edge-to-edge + immersive on
+                        // purpose, so the inset padding is scoped here.
+                        null -> Box(Modifier.windowInsetsPadding(WindowInsets.safeDrawing)) {
                             if (showForm) {
                                 ConnectScreen(
                                     initial = null,
