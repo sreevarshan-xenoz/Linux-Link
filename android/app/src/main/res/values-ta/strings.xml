@@ -26,33 +26,14 @@
     <string name="exit">வெளியேறு</string>
     <string name="mode_direct_touch">முறை: நேரடித் தொடும்</string>
     <string name="mode_trackpad">முறை: டிராக்பேட்</string>
-    <string name="clip_on">க்ளிப்: இயக்கம்</string>
-    <string name="clip_off">க்ளிப்: முடக்கம்</string>
-    <string name="history">வரலாறு</string>
-    <string name="window_all">சாளரம்: அனைத்தும்</string>
-    <string name="window_named">சாளரம்: %1$s</string>
-    <string name="monitor_auto">மானிட்டர்: தானியங்கி</string>
-    <string name="monitor_indexed">மானிட்டர்: #%1$d</string>
     <string name="ring_pc">PC ஒலியெழுப்பு</string>
-    <string name="audio">ஒலி</string>
-    <string name="pair_action">இணைப்பு…</string>
     <string name="paired">இணைக்கப்பட்டது ✓</string>
-    <string name="privacy_on">தனியுரிமை: இயக்கம்</string>
-    <string name="privacy_off">தனியுரிமை: முடக்கம்</string>
     <string name="privacy_error">தனியுரிமை: %1$s</string>
-    <string name="view_only_on">பார்வை மட்டும்: இயக்கம்</string>
-    <string name="view_only_off">பார்வை மட்டும்: முடக்கம்</string>
     <string name="view_only_error">பார்வை மட்டும்: %1$s</string>
     <string name="full_quality_on">முழு தரம்: இயக்கம்</string>
     <string name="full_quality_off">முழு தரம்: முடக்கம்</string>
     <string name="full_quality_error">முழு தரம்: %1$s</string>
-    <string name="preset_auto">தரம்: தானியங்கி</string>
-    <string name="preset_quality">தரம்: அதிகபட்சம்</string>
-    <string name="preset_balanced">தரம்: சமநிலை</string>
-    <string name="preset_economy">தரம்: சேமிப்பு</string>
     <string name="quality_preset_error">தரம் அமைவு: %1$s</string>
-    <string name="mic_on">மைக்: இயக்கம்</string>
-    <string name="mic_off">மைக்: முடக்கம்</string>
     <string name="mic_error">மைக் பகிர்வு: %1$s</string>
     <string name="mic_unavailable">இந்த சாதனத்தில் Opus என்கோடர் இல்லை (Android 9+)</string>
     <string name="mic_permission_denied">மைக்ரோஃபோன் அனுமதி மறுக்கப்பட்டது</string>
@@ -63,10 +44,39 @@
     <string name="blackout_unlock">கருப்புத் திரை — திறக்க இருமுறை தட்டவும்</string>
 
     <!-- R4 E6: மடிப்பு / டேப்லெட் இரட்டைப் பலகம் -->
-    <string name="pane_auto">பலகம்: தானாக</string>
-    <string name="pane_dual">பலகம்: இரட்டை</string>
-    <string name="pane_single">பலகம்: ஒற்றை</string>
     <string name="trackpad_hint">டிராக்பேட் — நகர இழுக்கவும், சொடுக்க தட்டவும், உருள இரண்டு விரல்கள்</string>
+
+    <!-- UI புதுப்பிப்பு: விரைவு அமைப்புத் தாள் + மங்கும் HUD -->
+    <string name="quick_settings_title">அமர்வு அமைப்புகள்</string>
+    <string name="group_input">உள்ளீடு</string>
+    <string name="group_stream">ஒளிபரப்பு</string>
+    <string name="group_desktop">டெஸ்க்டாப்</string>
+    <string name="row_input_mode">உள்ளீட்டு முறை</string>
+    <string name="row_view_only">காட்சி மட்டும்</string>
+    <string name="row_quality">தரம்</string>
+    <string name="row_window">சாளரம்</string>
+    <string name="row_monitor">முகவரித் திரை</string>
+    <string name="row_pane">பலக அமைப்பு</string>
+    <string name="row_clipboard">கிளிப்போர்ட் ஒத்திசைவு</string>
+    <string name="row_history">கிளிப்போர்ட் வரலாறு</string>
+    <string name="row_audio">ஒலிக் கட்டுப்பாடு</string>
+    <string name="row_mic">கைபேசி ஒலிவாங்கி</string>
+    <string name="row_privacy">தனியுரிமைப் பூட்டு</string>
+    <string name="row_pairing">இணைப்பு</string>
+    <string name="value_direct_touch">நேரடித் தொடுதல்</string>
+    <string name="value_trackpad">டிராக்பேட்</string>
+    <string name="value_quality_auto">தானியங்கி</string>
+    <string name="value_quality_max">அதிகபட்சம்</string>
+    <string name="value_quality_balanced">சமநிலை</string>
+    <string name="value_quality_economy">சேமிப்பு</string>
+    <string name="value_window_all">அனைத்துச் சாளரங்கள்</string>
+    <string name="value_monitor_auto">தானியங்கி</string>
+    <string name="value_monitor_indexed">#%1$d</string>
+    <string name="value_pane_auto">தானியங்கி</string>
+    <string name="value_pane_dual">இரட்டை</string>
+    <string name="value_pane_single">ஒற்றை</string>
+    <string name="value_paired">இணைக்கப்பட்டது</string>
+    <string name="value_unpaired">இணைக்கப்படவில்லை</string>
 
     <!-- Foreground-service + notification relay -->
     <string name="channel_session">தொலைநுணுக பணித்தள அமர்வு</string>

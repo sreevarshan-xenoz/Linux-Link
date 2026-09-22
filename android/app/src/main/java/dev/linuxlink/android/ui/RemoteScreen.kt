@@ -15,6 +15,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -23,6 +24,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -39,10 +41,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import dev.linuxlink.android.HostStore
 import dev.linuxlink.android.R
 import dev.linuxlink.android.bridge.RustCore
@@ -62,7 +68,8 @@ import kotlinx.coroutines.withContext
 
 /**
  * Live remote-desktop session (Tier 1 #5 shell): video surface + input
- * gestures, stats HUD, shortcut bar, input-mode switch, and the
+ * gestures, fading stats HUD, a floating action disc opening the grouped
+ * QuickSettingsSheet, the input-mode toggle, shortcut bar, and the
  * foreground-service + keep-screen-on lifecycle around it.
  */
 @Composable
@@ -90,6 +97,9 @@ fun RemoteScreen(
     }
     var clipboardSync by remember { mutableStateOf(true) }
     var showHistory by remember { mutableStateOf(false) }
+    // UI refresh: the old 16-button bottom bar became a floating action disc
+    // opening this grouped sheet; only the input-mode toggle stayed outside.
+    var showQuick by remember { mutableStateOf(false) }
     // R3#7 single-window streaming: the picked window + the layout box the
     // picker reported (needed to remap direct-touch through the crop).
     var cropWindow by remember { mutableStateOf<DesktopWindow?>(null) }
@@ -144,6 +154,21 @@ fun RemoteScreen(
             delay(1_000)
         }
     }
+    // UI refresh: the stats/workspace HUD fades to a ghost a few seconds
+    // after the link comes up so the desktop itself is what's on screen;
+    // tapping the ghost brings it back and re-arms the timer.
+    var hudFocused by remember { mutableStateOf(true) }
+    LaunchedEffect(hudFocused, status) {
+        if (hudFocused && status is StreamStatus.Up) {
+            delay(6_000)
+            hudFocused = false
+        }
+    }
+    val hudAlpha by animateFloatAsState(
+        targetValue = if (hudFocused) 1f else 0.3f,
+        animationSpec = tween(400),
+        label = "hudFade",
+    )
     // Tier-2 #11b: PIN pairing state. Unpaired sessions open the sheet —
     // with pairing enforced, the control channel only answers the handshake.
     var pairedServerId by remember(address) { mutableStateOf(HostStore.pairedDesktopId(context, address)) }
@@ -474,6 +499,41 @@ fun RemoteScreen(
         }
     }
 
+    // Session-state toggles, shared by the quick-settings sheet. Each keeps
+    // the existing error-toast path (viewOnlyError / privacyError / ...).
+    fun applyViewOnly(next: Boolean) {
+        scope.launch(Dispatchers.IO) {
+            val result = RustCore.setViewOnly(next)
+            withContext(Dispatchers.Main) {
+                if (result.isSuccess) viewOnly = next else viewOnlyError = result.exceptionOrNull()?.message
+            }
+        }
+    }
+    fun applyPrivacy(next: Boolean) {
+        scope.launch(Dispatchers.IO) {
+            val result =
+                RustCore.desktopPrivacy(address, controlPort, if (next) "grab" else "release")
+            withContext(Dispatchers.Main) {
+                if (result.isSuccess) privacyGrab = next else privacyError = result.exceptionOrNull()?.message
+            }
+        }
+    }
+    fun cycleQuality() {
+        val next = when (qualityPreset) {
+            RustCore.PRESET_AUTO -> RustCore.PRESET_QUALITY
+            RustCore.PRESET_QUALITY -> RustCore.PRESET_BALANCED
+            RustCore.PRESET_BALANCED -> RustCore.PRESET_ECONOMY
+            else -> RustCore.PRESET_AUTO
+        }
+        qualityPreset = next
+        scope.launch(Dispatchers.IO) {
+            RustCore.sendQualityPreset(next).onFailure { qualityPresetError = it.message }
+        }
+    }
+    fun toggleMode() {
+        mode = if (mode == InputMode.DirectTouch) InputMode.Trackpad else InputMode.DirectTouch
+    }
+
     ClipboardSyncEffect(address, controlPort, enabled = clipboardSync)
     SirenWatcher(context)
     DesktopNotificationRelay(address = address, controlPort = controlPort)
@@ -645,7 +705,9 @@ fun RemoteScreen(
             Column(
                 modifier = Modifier
                     .align(Alignment.TopStart)
-                    .padding(8.dp),
+                    .padding(8.dp)
+                    .graphicsLayer { alpha = hudAlpha }
+                    .pointerInput(Unit) { detectTapGestures { hudFocused = true } },
             ) {
                 StatsHud(address = address, controlPort = controlPort)
                 WorkspaceHud(
@@ -669,13 +731,18 @@ fun RemoteScreen(
 
         if (!inPictureInPicture) {
             Column(modifier = Modifier.align(Alignment.BottomCenter)) {
-                Row(modifier = Modifier.padding(bottom = 4.dp)) {
-                    TextButton(
-                        onClick = {
-                            mode =
-                                if (mode == InputMode.DirectTouch) InputMode.Trackpad else InputMode.DirectTouch
-                        },
-                    ) {
+                // UI refresh: the 16 flat TextButtons collapsed into one
+                // floating action disc opening QuickSettingsSheet. Input mode
+                // stays outside — it is the toggle used mid-gesture — and
+                // doubles as the current-mode readout.
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 2.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(onClick = ::toggleMode) {
                         val label =
                             if (mode == InputMode.DirectTouch) {
                                 stringResource(R.string.mode_direct_touch)
@@ -684,160 +751,12 @@ fun RemoteScreen(
                             }
                         Text(label, color = Color.White)
                     }
-                    TextButton(onClick = { clipboardSync = !clipboardSync }) {
-                        val label =
-                            if (clipboardSync) stringResource(R.string.clip_on) else stringResource(R.string.clip_off)
-                        Text(label, color = Color.White)
-                    }
-                    TextButton(onClick = { showHistory = true }) {
-                        Text(stringResource(R.string.history), color = Color.White)
-                    }
-                    TextButton(onClick = { showPicker = true }) {
-                        val label =
-                            if (cropWindow == null) {
-                                stringResource(R.string.window_all)
-                            } else {
-                                stringResource(
-                                    R.string.window_named,
-                                    (cropWindow?.title ?: "").take(18),
-                                )
-                            }
-                        Text(label, color = Color.White)
-                    }
-                    TextButton(onClick = { showMonitorPicker = true }) {
-                        val label =
-                            if (monitorIndex == -1) {
-                                stringResource(R.string.monitor_auto)
-                            } else {
-                                stringResource(R.string.monitor_indexed, monitorIndex)
-                            }
-                        Text(label, color = Color.White)
-                    }
-                    TextButton(
-                        onClick = {
-                            scope.launch(Dispatchers.IO) {
-                                RustCore.sendFindMyDevice(address, controlPort)
-                            }
-                        },
-                    ) {
-                        Text(stringResource(R.string.ring_pc), color = Color.White)
-                    }
-                    TextButton(onClick = { showAudio = true }) {
-                        Text(stringResource(R.string.audio), color = Color.White)
-                    }
-                    TextButton(
-                        onClick = { if (mic == null) startMicShare() else stopMicShare() },
-                    ) {
-                        val label =
-                            if (mic != null) stringResource(R.string.mic_on) else stringResource(R.string.mic_off)
-                        Text(label, color = if (mic != null) Color(0xFFFFC080) else Color.White)
-                    }
-                    TextButton(onClick = { pairingMessage = null; showPairing = true }) {
-                        val label =
-                            if (pairedServerId == null) {
-                                stringResource(R.string.pair_action)
-                            } else {
-                                stringResource(R.string.paired)
-                            }
-                        Text(label, color = Color.White)
-                    }
-                    TextButton(
-                        onClick = {
-                            scope.launch(Dispatchers.IO) {
-                                val next = !privacyGrab
-                                val result =
-                                    RustCore.desktopPrivacy(address, controlPort, if (next) "grab" else "release")
-                                withContext(Dispatchers.Main) {
-                                    if (result.isSuccess) {
-                                        privacyGrab = next
-                                    } else {
-                                        privacyError = result.exceptionOrNull()?.message
-                                    }
-                                }
-                            }
-                        },
-                    ) {
-                        val label =
-                            if (privacyGrab) stringResource(R.string.privacy_on) else stringResource(R.string.privacy_off)
-                        Text(label, color = if (privacyGrab) Color(0xFF80FFB0) else Color.White)
-                    }
-                    TextButton(
-                        onClick = {
-                            scope.launch(Dispatchers.IO) {
-                                val next = !viewOnly
-                                val result = RustCore.setViewOnly(next)
-                                withContext(Dispatchers.Main) {
-                                    if (result.isSuccess) {
-                                        viewOnly = next
-                                    } else {
-                                        viewOnlyError = result.exceptionOrNull()?.message
-                                    }
-                                }
-                            }
-                        },
-                    ) {
-                        val label =
-                            if (viewOnly) stringResource(R.string.view_only_on) else stringResource(R.string.view_only_off)
-                        Text(label, color = if (viewOnly) Color(0xFFFFC080) else Color.White)
-                    }
-                    TextButton(
-                        onClick = {
-                            val next = when (qualityPreset) {
-                                RustCore.PRESET_AUTO -> RustCore.PRESET_QUALITY
-                                RustCore.PRESET_QUALITY -> RustCore.PRESET_BALANCED
-                                RustCore.PRESET_BALANCED -> RustCore.PRESET_ECONOMY
-                                else -> RustCore.PRESET_AUTO
-                            }
-                            qualityPreset = next
-                            scope.launch(Dispatchers.IO) {
-                                RustCore.sendQualityPreset(next)
-                                    .onFailure { qualityPresetError = it.message }
-                            }
-                        },
-                    ) {
-                        val label = when (qualityPreset) {
-                            RustCore.PRESET_QUALITY -> stringResource(R.string.preset_quality)
-                            RustCore.PRESET_BALANCED -> stringResource(R.string.preset_balanced)
-                            RustCore.PRESET_ECONOMY -> stringResource(R.string.preset_economy)
-                            else -> stringResource(R.string.preset_auto)
-                        }
+                    FloatingActionButton(onClick = { showQuick = true }) {
                         Text(
-                            label,
-                            color = if (qualityPreset != RustCore.PRESET_AUTO) Color(0xFF80C0FF) else Color.White,
-                        )
-                    }
-                    TextButton(
-                        onClick = {
-                            scope.launch(Dispatchers.IO) {
-                                RustCore.desktopPrivacy(address, controlPort, "status", lock = true)
-                            }
-                        },
-                    ) {
-                        Text(stringResource(R.string.lock_pc), color = Color.White)
-                    }
-                    TextButton(onClick = { blackout = true }) {
-                        Text(stringResource(R.string.blackout), color = Color.White)
-                    }
-                    TextButton(
-                        onClick = {
-                            (context.findActivity() as? dev.linuxlink.android.MainActivity)
-                                ?.enterSessionPictureInPicture(
-                                    videoSize.width,
-                                    videoSize.height,
-                                )
-                        },
-                    ) {
-                        Text(stringResource(R.string.pip), color = Color.White)
-                    }
-                    TextButton(onClick = { cyclePane() }) {
-                        val paneLabel = when (paneMode) {
-                            PaneMode.Auto -> stringResource(R.string.pane_auto)
-                            PaneMode.Dual -> stringResource(R.string.pane_dual)
-                            PaneMode.Single -> stringResource(R.string.pane_single)
-                        }
-                        Text(
-                            paneLabel,
-                            color = if (dualPane) Color(0xFF80C0FF) else Color.White,
+                            "⋮",
+                            fontSize = 26.sp,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.padding(bottom = 6.dp),
                         )
                     }
                 }
@@ -949,6 +868,89 @@ fun RemoteScreen(
                 cropScreen = null
                 scope.launch(Dispatchers.IO) { RustCore.clearWindowCrop() }
                 showPicker = false
+            },
+        )
+    }
+
+    if (showQuick) {
+        QuickSettingsSheet(
+            onDismiss = { showQuick = false },
+            inputModeValue = stringResource(
+                if (mode == InputMode.DirectTouch) R.string.value_direct_touch else R.string.value_trackpad,
+            ),
+            onCycleInputMode = ::toggleMode,
+            viewOnly = viewOnly,
+            onSetViewOnly = ::applyViewOnly,
+            qualityValue = stringResource(
+                when (qualityPreset) {
+                    RustCore.PRESET_QUALITY -> R.string.value_quality_max
+                    RustCore.PRESET_BALANCED -> R.string.value_quality_balanced
+                    RustCore.PRESET_ECONOMY -> R.string.value_quality_economy
+                    else -> R.string.value_quality_auto
+                },
+            ),
+            onCycleQuality = ::cycleQuality,
+            windowValue = cropWindow?.title?.take(18) ?: stringResource(R.string.value_window_all),
+            onPickWindow = {
+                showQuick = false
+                showPicker = true
+            },
+            monitorValue =
+                if (monitorIndex == -1) {
+                    stringResource(R.string.value_monitor_auto)
+                } else {
+                    stringResource(R.string.value_monitor_indexed, monitorIndex)
+                },
+            onPickMonitor = {
+                showQuick = false
+                showMonitorPicker = true
+            },
+            paneValue = stringResource(
+                when (paneMode) {
+                    PaneMode.Auto -> R.string.value_pane_auto
+                    PaneMode.Dual -> R.string.value_pane_dual
+                    PaneMode.Single -> R.string.value_pane_single
+                },
+            ),
+            onCyclePane = ::cyclePane,
+            clipboardSync = clipboardSync,
+            onSetClipboardSync = { clipboardSync = it },
+            onOpenHistory = {
+                showQuick = false
+                showHistory = true
+            },
+            onOpenAudio = {
+                showQuick = false
+                showAudio = true
+            },
+            micOn = mic != null,
+            onSetMic = { if (it) startMicShare() else stopMicShare() },
+            privacyGrab = privacyGrab,
+            onSetPrivacy = ::applyPrivacy,
+            paired = pairedServerId != null,
+            onOpenPairing = {
+                showQuick = false
+                pairingMessage = null
+                showPairing = true
+            },
+            onRing = {
+                showQuick = false
+                scope.launch(Dispatchers.IO) { RustCore.sendFindMyDevice(address, controlPort) }
+            },
+            onLock = {
+                showQuick = false
+                scope.launch(Dispatchers.IO) {
+                    RustCore.desktopPrivacy(address, controlPort, "status", lock = true)
+                }
+            },
+            onBlackout = {
+                showQuick = false
+                blackout = true
+            },
+            onPip = {
+                showQuick = false
+                (context.findActivity() as? dev.linuxlink.android.MainActivity)
+                    ?.enterSessionPictureInPicture(videoSize.width, videoSize.height)
             },
         )
     }

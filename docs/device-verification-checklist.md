@@ -318,6 +318,18 @@ not part of C4.
 - [ ] Phone on the tailnet (not on the LAN): connect to the laptop's 100.x Tailscale IP → pairing + video + taps work end to end. **(verified 2026-09-22: oppo-reno8-5g 100.82.170.9 → 100.117.27.83)**
 - [ ] Phone on cellular (Wi-Fi off): same connect via tailnet IP works (Tailscale traverses NAT). Then iroh WAN fallback (`## 11`) with the two machines on genuinely different networks — still pending (phone cellular was OUT_OF_SERVICE at test time).
 
+## 19. Session chrome refresh (action disc + quick-settings sheet + fading HUD)
+
+Verified on OPPO CPH2359 over the tailnet, 2026-09-22:
+
+- [x] Bottom bar is just the mode chip + floating disc over the ShortcutBar; the disc opens the grouped "Session settings" sheet (Input / Streaming / Desktop).
+- [x] Toggle rows act live (clipboard sync, view-only flipped in place; pairing row reads "Paired").
+- [x] Value rows cycle (input mode chip + sheet row stay in sync: Direct touch ↔ Trackpad).
+- [x] Rows that lead elsewhere dismiss the sheet first (pairing sheet opened over a closed quick sheet).
+- [x] Stats/workspace HUD fades to a ghost ~6 s after the link is Up; tapping it restores full alpha and re-arms the timer.
+- [x] Exit pill + WAN badge untouched at the top; PiP still hides all chrome.
+- [x] es/ta strings shipped with the new keys (31 each, locales in sync).
+
 ## Recording results
 
 Update `AGENTS.md` Current Status (mark verified items / list failures) and

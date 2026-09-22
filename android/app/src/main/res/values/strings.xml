@@ -33,33 +33,14 @@
     <string name="exit">Exit</string>
     <string name="mode_direct_touch">Mode: direct touch</string>
     <string name="mode_trackpad">Mode: trackpad</string>
-    <string name="clip_on">Clip: on</string>
-    <string name="clip_off">Clip: off</string>
-    <string name="history">History</string>
-    <string name="window_all">Window: all</string>
-    <string name="window_named">Window: %1$s</string>
-    <string name="monitor_auto">Monitor: auto</string>
-    <string name="monitor_indexed">Monitor: #%1$d</string>
     <string name="ring_pc">Ring PC</string>
-    <string name="audio">Audio</string>
-    <string name="pair_action">Pair…</string>
     <string name="paired">Paired ✓</string>
-    <string name="privacy_on">Privacy: on</string>
-    <string name="privacy_off">Privacy: off</string>
     <string name="privacy_error">Privacy: %1$s</string>
-    <string name="view_only_on">View-only: on</string>
-    <string name="view_only_off">View-only: off</string>
     <string name="view_only_error">View-only: %1$s</string>
     <string name="full_quality_on">Full quality: on</string>
     <string name="full_quality_off">Full quality: off</string>
     <string name="full_quality_error">Full quality: %1$s</string>
-    <string name="preset_auto">Quality: auto</string>
-    <string name="preset_quality">Quality: max</string>
-    <string name="preset_balanced">Quality: balanced</string>
-    <string name="preset_economy">Quality: economy</string>
     <string name="quality_preset_error">Quality preset: %1$s</string>
-    <string name="mic_on">Mic: on</string>
-    <string name="mic_off">Mic: off</string>
     <string name="mic_error">Mic share: %1$s</string>
     <string name="mic_unavailable">No Opus encoder on this device (Android 9+)</string>
     <string name="mic_permission_denied">Microphone permission denied</string>
@@ -70,10 +51,39 @@
     <string name="blackout_unlock">Blackout — double-tap to unlock</string>
 
     <!-- R4 E6: foldable / tablet dual-pane -->
-    <string name="pane_auto">Pane: auto</string>
-    <string name="pane_dual">Pane: dual</string>
-    <string name="pane_single">Pane: single</string>
     <string name="trackpad_hint">Trackpad — drag to move, tap to click, two fingers to scroll</string>
+
+    <!-- UI refresh: quick-settings sheet (grouped session controls) -->
+    <string name="quick_settings_title">Session settings</string>
+    <string name="group_input">Input</string>
+    <string name="group_stream">Streaming</string>
+    <string name="group_desktop">Desktop</string>
+    <string name="row_input_mode">Input mode</string>
+    <string name="row_view_only">View-only</string>
+    <string name="row_quality">Quality</string>
+    <string name="row_window">Window</string>
+    <string name="row_monitor">Monitor</string>
+    <string name="row_pane">Pane layout</string>
+    <string name="row_clipboard">Clipboard sync</string>
+    <string name="row_history">Clipboard history</string>
+    <string name="row_audio">Audio control</string>
+    <string name="row_mic">Phone mic share</string>
+    <string name="row_privacy">Privacy grab</string>
+    <string name="row_pairing">Pairing</string>
+    <string name="value_direct_touch">Direct touch</string>
+    <string name="value_trackpad">Trackpad</string>
+    <string name="value_quality_auto">Auto</string>
+    <string name="value_quality_max">Max</string>
+    <string name="value_quality_balanced">Balanced</string>
+    <string name="value_quality_economy">Economy</string>
+    <string name="value_window_all">All windows</string>
+    <string name="value_monitor_auto">Auto</string>
+    <string name="value_monitor_indexed">#%1$d</string>
+    <string name="value_pane_auto">Auto</string>
+    <string name="value_pane_dual">Dual</string>
+    <string name="value_pane_single">Single</string>
+    <string name="value_paired">Paired</string>
+    <string name="value_unpaired">Not paired</string>
 
     <!-- Foreground-service + notification relay -->
     <string name="channel_session">Remote desktop session</string>

@@ -26,33 +26,14 @@
     <string name="exit">Salir</string>
     <string name="mode_direct_touch">Modo: tacto directo</string>
     <string name="mode_trackpad">Modo: panel táctil</string>
-    <string name="clip_on">Clip: activado</string>
-    <string name="clip_off">Clip: desactivado</string>
-    <string name="history">Historial</string>
-    <string name="window_all">Ventana: todas</string>
-    <string name="window_named">Ventana: %1$s</string>
-    <string name="monitor_auto">Monitor: automático</string>
-    <string name="monitor_indexed">Monitor: #%1$d</string>
     <string name="ring_pc">Hacer sonar PC</string>
-    <string name="audio">Audio</string>
-    <string name="pair_action">Emparejar…</string>
     <string name="paired">Emparejado ✓</string>
-    <string name="privacy_on">Privacidad: activada</string>
-    <string name="privacy_off">Privacidad: desactivada</string>
     <string name="privacy_error">Privacidad: %1$s</string>
-    <string name="view_only_on">Solo lectura: activado</string>
-    <string name="view_only_off">Solo lectura: desactivado</string>
     <string name="view_only_error">Solo lectura: %1$s</string>
     <string name="full_quality_on">Calidad máxima: activado</string>
     <string name="full_quality_off">Calidad máxima: desactivado</string>
     <string name="full_quality_error">Calidad máxima: %1$s</string>
-    <string name="preset_auto">Calidad: automática</string>
-    <string name="preset_quality">Calidad: máxima</string>
-    <string name="preset_balanced">Calidad: equilibrada</string>
-    <string name="preset_economy">Calidad: económica</string>
     <string name="quality_preset_error">Ajuste de calidad: %1$s</string>
-    <string name="mic_on">Micrófono: activado</string>
-    <string name="mic_off">Micrófono: desactivado</string>
     <string name="mic_error">Micrófono: %1$s</string>
     <string name="mic_unavailable">Este dispositivo no tiene codificador Opus (Android 9+)</string>
     <string name="mic_permission_denied">Permiso de micrófono denegado</string>
@@ -63,10 +44,39 @@
     <string name="blackout_unlock">Pantalla negra — doble toque para desbloquear</string>
 
     <!-- R4 E6: pane plegable / tableta -->
-    <string name="pane_auto">Panel: automático</string>
-    <string name="pane_dual">Panel: doble</string>
-    <string name="pane_single">Panel: simple</string>
     <string name="trackpad_hint">Panel táctil — arrastra para mover, toca para hacer clic, dos dedos para desplazar</string>
+
+    <!-- Actualización de UI: hoja de ajustes rápidos + HUD que se desvanece -->
+    <string name="quick_settings_title">Ajustes de sesión</string>
+    <string name="group_input">Entrada</string>
+    <string name="group_stream">Transmisión</string>
+    <string name="group_desktop">Escritorio</string>
+    <string name="row_input_mode">Modo de entrada</string>
+    <string name="row_view_only">Solo lectura</string>
+    <string name="row_quality">Calidad</string>
+    <string name="row_window">Ventana</string>
+    <string name="row_monitor">Monitor</string>
+    <string name="row_pane">Distribución</string>
+    <string name="row_clipboard">Sincronizar portapapeles</string>
+    <string name="row_history">Historial del portapapeles</string>
+    <string name="row_audio">Control de audio</string>
+    <string name="row_mic">Micrófono del teléfono</string>
+    <string name="row_privacy">Bloqueo de privacidad</string>
+    <string name="row_pairing">Emparejamiento</string>
+    <string name="value_direct_touch">Toque directo</string>
+    <string name="value_trackpad">Panel táctil</string>
+    <string name="value_quality_auto">Auto</string>
+    <string name="value_quality_max">Máxima</string>
+    <string name="value_quality_balanced">Equilibrada</string>
+    <string name="value_quality_economy">Económica</string>
+    <string name="value_window_all">Todas las ventanas</string>
+    <string name="value_monitor_auto">Auto</string>
+    <string name="value_monitor_indexed">#%1$d</string>
+    <string name="value_pane_auto">Auto</string>
+    <string name="value_pane_dual">Doble</string>
+    <string name="value_pane_single">Individual</string>
+    <string name="value_paired">Emparejado</string>
+    <string name="value_unpaired">Sin emparejar</string>
 
     <!-- Foreground-service + notification relay -->
     <string name="channel_session">Sesión de escritorio remoto</string>
