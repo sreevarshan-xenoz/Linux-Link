@@ -9,7 +9,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -22,6 +21,7 @@ import dev.linuxlink.android.bridge.RustCore
 import dev.linuxlink.android.ui.ConnectScreen
 import dev.linuxlink.android.ui.HomeScreen
 import dev.linuxlink.android.ui.RemoteScreen
+import dev.linuxlink.android.ui.theme.LinuxLinkTheme
 
 class MainActivity : ComponentActivity() {
     companion object {
@@ -72,10 +72,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         RustCore.start(filesDir)
         setContent {
-            // Tier-3 #17: `MaterialExpressiveTheme` exists in material3
-            // 1.4.0 but is internal — the expressive swap waits for the
-            // public API; predictive-back + locale plumbing landed instead.
-            MaterialTheme {
+            LinuxLinkTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     var sessionKey by rememberSaveable { mutableStateOf<String?>(null) }
                     // Home card list vs the add-computer form (UI refresh).

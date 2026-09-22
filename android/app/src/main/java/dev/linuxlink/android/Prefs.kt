@@ -1,0 +1,86 @@
+package dev.linuxlink.android
+
+import android.content.Context
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.ReadOnlyComposable
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.setValue
+import androidx.core.content.edit
+
+/**
+ * App-level UI preferences (theme mode, dynamic color, screen behavior,
+ * PIN reveal, haptics), persisted separately from the per-desktop records
+ * in [HostStore]. [observedVersion] is Compose snapshot state: screens that
+ * must restyle on a pref change read it, and every setter bumps it.
+ */
+@Stable
+object Prefs {
+    private const val PREFS = "linux-link-ui"
+    private const val KEY_THEME_MODE = "theme_mode"
+    private const val KEY_DYNAMIC_COLOR = "dynamic_color"
+    private const val KEY_KEEP_SCREEN_ON = "keep_screen_on"
+    private const val KEY_REVEAL_PIN = "reveal_pin"
+    private const val KEY_HAPTICS = "haptics"
+
+    const val THEME_SYSTEM = "system"
+    const val THEME_LIGHT = "light"
+    const val THEME_DARK = "dark"
+
+    private var version by mutableIntStateOf(0)
+
+    /** Read inside a @Composable to subscribe to any pref change. */
+    @Composable
+    @ReadOnlyComposable
+    fun observedVersion(): Int = version
+
+    private fun bump() {
+        version++
+    }
+
+    private fun prefs(ctx: Context) =
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    fun themeMode(ctx: Context): String =
+        prefs(ctx).getString(KEY_THEME_MODE, THEME_SYSTEM) ?: THEME_SYSTEM
+
+    fun setThemeMode(ctx: Context, mode: String) {
+        prefs(ctx).edit { putString(KEY_THEME_MODE, mode) }
+        bump()
+    }
+
+    /** Material You wallpaper colors on Android 12+; hand palette below that. */
+    fun dynamicColor(ctx: Context): Boolean =
+        prefs(ctx).getBoolean(KEY_DYNAMIC_COLOR, true)
+
+    fun setDynamicColor(ctx: Context, enabled: Boolean) {
+        prefs(ctx).edit { putBoolean(KEY_DYNAMIC_COLOR, enabled) }
+        bump()
+    }
+
+    fun keepScreenOn(ctx: Context): Boolean =
+        prefs(ctx).getBoolean(KEY_KEEP_SCREEN_ON, true)
+
+    fun setKeepScreenOn(ctx: Context, enabled: Boolean) {
+        prefs(ctx).edit { putBoolean(KEY_KEEP_SCREEN_ON, enabled) }
+        bump()
+    }
+
+    /** Show the PIN digits in the pairing sheet without tapping the eye. */
+    fun revealPin(ctx: Context): Boolean =
+        prefs(ctx).getBoolean(KEY_REVEAL_PIN, false)
+
+    fun setRevealPin(ctx: Context, enabled: Boolean) {
+        prefs(ctx).edit { putBoolean(KEY_REVEAL_PIN, enabled) }
+        bump()
+    }
+
+    fun haptics(ctx: Context): Boolean =
+        prefs(ctx).getBoolean(KEY_HAPTICS, true)
+
+    fun setHaptics(ctx: Context, enabled: Boolean) {
+        prefs(ctx).edit { putBoolean(KEY_HAPTICS, enabled) }
+        bump()
+    }
+}
