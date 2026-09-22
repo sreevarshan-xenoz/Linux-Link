@@ -5,6 +5,16 @@
 
     <!-- ConnectScreen -->
     <string name="host_address">ஹோஸ்ட் முகவரி</string>
+    <string name="home_subtitle">உங்கள் சேமித்த கணினிகள்</string>
+    <string name="no_computers">இன்னும் கணினிகள் இல்லை.</string>
+    <string name="add_computer">கணினியைச் சேர்</string>
+    <string name="show_advanced">மேம்பட்டது (போர்டுகள், wake-on-LAN)</string>
+    <string name="hide_advanced">மேம்பட்டதை மறை</string>
+    <string name="wake">எழுப்பு</string>
+    <string name="remove_host">நீக்கு</string>
+    <string name="remove_host_message">இந்த கைபேசியில் இருந்து %1$s ஐ நீக்கவா? இணைப்பு மற்றும் சேமித்த அமைப்புகளும் நீக்கப்படும்.</string>
+    <string name="auto_badge">தானியங்கி</string>
+    <string name="host_ports">ஒளிபரப்பு %1$d · கட்டுப்பாடு %2$d</string>
     <string name="streaming_port">ஸ்ட்ரீமிங் போர்ட்</string>
     <string name="control_port">கண்ட்ரோல் போர்ட் (க்ளிப் போர்டு, கோப்புகள்)</string>
     <string name="wol_mac_label">Wake-on-LAN MAC (இந்த ஹோஸ்டை ரிலே ஆகப் பயன்படுத்தி விழிக்கவும்)</string>

@@ -1,5 +1,6 @@
 package dev.linuxlink.android.ui
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -16,6 +17,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -30,9 +32,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.text.KeyboardOptions
-import android.content.Intent
-import android.provider.Settings
-import androidx.core.net.toUri
 import dev.linuxlink.android.HostStore
 import dev.linuxlink.android.R
 import dev.linuxlink.android.bridge.RustCore
@@ -41,17 +40,18 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * Landing screen: host address + streaming port, with the auto-connect
- * toggle. Pre-fills the last saved host; connecting is the caller's job
- * (see MainActivity's session state). The optional WoL MAC turns the
- * entered host into a wake *relay* (Tier-2 #12): it emits the magic
- * packet for a sleeping desktop on its LAN.
+ * Add-computer form (opened from HomeScreen's "Add computer"): address up
+ * front, ports + WoL MAC under an Advanced expander, auto-connect toggle.
+ * Connecting is the caller's job (see MainActivity's session state). The
+ * optional WoL MAC turns the entered host into a wake *relay* (Tier-2 #12):
+ * it emits the magic packet for a sleeping desktop on its LAN.
  */
 @Composable
 fun ConnectScreen(
     initial: HostStore.Host?,
     autoConnect: Boolean,
     onConnect: (address: String, port: Int, controlPort: Int, rememberHost: Boolean) -> Unit,
+    onBack: () -> Unit,
 ) {
     val context = LocalContext.current
     var address by rememberSaveable { mutableStateOf(initial?.address.orEmpty()) }
@@ -63,6 +63,7 @@ fun ConnectScreen(
     var wolMac by rememberSaveable {
         mutableStateOf(HostStore.wolMac(context, initial?.address.orEmpty()))
     }
+    var advanced by rememberSaveable { mutableStateOf(initial?.address?.isNotBlank() == true) }
     var wakeStatusRes by remember { mutableStateOf<Int?>(null) }
     var wakeStatusArg by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -78,7 +79,7 @@ fun ConnectScreen(
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text(stringResource(R.string.app_name), style = MaterialTheme.typography.headlineMedium)
+        Text(stringResource(R.string.add_computer), style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(24.dp))
         OutlinedTextField(
             value = address,
@@ -88,35 +89,69 @@ fun ConnectScreen(
             modifier = Modifier.fillMaxWidth(),
         )
         Spacer(Modifier.height(8.dp))
-        OutlinedTextField(
-            value = port,
-            onValueChange = { input ->
-                if (input.all { it.isDigit() } && input.length <= 5) port = input
-            },
-            label = { Text(stringResource(R.string.streaming_port)) },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(
-            value = controlPort,
-            onValueChange = { input ->
-                if (input.all { it.isDigit() } && input.length <= 5) controlPort = input
-            },
-            label = { Text(stringResource(R.string.control_port)) },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(
-            value = wolMac,
-            onValueChange = { wolMac = it },
-            label = { Text(stringResource(R.string.wol_mac_label)) },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
+        TextButton(onClick = { advanced = !advanced }) {
+            Text(
+                stringResource(if (advanced) R.string.hide_advanced else R.string.show_advanced),
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+        AnimatedVisibility(visible = advanced) {
+            Column {
+                OutlinedTextField(
+                    value = port,
+                    onValueChange = { input ->
+                        if (input.all { it.isDigit() } && input.length <= 5) port = input
+                    },
+                    label = { Text(stringResource(R.string.streaming_port)) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = controlPort,
+                    onValueChange = { input ->
+                        if (input.all { it.isDigit() } && input.length <= 5) controlPort = input
+                    },
+                    label = { Text(stringResource(R.string.control_port)) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = wolMac,
+                    onValueChange = { wolMac = it },
+                    label = { Text(stringResource(R.string.wol_mac_label)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    enabled = address.isNotBlank() && controlPortValue != null && macValue != null,
+                    onClick = {
+                        val target = macValue ?: return@OutlinedButton
+                        val relayPort = controlPortValue ?: return@OutlinedButton
+                        HostStore.saveWolMac(context, address.trim(), target)
+                        scope.launch {
+                            val result = withContext(Dispatchers.IO) {
+                                RustCore.wakeViaRelay(address.trim(), relayPort, target)
+                            }
+                            wakeStatusRes =
+                                if (result.isSuccess) R.string.wake_sent else R.string.wake_failed
+                            wakeStatusArg = if (result.isSuccess) {
+                                address.trim()
+                            } else {
+                                result.exceptionOrNull()?.message
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(stringResource(R.string.send_wol))
+                }
+            }
+        }
         Spacer(Modifier.height(8.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Switch(checked = rememberHost, onCheckedChange = { rememberHost = it })
@@ -142,23 +177,11 @@ fun ConnectScreen(
             Text(stringResource(R.string.connect))
         }
         Spacer(Modifier.height(8.dp))
-        OutlinedButton(
-            enabled = address.isNotBlank() && controlPortValue != null && macValue != null,
-            onClick = {
-                val target = macValue ?: return@OutlinedButton
-                val relayPort = controlPortValue ?: return@OutlinedButton
-                HostStore.saveWolMac(context, address.trim(), target)
-                scope.launch {
-                    val result = withContext(Dispatchers.IO) {
-                        RustCore.wakeViaRelay(address.trim(), relayPort, target)
-                    }
-                    wakeStatusRes = if (result.isSuccess) R.string.wake_sent else R.string.wake_failed
-                    wakeStatusArg = if (result.isSuccess) address.trim() else result.exceptionOrNull()?.message
-                }
-            },
+        TextButton(
+            onClick = onBack,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text(stringResource(R.string.send_wol))
+            Text(stringResource(R.string.cancel))
         }
         val wakeText =
             wakeStatusRes?.let { stringResource(it, wakeStatusArg.orEmpty()) }
@@ -171,29 +194,7 @@ fun ConnectScreen(
             )
         }
         Spacer(Modifier.height(16.dp))
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            OutlinedButton(
-                onClick = {
-                    runCatching {
-                        context.startActivity(
-                            Intent(
-                                Settings.ACTION_APP_LOCALE_SETTINGS,
-                                ("package:${context.packageName}").toUri(),
-                            ),
-                        )
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(stringResource(R.string.language))
-            }
-            Spacer(Modifier.height(8.dp))
-        }
-        Text(
-            stringResource(R.string.rust_core_version, RustCore.version),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        LanguageAndVersionFooter()
     }
 }
 

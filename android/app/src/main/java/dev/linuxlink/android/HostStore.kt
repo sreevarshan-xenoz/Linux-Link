@@ -1,8 +1,14 @@
 package dev.linuxlink.android
 
 import android.content.Context
+import org.json.JSONArray
+import org.json.JSONObject
 
-/** Last-connected host + auto-connect toggle, persisted for Tier 1 #5. */
+/**
+ * Saved desktops + auto-connect toggle, persisted for Tier 1 #5. The list
+ * lives as a JSON array (most-recent first); the single-host keys from the
+ * pre-card-list UI are still read once for migration.
+ */
 object HostStore {
     data class Host(
         val address: String,
@@ -18,22 +24,70 @@ object HostStore {
     private const val KEY_PORT = "port"
     private const val KEY_CONTROL_PORT = "control_port"
     private const val KEY_AUTO = "auto_connect"
+    private const val KEY_HOSTS = "hosts"
 
-    fun lastHost(ctx: Context): Host? {
+    /** Saved desktops, most recently connected first. */
+    fun hosts(ctx: Context): List<Host> {
+        val raw = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_HOSTS, null)
+        if (raw != null) {
+            val parsed = runCatching {
+                val arr = JSONArray(raw)
+                (0 until arr.length()).map { i ->
+                    val o = arr.getJSONObject(i)
+                    Host(
+                        o.getString("address"),
+                        o.optInt("port", DEFAULT_STREAMING_PORT),
+                        o.optInt("control_port", DEFAULT_CONTROL_PORT),
+                    )
+                }
+            }.getOrNull()
+            if (parsed != null) return parsed
+        }
+        // Migration: the legacy single-host keys become the one entry.
         val prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val address = prefs.getString(KEY_ADDRESS, null)?.takeIf { it.isNotBlank() } ?: return null
-        return Host(
-            address,
-            prefs.getInt(KEY_PORT, DEFAULT_STREAMING_PORT),
-            prefs.getInt(KEY_CONTROL_PORT, DEFAULT_CONTROL_PORT),
-        )
+        val legacy = prefs.getString(KEY_ADDRESS, null)?.takeIf { it.isNotBlank() }
+            ?.let {
+                Host(
+                    it,
+                    prefs.getInt(KEY_PORT, DEFAULT_STREAMING_PORT),
+                    prefs.getInt(KEY_CONTROL_PORT, DEFAULT_CONTROL_PORT),
+                )
+            }
+        return listOfNotNull(legacy)
     }
 
+    fun lastHost(ctx: Context): Host? = hosts(ctx).firstOrNull()
+
+    /** Upsert [host] and move it to the front (it is now the "last" host). */
     fun save(ctx: Context, host: Host) {
+        val rest = hosts(ctx).filterNot { it.address == host.address }
+        writeHosts(ctx, listOf(host) + rest)
+    }
+
+    /** Forget a desktop and every per-address record hanging off it. */
+    fun remove(ctx: Context, address: String) {
+        writeHosts(ctx, hosts(ctx).filterNot { it.address == address })
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putString(KEY_ADDRESS, host.address)
-            .putInt(KEY_PORT, host.port)
-            .putInt(KEY_CONTROL_PORT, host.controlPort)
+            .remove("$KEY_WOL_MAC_PREFIX$address")
+            .remove("$KEY_WAN_IDENTITY_PREFIX$address")
+            .remove("$KEY_MONITOR_PREFIX$address")
+            .remove("$KEY_PAIRED_PREFIX$address")
+            .apply()
+    }
+
+    private fun writeHosts(ctx: Context, list: List<Host>) {
+        val arr = JSONArray()
+        for (h in list) {
+            arr.put(
+                JSONObject()
+                    .put("address", h.address)
+                    .put("port", h.port)
+                    .put("control_port", h.controlPort),
+            )
+        }
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString(KEY_HOSTS, arr.toString())
             .apply()
     }
 

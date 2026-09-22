@@ -20,6 +20,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import dev.linuxlink.android.bridge.RustCore
 import dev.linuxlink.android.ui.ConnectScreen
+import dev.linuxlink.android.ui.HomeScreen
 import dev.linuxlink.android.ui.RemoteScreen
 
 class MainActivity : ComponentActivity() {
@@ -77,6 +78,8 @@ class MainActivity : ComponentActivity() {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     var sessionKey by rememberSaveable { mutableStateOf<String?>(null) }
+                    // Home card list vs the add-computer form (UI refresh).
+                    var showForm by rememberSaveable { mutableStateOf(false) }
 
                     LaunchedEffect(Unit) {
                         if (sessionKey == null &&
@@ -95,17 +98,34 @@ class MainActivity : ComponentActivity() {
                     }
 
                     when (val session = parseSession(sessionKey)) {
-                        null -> ConnectScreen(
-                            initial = HostStore.lastHost(this@MainActivity),
-                            autoConnect = HostStore.autoConnect(this@MainActivity),
-                        ) { address, port, controlPort, rememberHost ->
-                            HostStore.save(
-                                this@MainActivity,
-                                HostStore.Host(address, port, controlPort),
-                            )
-                            HostStore.setAutoConnect(this@MainActivity, rememberHost)
-                            maybeRequestNotificationPermission()
-                            sessionKey = "$address|$port|$controlPort"
+                        null -> {
+                            if (showForm) {
+                                ConnectScreen(
+                                    initial = null,
+                                    autoConnect = HostStore.autoConnect(this@MainActivity),
+                                    onBack = { showForm = false },
+                                    onConnect = { address, port, controlPort, rememberHost ->
+                                        HostStore.save(
+                                            this@MainActivity,
+                                            HostStore.Host(address, port, controlPort),
+                                        )
+                                        HostStore.setAutoConnect(this@MainActivity, rememberHost)
+                                        maybeRequestNotificationPermission()
+                                        showForm = false
+                                        sessionKey = "$address|$port|$controlPort"
+                                    },
+                                )
+                            } else {
+                                HomeScreen(
+                                    onConnect = { host ->
+                                        HostStore.save(this@MainActivity, host)
+                                        maybeRequestNotificationPermission()
+                                        sessionKey =
+                                            "${host.address}|${host.port}|${host.controlPort}"
+                                    },
+                                    onAdd = { showForm = true },
+                                )
+                            }
                         }
 
                         else -> RemoteScreen(

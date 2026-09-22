@@ -12,6 +12,16 @@
 
     <!-- ConnectScreen -->
     <string name="host_address">Host address</string>
+    <string name="home_subtitle">Your saved computers</string>
+    <string name="no_computers">No computers yet.</string>
+    <string name="add_computer">Add computer</string>
+    <string name="show_advanced">Advanced (ports, wake-on-LAN)</string>
+    <string name="hide_advanced">Hide advanced</string>
+    <string name="wake">Wake</string>
+    <string name="remove_host">Remove</string>
+    <string name="remove_host_message">Remove %1$s from this phone? Pairing and cached settings go with it.</string>
+    <string name="auto_badge">Auto</string>
+    <string name="host_ports">stream %1$d · control %2$d</string>
     <string name="streaming_port">Streaming port</string>
     <string name="control_port">Control port (clipboard, files)</string>
     <string name="wol_mac_label">Wake-on-LAN MAC (wake via this host as relay)</string>

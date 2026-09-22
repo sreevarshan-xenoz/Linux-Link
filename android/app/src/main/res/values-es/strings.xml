@@ -5,6 +5,16 @@
 
     <!-- ConnectScreen -->
     <string name="host_address">Dirección del host</string>
+    <string name="home_subtitle">Tus equipos guardados</string>
+    <string name="no_computers">Aún no hay equipos.</string>
+    <string name="add_computer">Añadir equipo</string>
+    <string name="show_advanced">Avanzado (puertos, wake-on-LAN)</string>
+    <string name="hide_advanced">Ocultar avanzado</string>
+    <string name="wake">Encender</string>
+    <string name="remove_host">Quitar</string>
+    <string name="remove_host_message">¿Quitar %1$s de este teléfono? Se van el emparejamiento y los ajustes guardados.</string>
+    <string name="auto_badge">Auto</string>
+    <string name="host_ports">transmisión %1$d · control %2$d</string>
     <string name="streaming_port">Puerto de transmisión</string>
     <string name="control_port">Puerto de control (portapapeles, archivos)</string>
     <string name="wol_mac_label">MAC de Wake-on-LAN (despertar usando este host como relé)</string>

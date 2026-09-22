@@ -330,6 +330,20 @@ Verified on OPPO CPH2359 over the tailnet, 2026-09-22:
 - [x] Exit pill + WAN badge untouched at the top; PiP still hides all chrome.
 - [x] es/ta strings shipped with the new keys (31 each, locales in sync).
 
+## 20. Saved-computers home screen (multi-host store + add-computer form)
+
+Verified on OPPO CPH2359 over the tailnet, 2026-09-22:
+
+- [x] Legacy single-host prefs migrate into a card list — "Your saved computers" shows the
+      saved desktop with Auto badge, Paired ✓ label, and "stream 4716 · control 1716" subtitle.
+- [x] Tapping the card connects straight into a live session (pairing reused, no re-prompt); Exit returns to home.
+- [x] "Add computer" opens the form: address field, collapsed "Advanced (ports, wake-on-LAN)" expander
+      (auto-expanded when editing a known host), auto-connect switch, disabled Connect until address is valid, Cancel back to home.
+- [x] Advanced expander reveals streaming/control port fields (pre-filled defaults) + WoL MAC field with a Send button gated on a valid MAC.
+- [x] Remove shows a confirm dialog naming the address and warning that pairing + cached settings go with it; Cancel dismisses without deleting.
+- [ ] Wake row + wake status appear only for hosts with a saved WoL MAC (not exercised — none saved).
+- [ ] Multi-host scenarios (second card ordering, remove-then-readd) and es/ta strings for the new keys.
+
 ## Recording results
 
 Update `AGENTS.md` Current Status (mark verified items / list failures) and
