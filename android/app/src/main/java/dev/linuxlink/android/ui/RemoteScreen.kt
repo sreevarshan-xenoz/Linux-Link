@@ -20,12 +20,19 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -60,6 +67,7 @@ import dev.linuxlink.android.stream.ShortcutBar
 import dev.linuxlink.android.stream.StatsHud
 import dev.linuxlink.android.stream.StreamStatus
 import dev.linuxlink.android.stream.StreamTransportKind
+import dev.linuxlink.android.ui.theme.Space
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -82,6 +90,9 @@ fun RemoteScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    // UI refresh: session messages ride one in-app snackbar instead of the
+    // old toast spam (they inherit the theme and stay clear of the video).
+    val snackbar = remember { SnackbarHostState() }
     var mode by remember { mutableStateOf(InputMode.DirectTouch) }
     // R4 E6: foldable / tablet dual-pane. Auto-follows the hinge posture (or a
     // large window); the "Pane" button cycles Auto → Dual → Single → Auto.
@@ -140,6 +151,20 @@ fun RemoteScreen(
     var streamStatus by remember {
         mutableStateOf<StreamStatus>(StreamStatus.Connecting)
     }
+    // UI refresh: "Connecting" escalates to a reassurance line after a few
+    // seconds, and the raw Rust failure behind a Down goes to Logcat only —
+    // the user sees the humanized mapping on the status card.
+    var stillTrying by remember { mutableStateOf(false) }
+    LaunchedEffect(streamStatus) {
+        stillTrying = false
+        (streamStatus as? StreamStatus.Down)?.let {
+            android.util.Log.w("RemoteScreen", "stream down: ${it.reason}")
+        }
+        if (streamStatus is StreamStatus.Connecting) {
+            delay(6_000)
+            stillTrying = true
+        }
+    }
     // R4 A1: live link path of the video session ("lan" | "wan_direct" |
     // "wan_relayed" | "wan" | "none"), polled from the bridge while up.
     var linkState by remember { mutableStateOf("none") }
@@ -186,9 +211,7 @@ fun RemoteScreen(
         viewOnlyError?.let { stringResource(R.string.view_only_error, it) }
     LaunchedEffect(viewOnlyErrorMessage) {
         if (viewOnlyErrorMessage != null) {
-            android.widget.Toast
-                .makeText(context, viewOnlyErrorMessage, android.widget.Toast.LENGTH_SHORT)
-                .show()
+            snackbar.showSnackbar(viewOnlyErrorMessage)
             viewOnlyError = null
         }
     }
@@ -207,9 +230,7 @@ fun RemoteScreen(
         fullQualityError?.let { stringResource(R.string.full_quality_error, it) }
     LaunchedEffect(fullQualityErrorMessage) {
         if (fullQualityErrorMessage != null) {
-            android.widget.Toast
-                .makeText(context, fullQualityErrorMessage, android.widget.Toast.LENGTH_SHORT)
-                .show()
+            snackbar.showSnackbar(fullQualityErrorMessage)
             fullQualityError = null
         }
     }
@@ -228,9 +249,7 @@ fun RemoteScreen(
         qualityPresetError?.let { stringResource(R.string.quality_preset_error, it) }
     LaunchedEffect(qualityPresetErrorMessage) {
         if (qualityPresetErrorMessage != null) {
-            android.widget.Toast
-                .makeText(context, qualityPresetErrorMessage, android.widget.Toast.LENGTH_SHORT)
-                .show()
+            snackbar.showSnackbar(qualityPresetErrorMessage)
             qualityPresetError = null
         }
     }
@@ -245,16 +264,14 @@ fun RemoteScreen(
     // 10-minute TTL, so an enabled session must keep refreshing it and must
     // release it on exit; a refresh failure means the server auto-released.
     var privacyGrab by remember { mutableStateOf(false) }
-    // Toast text is resolved during composition (configuration-aware) and
+    // Snackbar text is resolved during composition (configuration-aware) and
     // fired by this one-shot effect, not from the event callback.
     var privacyError by remember { mutableStateOf<String?>(null) }
     val privacyErrorMessage =
         privacyError?.let { stringResource(R.string.privacy_error, it) }
     LaunchedEffect(privacyErrorMessage) {
         if (privacyErrorMessage != null) {
-            android.widget.Toast
-                .makeText(context, privacyErrorMessage, android.widget.Toast.LENGTH_SHORT)
-                .show()
+            snackbar.showSnackbar(privacyErrorMessage)
             privacyError = null
         }
     }
@@ -291,9 +308,7 @@ fun RemoteScreen(
     val codecSwitchMessage = codecNotice?.let { stringResource(R.string.codec_switched, it) }
     LaunchedEffect(codecSwitchMessage) {
         if (codecSwitchMessage != null) {
-            android.widget.Toast
-                .makeText(context, codecSwitchMessage, android.widget.Toast.LENGTH_SHORT)
-                .show()
+            snackbar.showSnackbar(codecSwitchMessage)
             codecNotice = null
         }
     }
@@ -315,9 +330,7 @@ fun RemoteScreen(
         }
     LaunchedEffect(micErrorMessage) {
         if (micErrorMessage != null) {
-            android.widget.Toast
-                .makeText(context, micErrorMessage, android.widget.Toast.LENGTH_SHORT)
-                .show()
+            snackbar.showSnackbar(micErrorMessage)
             micError = null
             micErrorRes = null
         }
@@ -599,9 +612,19 @@ fun RemoteScreen(
 
     val metrics = remember { context.resources.displayMetrics }
 
+    // UI refresh: transparent Scaffold purely for the snackbar host.
+    // contentWindowInsets = 0 so the video Box keeps the full-bleed size —
+    // Scaffold's default padding would resize the SurfaceView mid-session.
+    Scaffold(
+        modifier = Modifier.fillMaxSize(),
+        containerColor = Color.Transparent,
+        contentWindowInsets = WindowInsets(0),
+        snackbarHost = { SnackbarHost(snackbar) },
+    ) { padding ->
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
+            .padding(padding)
             .background(androidx.compose.ui.graphics.Color.Black),
     ) {
         // A hinge (FoldingFeature) or a large window splits the session into a
@@ -700,31 +723,67 @@ fun RemoteScreen(
                 }
             }
             if (status !is StreamStatus.Up) {
-                Column(
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .padding(horizontal = 32.dp, vertical = 64.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
+                // UI refresh: the small top-center chip became a centered
+                // card — spinner + staged copy while connecting, a
+                // humanized reason with Retry / Pair-again / Exit on
+                // failure (raw reason goes to Logcat, never to the user).
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center,
                 ) {
-                    val label = when (status) {
-                        is StreamStatus.Connecting -> stringResource(R.string.connecting)
-                        is StreamStatus.Down -> status.reason
-                        else -> ""
-                    }
-                    Text(
-                        label,
-                        color = Color.White,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier
-                            .background(
-                                androidx.compose.ui.graphics.Color(0xCC000000),
-                                androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
-                            )
-                            .padding(10.dp),
-                    )
-                    if (status is StreamStatus.Down) {
-                        TextButton(onClick = ::retryStream) {
-                            Text(stringResource(R.string.retry), color = Color.White)
+                    Surface(
+                        shape = Space.sheet,
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f),
+                        contentColor = MaterialTheme.colorScheme.onSurface,
+                        tonalElevation = 6.dp,
+                        modifier = Modifier.padding(horizontal = 40.dp),
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                            modifier = Modifier.padding(24.dp),
+                        ) {
+                            when (val s = status) {
+                                is StreamStatus.Connecting -> {
+                                    CircularProgressIndicator()
+                                    Text(
+                                        stringResource(R.string.connecting),
+                                        style = MaterialTheme.typography.titleMedium,
+                                    )
+                                    if (stillTrying) {
+                                        Text(
+                                            stringResource(R.string.connecting_still),
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                }
+
+                                is StreamStatus.Down -> {
+                                    Text(
+                                        stringResource(humanizeError(s.reason)),
+                                        style = MaterialTheme.typography.titleMedium,
+                                    )
+                                    Button(onClick = ::retryStream) {
+                                        Text(stringResource(R.string.retry))
+                                    }
+                                    if (errorSuggestsRepair(s.reason)) {
+                                        TextButton(
+                                            onClick = {
+                                                pairingMessage = null
+                                                showPairing = true
+                                            },
+                                        ) {
+                                            Text(stringResource(R.string.repair_pairing))
+                                        }
+                                    }
+                                    TextButton(onClick = onExit) {
+                                        Text(stringResource(R.string.exit))
+                                    }
+                                }
+
+                                else -> Unit
+                            }
                         }
                     }
                 }
@@ -835,6 +894,7 @@ fun RemoteScreen(
                 )
             }
         }
+    }
     }
 
     if (showHistory) {

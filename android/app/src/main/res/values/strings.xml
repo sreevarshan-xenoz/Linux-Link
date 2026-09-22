@@ -157,4 +157,13 @@
     <string name="sink_default">default</string>
     <string name="audio_rejected">Desktop rejected the request</string>
     <string name="audio_failed">Audio control failed</string>
+    <string name="err_host_unreachable">Nothing answered on that address. Is Linux Link running on the desktop?</string>
+    <string name="err_timeout">The desktop took too long to answer. Make sure it is awake and reachable.</string>
+    <string name="err_lan_only">Not reachable over LAN, and this desktop has no saved internet (WAN) identity yet. Connect once from the same network first.</string>
+    <string name="err_trust_mismatch">Security credentials no longer match this desktop. Pair again to continue.</string>
+    <string name="err_pairing_declined">The desktop declined pairing — the PIN was wrong or expired.</string>
+    <string name="err_link_dropped">The video link dropped. The desktop may have slept or left the network.</string>
+    <string name="err_generic">Something went wrong reaching the desktop.</string>
+    <string name="connecting_still">Still trying… check that the desktop is awake and running Linux Link.</string>
+    <string name="repair_pairing">Pair again</string>
 </resources>

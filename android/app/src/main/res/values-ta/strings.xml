@@ -150,4 +150,13 @@
     <string name="sink_default">இயல்பு</string>
     <string name="audio_rejected">டெஸ்க்டாப் கோரிக்கையை மறுத்தது</string>
     <string name="audio_failed">ஒலிக் கட்டுப்பாடு தோல்வி</string>
+    <string name="err_host_unreachable">அந்த முகவரியில் எதுவும் பதிலளிக்கவில்லை. டெஸ்க்டாப்பில் Linux Link இயங்குகிறதா?</string>
+    <string name="err_timeout">டெஸ்க்டாப் பதிலளிக்க அதிக நேரம் எடுத்தது. அது விழிப்பிலும் அணுகக்கூடிய நிலையிலும் உள்ளதா பார்க்கவும்.</string>
+    <string name="err_lan_only">LAN மூலம் அணுக முடியவில்லை; இந்த டெஸ்க்டாப்பில் சேமித்த இணைய (WAN) அடையாளம் இல்லை. முதலில் ஒரே வலையத்தில் இருந்து இணையுங்கள்.</string>
+    <string name="err_trust_mismatch">பாதுகாப்பு நற்சான்றங்கள் இந்த டெஸ்க்டாப்புடன் பொருந்தவில்லை. தொடர மீண்டும் இணையுங்கள்.</string>
+    <string name="err_pairing_declined">டெஸ்க்டாப் இணைவை மறுத்தது — PIN தவறு அல்லது காலாவதியானது.</string>
+    <string name="err_link_dropped">வீடியோ இணைப்பு அறுந்தது. டெஸ்க்டாப் உறங்கியிருக்கலாம் அல்லது வலையத்தை விட்டு வெளியேறியிருக்கலாம்.</string>
+    <string name="err_generic">டெஸ்க்டாப்பை அணுகும்போது ஏதோ தவறு நடந்தது.</string>
+    <string name="connecting_still">முயற்சி தொடர்கிறது… டெஸ்க்டாப் விழிப்புடன் Linux Link-உடன் உள்ளதா பார்க்கவும்.</string>
+    <string name="repair_pairing">மீண்டும் இணையுங்கள்</string>
 </resources>
