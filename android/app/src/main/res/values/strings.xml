@@ -60,8 +60,8 @@
     <string name="connecting">Connecting…</string>
     <string name="retry">Retry</string>
     <string name="exit">Exit</string>
-    <string name="mode_direct_touch">Mode: direct touch</string>
-    <string name="mode_trackpad">Mode: trackpad</string>
+    <string name="mode_direct_touch">Direct touch</string>
+    <string name="mode_trackpad">Trackpad</string>
     <string name="ring_pc">Ring PC</string>
     <string name="paired">Paired ✓</string>
     <string name="privacy_error">Privacy: %1$s</string>

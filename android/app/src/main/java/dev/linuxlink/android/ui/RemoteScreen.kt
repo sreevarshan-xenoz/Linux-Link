@@ -13,7 +13,9 @@ import android.os.Looper
 import android.os.SystemClock
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -32,10 +34,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -60,7 +62,9 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -842,20 +846,30 @@ fun RemoteScreen(
                         )
                     }
 
-                    IconButton(
+                    // Exit rides a scrim of its own: a bare white glyph
+                    // disappears over a bright desktop and reads as part of
+                    // the remote image rather than as the one control that
+                    // must be findable. The dark fill is deliberate here —
+                    // unlike the HUD readouts, this plate has to survive being
+                    // drawn on top of anything.
+                    Surface(
                         onClick = {
                             haptics.longPress()
                             onExit()
                         },
+                        shape = CircleShape,
+                        color = Color.Black.copy(alpha = 0.55f),
+                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)),
                         modifier = Modifier
                             .align(Alignment.TopEnd)
-                            .padding(4.dp),
+                            .padding(8.dp),
                     ) {
                         LlIcon(
                             LlIcons.Close,
                             stringResource(R.string.exit),
                             tint = Color.White,
                             size = 22.dp,
+                            modifier = Modifier.padding(9.dp),
                         )
                     }
                 }
@@ -883,14 +897,31 @@ fun RemoteScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        TextButton(onClick = { haptics.toggle(); toggleMode() }) {
-                            val label =
-                                if (mode == InputMode.DirectTouch) {
-                                    stringResource(R.string.mode_direct_touch)
-                                } else {
-                                    stringResource(R.string.mode_trackpad)
-                                }
-                            Text(label, color = Color.White)
+                        // A scrimmed chip with the mode's own glyph, matching
+                        // the shortcut pill and the HUD: a bare text label
+                        // over video reads as a caption, not as the toggle it
+                        // is.
+                        val modeLabel = if (mode == InputMode.DirectTouch) {
+                            stringResource(R.string.mode_direct_touch)
+                        } else {
+                            stringResource(R.string.mode_trackpad)
+                        }
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(18.dp))
+                                .background(Color.White.copy(alpha = 0.16f))
+                                .clickable { haptics.toggle(); toggleMode() }
+                                .padding(horizontal = 12.dp, vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            LlIcon(
+                                if (mode == InputMode.DirectTouch) LlIcons.Touch else LlIcons.Mouse,
+                                null,
+                                tint = Color.White,
+                                size = 16.dp,
+                            )
+                            Text(modeLabel, color = Color.White, fontSize = 13.sp)
                         }
                         FloatingActionButton(
                             onClick = { haptics.tap(); showQuick = true },
