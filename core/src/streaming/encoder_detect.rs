@@ -97,6 +97,7 @@ pub fn probe_encoders() -> AvailableEncoders {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
 
+    let mut nvenc_listed = false;
     for line in stdout.lines() {
         let trimmed = line.trim();
         // VAAPI encoders
@@ -106,8 +107,20 @@ pub fn probe_encoders() -> AvailableEncoders {
         }
         // NVENC encoders
         if trimmed.contains("h264_nvenc") || trimmed.contains("hevc_nvenc") {
-            available.nvenc = true;
+            nvenc_listed = true;
             debug!("Detected NVENC encoder: {trimmed}");
+        }
+    }
+
+    if nvenc_listed {
+        // FFmpeg was *built* with NVENC, but the driver may predate this
+        // FFmpeg's NVENC API level (e.g. 580.x vs FFmpeg 9's API-13), in which
+        // case every open fails at runtime. One 1-frame encode settles it.
+        if nvenc_runtime_ok() {
+            available.nvenc = true;
+        } else {
+            available.nvenc = false;
+            info!("NVENC compiled into FFmpeg but driver rejects it; not selecting NVENC (Auto)");
         }
     }
 
@@ -121,6 +134,34 @@ pub fn probe_encoders() -> AvailableEncoders {
     }
 
     available
+}
+
+/// Run a throwaway 1-frame `h264_nvenc` encode to prove the NVIDIA driver
+/// actually supports this FFmpeg build's NVENC API. Any failure mode (old
+/// driver, no GPU, headless refusal) exits non-zero.
+fn nvenc_runtime_ok() -> bool {
+    match Command::new("ffmpeg")
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=black:s=256x256:r=10",
+            "-c:v",
+            "h264_nvenc",
+            "-frames:v",
+            "1",
+            "-f",
+            "null",
+            "-",
+        ])
+        .output()
+    {
+        Ok(output) => output.status.success(),
+        Err(_) => false,
+    }
 }
 
 /// Resolve the `HardwareEncoder` selection to the actual encoder to use,

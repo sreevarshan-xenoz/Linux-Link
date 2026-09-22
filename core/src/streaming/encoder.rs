@@ -87,10 +87,13 @@ impl VideoEncoder {
         // stdio pipes, device-node auto-detect). On failure fall to the
         // verified sidecar, then the software rung — the C2 ladder.
         if matches!(resolved, HardwareEncoder::Vaapi) {
-            match VaapiEncoder::new(hw_config.clone()) {
-                Ok(encoder) => return Ok(VideoEncoder::VaapiInProcess(encoder)),
+            match open_vaapi_verified(hw_config) {
+                Ok(encoder) => return Ok(encoder),
                 Err(e) => {
-                    warn!("In-process VAAPI unavailable ({e:#}); trying sidecar (C2/C4)");
+                    warn!("VAAPI ladder exhausted ({e:#}); falling back to software (C2)");
+                    let mut soft = config.clone();
+                    degrade_to_software(&mut soft);
+                    return open_software(soft);
                 }
             }
         }
@@ -98,7 +101,17 @@ impl VideoEncoder {
         match open_sidecar_verified(hw_config) {
             Ok(encoder) => Ok(encoder),
             Err(e) => {
-                warn!("Hardware encoder unavailable ({e:#}); falling back to software (C2)");
+                warn!("Hardware encoder unavailable ({e:#}) (C2)");
+                // A failed NVENC rung still has hardware left in the tank on
+                // hybrid boxes: try the VAAPI ladder before the software rung.
+                if !matches!(resolved, HardwareEncoder::Vaapi) {
+                    let mut va_config = config.clone();
+                    va_config.hardware_encoder = HardwareEncoder::Vaapi;
+                    if let Ok(encoder) = open_vaapi_verified(va_config) {
+                        info!("Recovered on the VAAPI rung after {resolved:?} failed (C2/C4)");
+                        return Ok(encoder);
+                    }
+                }
                 let mut soft = config.clone();
                 degrade_to_software(&mut soft);
                 open_software(soft)
@@ -199,6 +212,17 @@ fn open_sidecar_verified(config: StreamingConfig) -> anyhow::Result<VideoEncoder
     let mut encoder = SidecarEncoder::new(config)?;
     encoder.verify_startup(DEFAULT_STARTUP_VERIFY)?;
     Ok(VideoEncoder::Sidecar(encoder))
+}
+
+/// The VAAPI rung: in-process first (C4), verified sidecar as fallback.
+fn open_vaapi_verified(config: StreamingConfig) -> anyhow::Result<VideoEncoder> {
+    match VaapiEncoder::new(config.clone()) {
+        Ok(encoder) => Ok(VideoEncoder::VaapiInProcess(encoder)),
+        Err(e) => {
+            warn!("In-process VAAPI unavailable ({e:#}); trying sidecar (C2/C4)");
+            open_sidecar_verified(config)
+        }
+    }
 }
 
 /// How long to keep probing a sidecar child before trusting it (C2).
