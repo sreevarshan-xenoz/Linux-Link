@@ -137,7 +137,14 @@ impl Plugin for PairPlugin {
     }
 
     fn incoming_capabilities(&self) -> &'static [&'static str] {
-        &["kdeconnect.pair", "kdeconnect.linuxlink.pair"]
+        // "kdeconnect.identity" must be listed here or the router never
+        // dispatches it to handle_packet, phone_ids stays empty, and PIN
+        // pairing cannot learn the phone's deviceId to persist.
+        &[
+            "kdeconnect.pair",
+            "kdeconnect.linuxlink.pair",
+            "kdeconnect.identity",
+        ]
     }
 
     fn outgoing_capabilities(&self) -> &'static [&'static str] {
