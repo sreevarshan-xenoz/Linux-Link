@@ -183,6 +183,10 @@ impl CertManager {
 
         let transport = configured_transport();
 
+        // Feature unification pulls both aws-lc-rs (iroh/reqwest) and ring into
+        // server binaries, so rustls cannot auto-pick a process-level provider.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+
         let mut crypto = rustls::ServerConfig::builder()
             .with_no_client_auth()
             .with_single_cert(vec![cert], key)
@@ -205,6 +209,8 @@ impl CertManager {
     /// The client verifies the server's certificate against the stored known_peers
     /// map and auto-accepts unknown peers on first use.
     pub fn client_config(&self, alpns: Vec<Vec<u8>>) -> Result<quinn::ClientConfig> {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+
         let mut crypto = rustls::ClientConfig::builder()
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(TofuVerifier {
