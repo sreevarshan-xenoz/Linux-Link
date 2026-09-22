@@ -63,6 +63,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.animation.AnimatedVisibility
@@ -744,9 +745,16 @@ fun RemoteScreen(
                                 }
 
                                 is StreamStatus.Down -> {
+                                    LlIcon(
+                                        LlIcons.Warning,
+                                        null,
+                                        tint = MaterialTheme.colorScheme.error,
+                                        size = 34.dp,
+                                    )
                                     Text(
                                         stringResource(humanizeError(s.reason)),
                                         style = MaterialTheme.typography.titleMedium,
+                                        textAlign = TextAlign.Center,
                                     )
                                     Button(onClick = ::retryStream) {
                                         Text(stringResource(R.string.retry))

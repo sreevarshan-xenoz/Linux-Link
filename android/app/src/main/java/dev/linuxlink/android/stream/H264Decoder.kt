@@ -3,6 +3,8 @@ package dev.linuxlink.android.stream
 import android.media.MediaCodec
 import android.media.MediaFormat
 import android.os.Build
+import android.os.SystemClock
+import android.util.Log
 import android.view.Surface
 import dev.linuxlink.android.bridge.RustCore
 import java.nio.ByteBuffer
@@ -46,6 +48,13 @@ class H264Decoder(
 ) {
     val running = AtomicBoolean(false)
 
+    /**
+     * Fired from the decode thread when the bridge goes silent for
+     * [STALL_MS] — see the decode loop in [start]. Set after construction so
+     * it can close over the generation guard in [RemoteDesktopView].
+     */
+    var onStalled: (() -> Unit)? = null
+
     private var codec: MediaCodec? = null
     private var configW = width
     private var configH = height
@@ -88,9 +97,26 @@ class H264Decoder(
         var mediaCodec: MediaCodec? = null
         try {
             val bufferInfo = MediaCodec.BufferInfo()
+            // Liveness baseline. The bridge only clears its "active" flag on an
+            // explicit stop, so a desktop-side teardown (server kick, Wi-Fi
+            // loss, process exit) leaves the polls going quiet forever: the UI
+            // kept showing a frozen frame with no error and no way out. The
+            // encoder runs keyint=60, so a live link delivers a packet every
+            // couple of seconds — a long gap means the link is gone, not that
+            // the desktop is still.
+            var lastFrameAt = SystemClock.elapsedRealtime()
             while (running.get()) {
                 val frames = RustCore.receiveFrames(timeoutMs = POLL_TIMEOUT_MS)
-                if (frames.isEmpty()) continue
+                if (frames.isEmpty()) {
+                    val silentFor = SystemClock.elapsedRealtime() - lastFrameAt
+                    if (silentFor > STALL_MS) {
+                        Log.w(TAG, "video feed silent for $silentFor ms — link dropped")
+                        onStalled?.invoke()
+                        break
+                    }
+                    continue
+                }
+                lastFrameAt = SystemClock.elapsedRealtime()
                 for (frame in frames) {
                     if (!running.get()) break
                     if (mediaCodec == null) {
@@ -226,11 +252,15 @@ class H264Decoder(
     }
 
     companion object {
+        private const val TAG = "H264Decoder"
         private const val MIME_AVC = "video/avc"
         private const val MIME_HEVC = "video/hevc"
         private const val MAX_INPUT_SIZE = 4 * 1024 * 1024
         private const val POLL_TIMEOUT_MS = 50
         private const val INPUT_TIMEOUT_US = 10_000L
+
+        /** Frame gap that means the link is dead rather than the desktop idle. */
+        private const val STALL_MS = 10_000L
 
         /**
          * R4 C1: decide the codec from the first NAL header of an Annex-B

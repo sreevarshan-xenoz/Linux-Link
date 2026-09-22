@@ -57,6 +57,7 @@ object LlIcons {
     val History = LlGlyph(R.drawable.ic_ll_history)
     val Pip = LlGlyph(R.drawable.ic_ll_pip)
     val Info = LlGlyph(R.drawable.ic_ll_info)
+    val Warning = LlGlyph(R.drawable.ic_ll_warning)
 }
 
 /**

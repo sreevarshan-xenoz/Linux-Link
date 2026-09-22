@@ -499,6 +499,11 @@ private class DecoderHost {
         // Stale reports from a stopped generation must not clobber a newer
         // attempt's status.
         val report: (StreamStatus) -> Unit = { if (decoder === active) onStatus(it) }
+        // The decode thread noticed the link went silent; drop the UI onto the
+        // error card (Retry / Exit) instead of leaving it on a frozen frame.
+        active.onStalled = {
+            report(StreamStatus.Down("video feed stalled — connection closed"))
+        }
         report(StreamStatus.Connecting)
         thread = Thread({
             // The Rust bridge blocks, so connect + drain share this thread.
