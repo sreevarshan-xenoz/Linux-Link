@@ -1,0 +1,25 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <!-- ColorOS zooms an adaptive foreground to fill its plate, so a glyph
+         drawn to the 108dp safe zone gets clipped by the mask. The group puts
+         the mark in the central ~40% of the canvas, which survives that zoom
+         on both a stock launcher (no zoom) and ColorOS (about 1.5x).
+         Filled paths only: ColorOS fails to rasterize stroke-only adaptive
+         foregrounds and substitutes a placeholder, so each frame is an
+         even-odd ring rather than a stroke. -->
+    <group android:scaleX="0.6" android:scaleY="0.6"
+        android:pivotX="54" android:pivotY="54">
+        <!-- Remote desktop, in the brand accent. -->
+        <path android:fillColor="#FFF6B23C" android:pathData="M40,26h42v20h-42z"/>
+        <!-- Monitor bezel + stand. -->
+        <path android:fillColor="#FFFFFFFF" android:fillType="evenOdd"
+            android:pathData="M34,20h54v32h-54z M40,26v20h42v-20z"/>
+        <path android:fillColor="#FFFFFFFF" android:pathData="M57,52h10v10h-10z M48,62h28v5h-28z"/>
+        <!-- Phone in front of it, bottom-left: the mark reads phone -> computer. -->
+        <path android:fillColor="#FFF6B23C" android:pathData="M24,58h16v26h-16z"/>
+        <path android:fillColor="#FFFFFFFF" android:fillType="evenOdd"
+            android:pathData="M20,54h24v34h-24z M24,58v26h16v-26z"/>
+        <path android:fillColor="#FFFFFFFF" android:pathData="M28,80h8v3h-8z"/>
+    </group>
+</vector>
