@@ -146,11 +146,11 @@ not part of C4.
 
 ## 3. Input paths (R2#4, Tier 1 #2)
 
-- [ ] Direct-touch: tap = left click at the touched point (check `evtest` on desktop for BTN_LEFT, and MT finger down/up on the "Linux Link Virtual Touch" device — axis resolution may need tuning).
+- [x] Direct-touch: tap = left click at the touched point. **Verified 2026-09-22 on OPPO CPH2359 → Hyprland:** taps map pixel-exact through the letterbox (phone (540,1230) → cursor (768,432) = desktop center) and click (BTN_LEFT) lands. Under Wayland the injector now uses uinput (enigo/XTEST is inert on Hyprland): motion rides the "Linux Link Virtual Abs Pointer" device (ABS_X/ABS_Y + BTN_LEFT, created eagerly at startup so the first tap is not lost); keyboard/relative ride "Linux Link Virtual Input".
 - [ ] Drag = finger-down motion; lift = left release.
 - [ ] Trackpad mode: pointer moves without jumping to touch point; tap = click; two-finger = scroll.
 - [ ] Mode toggle switches behavior live, no session restart.
-- [ ] Keyboard: type letters/digits/modifiers via on-screen shortcuts + remote input — check against `evtest`: Super, Alt+Tab, Ctrl+Alt+Del, PrtSc, Esc, Super+1..9 work (ShortcutBar).
+- [ ] Keyboard: type letters/digits/modifiers via on-screen shortcuts + remote input — check against `evtest`: Super, Alt+Tab, Ctrl+Alt+Del, PrtSc, Esc, Super+1..9 work (ShortcutBar). (Esc tap verified 2026-09-22; this box binds workspace cycling to Super+Tab, so the bar's Alt+Tab is config-dependent, not a pipeline failure.)
 - [ ] holdKey/repeat (e.g. hold an arrow key) behaves.
 - [ ] R4 D1 view-only: tap "View-only: off" on the session bar → label flips
       ("View-only: on", amber), desktop log shows "View-only mode changed" (enabled=true), and
