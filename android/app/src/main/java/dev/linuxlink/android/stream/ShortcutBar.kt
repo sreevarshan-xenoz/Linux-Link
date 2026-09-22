@@ -16,6 +16,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.linuxlink.android.bridge.RustCore
+import dev.linuxlink.android.ui.rememberLlHaptics
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
@@ -73,7 +74,11 @@ fun ShortcutBar(
 @Composable
 private fun Shortcut(label: String, action: () -> Result<Unit>) {
     val scope = rememberCoroutineScope()
-    TextButton(onClick = { scope.launch(Dispatchers.IO) { action() } }) {
+    val haptics = rememberLlHaptics()
+    TextButton(onClick = {
+        haptics.tap()
+        scope.launch(Dispatchers.IO) { action() }
+    }) {
         Text(label, fontSize = 12.sp)
     }
 }

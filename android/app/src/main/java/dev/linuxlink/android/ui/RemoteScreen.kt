@@ -98,6 +98,7 @@ fun RemoteScreen(
     // UI refresh: session messages ride one in-app snackbar instead of the
     // old toast spam (they inherit the theme and stay clear of the video).
     val snackbar = remember { SnackbarHostState() }
+    val haptics = rememberLlHaptics()
     var mode by remember { mutableStateOf(InputMode.DirectTouch) }
     // R4 E6: foldable / tablet dual-pane. Auto-follows the hinge posture (or a
     // large window); the "Pane" button cycles Auto → Dual → Single → Auto.
@@ -831,7 +832,10 @@ fun RemoteScreen(
                     }
 
                     IconButton(
-                        onClick = onExit,
+                        onClick = {
+                            haptics.longPress()
+                            onExit()
+                        },
                         modifier = Modifier
                             .align(Alignment.TopEnd)
                             .padding(4.dp),
@@ -874,7 +878,7 @@ fun RemoteScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        TextButton(onClick = ::toggleMode) {
+                        TextButton(onClick = { haptics.toggle(); toggleMode() }) {
                             val label =
                                 if (mode == InputMode.DirectTouch) {
                                     stringResource(R.string.mode_direct_touch)
@@ -883,7 +887,7 @@ fun RemoteScreen(
                                 }
                             Text(label, color = Color.White)
                         }
-                        FloatingActionButton(onClick = { showQuick = true }) {
+                        FloatingActionButton(onClick = { haptics.tap(); showQuick = true }) {
                             LlIcon(
                                 LlIcons.MoreVert,
                                 stringResource(R.string.session_menu),
@@ -961,7 +965,10 @@ fun RemoteScreen(
             controlPort = controlPort,
             selected = monitorIndex,
             onDismiss = { showMonitorPicker = false },
-            onPick = { index -> switchMonitor(index) },
+            onPick = { index ->
+                haptics.tap()
+                switchMonitor(index)
+            },
         )
     }
 
@@ -993,10 +1000,12 @@ fun RemoteScreen(
             selected = cropWindow,
             onDismiss = { showPicker = false },
             onPick = { w, screen ->
+                haptics.tap()
                 pullWindow(w, screen)
                 showPicker = false
             },
             onFullDesktop = {
+                haptics.tap()
                 cropWindow = null
                 cropScreen = null
                 scope.launch(Dispatchers.IO) { RustCore.clearWindowCrop() }

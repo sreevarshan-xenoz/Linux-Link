@@ -109,6 +109,7 @@
 
     <!-- Foreground-service + notification relay -->
     <string name="channel_session">Sesión de escritorio remoto</string>
+    <string name="channel_session_desc">Se muestra mientras una sesión de escritorio remoto mantiene la app en primer plano.</string>
     <string name="notif_streaming">Transmitiendo a %1$s</string>
     <string name="disconnect">Desconectar</string>
     <string name="lock_desktop">Bloquear escritorio</string>
@@ -157,6 +158,12 @@
     <string name="clipboard_history">Historial del portapapeles</string>
     <string name="clear">Borrar</string>
     <string name="clipboard_empty">Aún no se ha capturado nada: copia algo o activa la sincronización del portapapeles.</string>
+    <string name="clipboard_clear_message">Esto elimina todas las entradas guardadas del portapapeles en este teléfono.</string>
+
+    <!-- Find-my-device siren dialog (C8) -->
+    <string name="siren_ringing_title">Tu ordenador está buscando este teléfono</string>
+    <string name="siren_ringing_text">La alarma suena hasta que la silencies o pasen 30 segundos.</string>
+    <string name="siren_dismiss">Silenciar</string>
 
     <!-- Audio sheet -->
     <string name="desktop_audio">Audio del escritorio</string>

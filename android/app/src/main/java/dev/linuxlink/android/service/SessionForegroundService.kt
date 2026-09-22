@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.graphics.drawable.Icon
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
@@ -110,6 +111,7 @@ class SessionForegroundService : Service() {
             NotificationManager.IMPORTANCE_LOW,
         )
         channel.setShowBadge(false)
+        channel.description = getString(R.string.channel_session_desc)
         notificationManager().createNotificationChannel(channel)
     }
 
@@ -142,21 +144,21 @@ class SessionForegroundService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         return Notification.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_menu_view)
+            .setSmallIcon(R.drawable.ic_stat_linux_link)
             .setContentTitle(getString(R.string.app_name))
             .setContentText(getString(R.string.notif_streaming, address))
             .setContentIntent(open)
             .setOngoing(true)
             .addAction(
                 Notification.Action.Builder(
-                    null,
+                    Icon.createWithResource(this, R.drawable.ic_notif_disconnect),
                     getString(R.string.disconnect),
                     disconnect,
                 ).build(),
             )
             .addAction(
                 Notification.Action.Builder(
-                    null,
+                    Icon.createWithResource(this, R.drawable.ic_notif_lock),
                     getString(R.string.lock_desktop),
                     lockDesktop,
                 ).build(),

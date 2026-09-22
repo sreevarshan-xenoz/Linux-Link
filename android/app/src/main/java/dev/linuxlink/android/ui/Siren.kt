@@ -6,12 +6,20 @@ import android.media.AudioManager
 import android.media.Ringtone
 import android.media.RingtoneManager
 import android.net.Uri
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
+import dev.linuxlink.android.R
 import dev.linuxlink.android.bridge.RustCore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -28,24 +36,39 @@ private const val SIREN_RING_MS = 30_000L
  * poll the bridge latch the control reader sets when the desktop pushes
  * `kdeconnect.findmydevice` `{ring:true}`, and play the alarm tone at full
  * volume for a bounded time so the phone can be found by ear.
+ *
+ * C8: the ringing state is now visible too — a full-screen dialog naming
+ * what is happening with a Silence button, so a phone screaming on a desk
+ * is not a mystery to whoever picks it up. Dismissing stops the tone.
  */
 @Composable
 fun SirenWatcher(context: Context) {
-    var tone: Ringtone? by remember { mutableStateOf(null) }
-    var stopJob: Job? by remember { mutableStateOf(null) }
+    var tone by remember { mutableStateOf<Ringtone?>(null) }
+    var stopJob by remember { mutableStateOf<Job?>(null) }
+    var ringing by remember { mutableStateOf(false) }
+
+    fun silence() {
+        stopJob?.cancel()
+        stopJob = null
+        runCatching { tone?.stop() }
+        tone = null
+        ringing = false
+    }
+
     DisposableEffect(context) {
         val scope = CoroutineScope(Dispatchers.Main)
         val job =
             scope.launch {
                 while (isActive) {
-                    if (RustCore.checkSiren() && tone == null) {
-                        tone = ringPhone(context)
-                        if (tone != null) {
+                    if (RustCore.checkSiren() && !ringing) {
+                        val newTone = ringPhone(context)
+                        if (newTone != null) {
+                            tone = newTone
+                            ringing = true
                             stopJob =
                                 scope.launch {
                                     delay(SIREN_RING_MS)
-                                    runCatching { tone?.stop() }
-                                    tone = null
+                                    silence()
                                 }
                         }
                     }
@@ -57,6 +80,32 @@ fun SirenWatcher(context: Context) {
             stopJob?.cancel()
             runCatching { tone?.stop() }
         }
+    }
+
+    if (ringing) {
+        AlertDialog(
+            onDismissRequest = ::silence,
+            icon = {
+                LlIcon(
+                    LlIcons.Notifications,
+                    null,
+                    tint = MaterialTheme.colorScheme.error,
+                    size = 32.dp,
+                )
+            },
+            title = { Text(stringResource(R.string.siren_ringing_title)) },
+            text = { Text(stringResource(R.string.siren_ringing_text)) },
+            confirmButton = {
+                Button(onClick = ::silence) {
+                    Text(stringResource(R.string.siren_dismiss))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = ::silence) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
+        )
     }
 }
 
