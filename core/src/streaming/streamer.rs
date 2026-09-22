@@ -1241,20 +1241,24 @@ async fn run_audio_pipeline(connection: SharedConnection, cancel: CancellationTo
     let channels = encoder.config().channels;
     let frame_size_ms = encoder.config().frame_duration_ms as u64;
 
-    // Try PipeWire audio loopback capture
+    // Try PipeWire audio loopback capture.
+    // The session MUST stay alive for the whole audio task: its Drop
+    // cancels the (shared) pipeline token, so dropping it here would tear
+    // down capture+encode+transport the instant the session started.
     let (pcm_tx, mut pcm_rx) = mpsc::channel::<audio_capture::PcmBuffer>(8);
     let pw_cancel = cancel.clone();
-    let using_pipewire =
+    let _pw_session =
         match audio_capture::start_audio_capture(48000, 2, 20, pcm_tx, pw_cancel).await {
-            Ok(_session) => {
+            Ok(session) => {
                 info!("PipeWire audio loopback active");
-                true
+                Some(session)
             }
             Err(e) => {
                 info!(error = %e, "PipeWire audio capture unavailable, falling back to silence");
-                false
+                None
             }
         };
+    let using_pipewire = _pw_session.is_some();
 
     // Silence fallback buffer
     let silence_buffer = vec![0i16; frame_samples * channels as usize];
