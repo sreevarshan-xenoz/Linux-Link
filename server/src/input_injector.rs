@@ -192,6 +192,45 @@ const ABS_MAX_COORD: i32 = 65535;
 /// uinput works on ALL compositors but requires /dev/uinput access (root or uinput group).
 pub struct InputInjector {
     backend: InputBackend,
+    /// Button mask of the previous `Gamepad` packet. That packet is a state
+    /// snapshot, so every bit must be treated as an edge (see 2063).
+    gamepad_buttons: u16,
+}
+
+/// What a gamepad button bit stands for on the desktop. The gamepad is a wire
+/// format plus toy emulation until a real source exists (roadmap 2695); this
+/// is the whole mapping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GamepadAction {
+    Key(Key),
+    LeftClick,
+}
+
+/// Gamepad button bits to desktop action, in the order the old hand-written
+/// `if` chain applied them.
+const GAMEPAD_BUTTONS: [(u16, GamepadAction); 7] = [
+    (0x0001, GamepadAction::Key(Key::Return)),     // A
+    (0x0002, GamepadAction::Key(Key::Escape)),     // B
+    (0x0080, GamepadAction::LeftClick),            // Start
+    (0x0800, GamepadAction::Key(Key::UpArrow)),    // DPad up
+    (0x1000, GamepadAction::Key(Key::DownArrow)),  // DPad down
+    (0x2000, GamepadAction::Key(Key::LeftArrow)),  // DPad left
+    (0x4000, GamepadAction::Key(Key::RightArrow)), // DPad right
+];
+
+/// Which mapped gamepad buttons changed state between two snapshots, and
+/// whether they are now held. A packet replayed while a button is still down
+/// produces nothing, and a button that came up produces its release — which is
+/// the half the old code never emitted.
+fn gamepad_edges(previous: u16, current: u16) -> Vec<(GamepadAction, bool)> {
+    GAMEPAD_BUTTONS
+        .iter()
+        .filter_map(|&(bit, action)| {
+            let was_held = previous & bit != 0;
+            let is_held = current & bit != 0;
+            (was_held != is_held).then_some((action, is_held))
+        })
+        .collect()
 }
 
 impl Drop for InputInjector {
@@ -227,6 +266,7 @@ impl InputInjector {
             info!("Input injector: using enigo (X11/XWayland)");
             return Ok(Self {
                 backend: InputBackend::Enigo(Box::new(Mutex::new(enigo))),
+                gamepad_buttons: 0,
             });
         }
 
@@ -286,6 +326,7 @@ impl InputInjector {
                 main: device,
                 abs: Some(build_abs_device()?),
             })),
+            gamepad_buttons: 0,
         })
     }
 
@@ -540,33 +581,18 @@ impl InputInjector {
                     self.move_mouse_relative(mx, my)?;
                 }
 
-                // A button -> Enter
-                if *buttons & 0x01 != 0 {
-                    self.key(Key::Return, true)?;
-                }
-
-                // B button -> Escape
-                if *buttons & 0x02 != 0 {
-                    self.key(Key::Escape, true)?;
-                }
-
-                // Start -> trigger click
-                if *buttons & 0x80 != 0 {
-                    self.mouse_button(MouseKey::Left, true)?;
-                }
-
-                // DPad -> arrow keys
-                if *buttons & (1 << 11) != 0 {
-                    self.key(Key::UpArrow, true)?;
-                }
-                if *buttons & (1 << 12) != 0 {
-                    self.key(Key::DownArrow, true)?;
-                }
-                if *buttons & (1 << 13) != 0 {
-                    self.key(Key::LeftArrow, true)?;
-                }
-                if *buttons & (1 << 14) != 0 {
-                    self.key(Key::RightArrow, true)?;
+                // Gamepad buttons arrive as a state snapshot, so each mapped bit
+                // is an edge: press on the rising one, release on the falling
+                // one. Pressing on every packet and never releasing left the
+                // DPad held down forever after any arrow tap (roadmap 2063).
+                let previous = std::mem::replace(&mut self.gamepad_buttons, *buttons);
+                for (action, held) in gamepad_edges(previous, *buttons) {
+                    match action {
+                        GamepadAction::Key(key) => self.key(key, held)?,
+                        GamepadAction::LeftClick => {
+                            self.mouse_button(MouseKey::Left, held)?;
+                        }
+                    }
                 }
 
                 // SYN_REPORT
@@ -1021,5 +1047,47 @@ mod tests {
                 evdev_code
             );
         }
+    }
+
+    #[test]
+    fn a_held_gamepad_button_presses_once_and_its_release_is_emitted() {
+        // The packet is a state snapshot: holding Up must produce one press,
+        // not a re-press per poll, and lifting it must produce the release the
+        // old code never sent (roadmap 2063, the sticking DPad).
+        assert_eq!(
+            gamepad_edges(0, 0x0800),
+            vec![(GamepadAction::Key(Key::UpArrow), true)]
+        );
+        assert!(gamepad_edges(0x0800, 0x0800).is_empty());
+        assert_eq!(
+            gamepad_edges(0x0800, 0),
+            vec![(GamepadAction::Key(Key::UpArrow), false)]
+        );
+    }
+
+    #[test]
+    fn every_mapped_gamepad_button_that_goes_down_comes_up() {
+        let mapped = GAMEPAD_BUTTONS
+            .iter()
+            .fold(0u16, |acc, &(bit, _)| acc | bit);
+        assert_eq!(mapped, 0x7883, "the mapped bits changed shape");
+
+        let down = gamepad_edges(0, mapped);
+        let up = gamepad_edges(mapped, 0);
+        assert_eq!(down.len(), GAMEPAD_BUTTONS.len());
+        assert_eq!(down.len(), up.len());
+        for ((action, now_held), (same_action, now_up)) in down.iter().zip(&up) {
+            assert_eq!(action, same_action);
+            assert!(
+                *now_held && !now_up,
+                "{action:?} was pressed but has no release"
+            );
+        }
+
+        // Bits no desktop action is mapped to stay off the wire in both
+        // directions, so a future button layout cannot inject a stray key.
+        let unmapped = !mapped;
+        assert!(gamepad_edges(0, unmapped).is_empty());
+        assert!(gamepad_edges(unmapped, 0).is_empty());
     }
 }

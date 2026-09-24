@@ -342,6 +342,14 @@ Headline numbers, all verified first-hand on 2026-09-24:
   surface, 740 key repeat, 744 pointer capture, 746-752 shortcut profiles/macros, 757-765 gamepad
   completion (rumble, calibration, layouts, sensitivity), 783-787 portal/accessibility/XWayland
   diagnostics, 789, 791-792, 798-800 input tests and gates.
+- **Corrections since this audit (2026-09-24)**, because the clauses above describe what the work below
+  started from, not what is true now: 710's missing press is fixed and `tapAbsolute` is the tap path
+  (`60ae055`, 2061/2062); 734's ~26-key server map, 735's control-character fallthrough, 738's absent
+  modifiers, 741's MENU, 742's F-keys and 743's media/volume rows are closed by the completed table plus
+  the shared code set (`dc9fc22`, `a9b903d`, 2057-2060/2271); 754-756's press-without-release is closed by
+  the edge-tracked gamepad handler (2063) — though the *Android source* half of that clause still holds,
+  so the path remains unreachable from the app (2695). 736, 740, 744, 766-767 and the ABSENT list are
+  unchanged.
 
 ### I. Files / Clipboard / Notifications 801-900
 
@@ -725,7 +733,13 @@ each item is a live defect with a known location, not a wish.
   never crossed touch slop) is exactly warp + press + release, which is what that function always did. It
   also had a doc comment claiming the server's absolute motion "puts the virtual finger down", which the
   injector contradicts line for line; the comment now says what is true.
-- 2063 give the gamepad path a release for every press (its DPad currently sticks).
+- 2063 **CLOSED**, gamepad press/release paired: the packet is a state snapshot, so the handler now diffs
+  its button mask against the previous one and presses on a rising edge, releases on a falling one.
+  Previously every mapped bit re-pressed on each packet and nothing was ever released, so one DPad tap left
+  an arrow key held for the rest of the session. The mapping moved from a seven-branch `if` chain to a
+  table, and a test asserts the release set equals the press set for all seven bits and that unmapped bits
+  reach nothing. Unit-verified only, and honestly so: the path still has no Android source (2695), so no
+  control in the app can produce these packets today.
 - 2064 recreate the uinput devices when they fail; they are built once at startup and never rebuilt.
 - 2065 reject or handle injection when the compositor's input layout is not the assumed QWERTY one.
 
@@ -1519,9 +1533,10 @@ per-class semantics, then the v1 plane shrinks to compatibility-only.
 - 2693 media-key delivery verified against PipeWire/portal-free desktop shortcuts.
 - 2694 a system-requests layer (logout, lock, inhibit-sleep) with consent.
 
-**Gamepad (currently wire + toy emulation with stuck buttons)**
+**Gamepad (wire + toy emulation, now with paired press/release; no Android source)**
 - 2695 a real gamepad source on Android (`InputDevice` handling with axes and buttons).
-- 2696 press *and* release for every button.
+- 2696 **CLOSED** with 2063: the server handler is edge-triggered on the button mask, so every press has
+  its release. Note this was never *reachable* — with no Android source the packets only exist in tests.
 - 2697 axis delivery that is not quantized to a stick-to-key emulation.
 - 2698 triggers as analog axes, not buttons.
 - 2699 a hat/DPad that releases.
