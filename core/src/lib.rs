@@ -4,9 +4,6 @@
 
 pub mod capabilities;
 pub mod error;
-
-// Input injection is Linux-only (requires evdev)
-#[cfg(feature = "injection")]
 pub mod input;
 pub mod metrics;
 pub mod protocol;

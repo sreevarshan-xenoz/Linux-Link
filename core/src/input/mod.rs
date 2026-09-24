@@ -1,3 +1,7 @@
-// InputKind is defined in core::streaming::input_packet as InputPacket.
-// This module is intentionally left minimal — the actual input types live
-// in the streaming crate under the injection feature gate.
+//! Input-side types shared by both ends of the wire.
+//!
+//! The packet shapes live in [`crate::streaming::input_packet`]; the injection
+//! backends live in `server`. What belongs here is what neither of them can own
+//! without the other having to depend on it — see [`keys`].
+
+pub mod keys;
