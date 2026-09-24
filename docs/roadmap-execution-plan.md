@@ -177,6 +177,11 @@ The four that matter most, in order:
 - **2051/2052 — the HUD lies.** `frame_drops` is a literal `0` in `android/bridge/src/api.rs`, so the
   session screen asserts a healthy link it never measured. Make it real, or delete the field. Never keep a
   fabricated metric while a real one is pending.
+  **Landed 2026-09-24**: it is a measurement now — the holes in the server's per-frame sequence numbers as
+  the client's receive loop sees them, which is the only vantage that can know a frame never arrived no
+  matter what dropped it (transport backlog trim, reset stream, dead connection). 2052's "delete it
+  otherwise" is moot. The number can come back down when an out-of-order frame lands, and the checklist
+  says so rather than leaving a tester to read that as a bug.
 - **2053 — the ABR controller has no input.** `update_loss(_lost_packets)` in
   `core/src/streaming/bitrate.rs` ignores its argument, so packet loss never moves the bitrate and every
   "adaptive" claim in the README is about a no-op.

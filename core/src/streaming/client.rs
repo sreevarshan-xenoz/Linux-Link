@@ -90,6 +90,71 @@ pub fn reset_e2e_probe() {
     E2E_EWMA_MS.store(0, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// Frames the link never delivered.
+///
+/// Every video frame rides its own uni-stream carrying a sequence number the
+/// encoder hands out one-per-packet, so a hole in the range the client has
+/// seen is a frame that never arrived — skipped by the transport backlog,
+/// reset in flight, or lost with the connection. Wherever the cause lives, the
+/// miss is only knowable here, which is why the session HUD's drop counter
+/// reads this rather than a desktop-side tally.
+///
+/// Measured as `highest - lowest + 1 - arrived` instead of "the gap I just
+/// saw", because streams complete out of order: a frame still in flight is
+/// counted for the moment its successors land and stops being counted when it
+/// does, whereas charging every gap on sight would keep counting frames that
+/// merely arrived late. The number can therefore come back down — which is
+/// what a live count of a self-correcting measurement means, against a
+/// ledger of false drops that only ever grows. `lowest` starts at `u64::MAX`
+/// so the first packet of a window sets it.
+static VIDEO_SEQ_LOWEST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(u64::MAX);
+static VIDEO_SEQ_HIGHEST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static VIDEO_SEQ_ARRIVED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The arithmetic above, as a pure function of one window. `arrived == 0`
+/// means nothing has been received yet, so nothing is known — a session that
+/// has not delivered a frame reports zero drops rather than a phantom span.
+pub fn missed_frames_in_window(lowest: u64, highest: u64, arrived: u64) -> u64 {
+    if arrived == 0 || lowest > highest {
+        return 0;
+    }
+    (highest - lowest + 1).saturating_sub(arrived)
+}
+
+/// Start a fresh window. Called at session start, and on any packet numbered
+/// 0: the encoder counts from 0, so a zero also means a rebuilt encoder — a
+/// bitrate or resolution change, or the C2 hardware→software fallback — whose
+/// sequence numbers have nothing to do with the run they replaced.
+pub fn reset_video_window() {
+    use std::sync::atomic::Ordering;
+    VIDEO_SEQ_LOWEST.store(u64::MAX, Ordering::Relaxed);
+    VIDEO_SEQ_HIGHEST.store(0, Ordering::Relaxed);
+    VIDEO_SEQ_ARRIVED.store(0, Ordering::Relaxed);
+}
+
+/// Fold one received video packet into the window. Only the receive loop
+/// writes these, so a concurrent reader can at worst see a window one packet
+/// short for one HUD tick.
+pub fn record_video_sequence(sequence: u64) {
+    use std::sync::atomic::Ordering;
+    if sequence == 0 {
+        reset_video_window();
+    }
+    VIDEO_SEQ_HIGHEST.fetch_max(sequence, Ordering::Relaxed);
+    VIDEO_SEQ_LOWEST.fetch_min(sequence, Ordering::Relaxed);
+    VIDEO_SEQ_ARRIVED.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Frames missed since the window opened. Zero until the first frame arrives.
+pub fn missed_video_frames() -> u64 {
+    use std::sync::atomic::Ordering;
+    missed_frames_in_window(
+        VIDEO_SEQ_LOWEST.load(Ordering::Relaxed),
+        VIDEO_SEQ_HIGHEST.load(Ordering::Relaxed),
+        VIDEO_SEQ_ARRIVED.load(Ordering::Relaxed),
+    )
+}
+
 /// QUIC Stream Client — connects to a StreamingServer and receives H.264 video frames.
 ///
 /// # Usage
@@ -471,6 +536,7 @@ async fn recv_with_cancel(
 ) -> Result<()> {
     info!("Starting packet receiver (video + audio)");
     reset_e2e_probe();
+    reset_video_window();
 
     // Video sequence-gap tracking for IDR requests. Because each frame is sent
     // on its own unidirectional stream, frames can complete out of order; we
@@ -557,6 +623,7 @@ async fn recv_with_cancel(
                                 }
                             }
                             last_video_seq = Some(header.sequence);
+                            record_video_sequence(header.sequence);
 
                             // R4 E3: compositor-true latency sample — the
                             // header's age is capture→send on the desktop
@@ -709,6 +776,47 @@ mod tests {
         // 12.34 ms capture→send age + 51 ms RTT (25.5 → 25 ms one-way).
         assert_eq!(e2e_sample_ms(12_340, Duration::from_millis(51)), 12 + 25);
         assert_eq!(e2e_sample_ms(0, Duration::ZERO), 0);
+    }
+
+    #[test]
+    fn a_clean_link_reports_no_drops() {
+        // In order, nothing missing: the span and the arrival count agree.
+        assert_eq!(missed_frames_in_window(0, 9, 10), 0);
+        // Frames 3 and 4 never arrived.
+        assert_eq!(missed_frames_in_window(0, 9, 8), 2);
+        // Nothing received yet, so nothing is known. A session that produced
+        // no video must read as zero drops, not as a phantom span.
+        assert_eq!(missed_frames_in_window(u64::MAX, 0, 0), 0);
+    }
+
+    #[test]
+    fn a_late_frame_corrects_the_count() {
+        // Streams complete out of order, so 12 can land while 9-11 are still
+        // in flight: those three read as missing for that moment.
+        assert_eq!(missed_frames_in_window(8, 12, 2), 3);
+        // The late arrivals correct it with no other bookkeeping. Charging the
+        // gap on sight instead would have left three permanent phantom drops
+        // on a link that lost nothing.
+        assert_eq!(missed_frames_in_window(8, 12, 5), 0);
+    }
+
+    #[test]
+    fn a_rebuilt_encoder_starts_a_new_window() {
+        // The window is process-global state, so this test owns it outright:
+        // nothing else in this module records sequences.
+        reset_video_window();
+        assert_eq!(missed_video_frames(), 0, "an empty window is not a loss");
+        for seq in 0..5 {
+            record_video_sequence(seq);
+        }
+        record_video_sequence(6);
+        assert_eq!(missed_video_frames(), 1, "frame 5 never arrived");
+        // A bitrate rebuild: the new encoder counts from 0 again, and the
+        // old run's 6 must not read as six missing frames.
+        record_video_sequence(0);
+        assert_eq!(missed_video_frames(), 0, "sequence 0 must reset the run");
+        record_video_sequence(1);
+        assert_eq!(missed_video_frames(), 0, "and the new run counts cleanly");
     }
 
     #[test]

@@ -619,9 +619,14 @@ Things that are **wrong or misleading right now**. This is the highest-value blo
 each item is a live defect with a known location, not a wish.
 
 **Reported numbers that are not real**
-- 2051 make the session HUD's dropped-frame counter real — `frame_drops` is a literal `0` in the bridge's
-  stats struct, so the UI asserts a healthy link it never measured.
-- 2052 until 2051 lands, remove the drops field rather than show a fabricated zero.
+- 2051 **LANDED 2026-09-24** make the session HUD's dropped-frame counter real — `frame_drops` was a literal
+  `0` in the bridge's stats struct, so the UI asserted a healthy link it never measured. It now counts the
+  holes in the server's per-frame sequence numbers as seen by the client's receive loop
+  (`missed_video_frames` in `core/src/streaming/client.rs`): the one place that can know a frame never
+  arrived, whatever dropped it. Measured as `highest - lowest + 1 - arrived` so out-of-order stream
+  completion self-corrects instead of accumulating phantom drops, with the window restarted on sequence 0
+  because a rebuilt encoder counts from 0 again. Three unit tests, including both of those cases.
+- 2052 **OBSOLETE — superseded by 2051**: the field is a measurement, so there is nothing to remove.
 - 2053 wire the packet-loss input of the adaptive-bitrate controller — `update_loss` takes `_lost_packets`
   and ignores it, so loss never moves the rate.
 - 2054 stop presenting desktop audio as available: the phone has no player (`receiveAudio` has no caller),

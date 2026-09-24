@@ -129,6 +129,8 @@ pub struct StreamingStatsDto {
     pub fps: f64,
     pub bitrate_kbps: u64,
     pub e2e_latency_ms: u64,
+    /// Video frames the link never delivered, measured on the client's own
+    /// sequence window — not a placeholder.
     pub frame_drops: u64,
     /// Live link path (R4 A1): "lan" | "wan_direct" | "wan_relayed" |
     /// "wan" (punched/relay not yet observable) | "none" (no session).
@@ -1611,7 +1613,11 @@ pub fn get_streaming_stats() -> StreamingStatsDto {
         // on the desktop clock + one network leg), EWMA'd in the core
         // client. 0 until the session's first video packet.
         e2e_latency_ms: linux_link_core::streaming::client::e2e_estimate_ms(),
-        frame_drops: 0,
+        // Frames whose sequence number never arrived, counted by the client's
+        // receive loop — see `missed_video_frames` in core. This replaced a
+        // literal 0 that asserted a healthy link the phone had never
+        // measured (roadmap 2051/2052).
+        frame_drops: linux_link_core::streaming::client::missed_video_frames(),
         link_state: match crate::LINK_STATE.load(Ordering::Relaxed) {
             1 => "lan",
             2 => "wan_direct",

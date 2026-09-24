@@ -43,6 +43,12 @@ of exactly that, including the one fix that merged without its confirming observ
 - [ ] FGS notification is present ("Streaming to <ip>"), survives home/swipe-away attempts; its Disconnect action ends the session.
 - [ ] Screen-off for 1 min, wake → stream still live (wake lock + keepalive; plan #13).
 - [ ] Drop phone far from AP / saturate link → frames stall, then recover; drops counter rises but no permanent freeze (gap-driven keyframe request, R2#5).
+      "Drops" means **frames the phone never received** — the holes in the server's per-frame sequence
+      numbers, counted where only the client can count them. So a saturated link must move it (the
+      desktop's transport task trims its backlog before a stall clears), while a frame that arrives late
+      and intact must not: the number can come back down when an out-of-order frame lands, and that is
+      correct, not a bug. A decoder that cannot keep up is a different failure and shows as fps below the
+      desktop's `src` rate, not here.
 - [ ] Status chip: kill the server → "Down: <reason>" chip + Retry rebuilds after restarting the server.
 - [ ] R4 B1 screencopy backend (desktop-observable): starting a stream on
       Hyprland must NOT raise the portal screen-share grant dialog; server log shows
@@ -432,8 +438,6 @@ Recording these here so a tester does not file them as regressions:
 
 - Desktop audio audible on the phone — there is no client-side Opus player (`receiveAudio` has no caller);
   see roadmap-3000 **2791-2800**, and §10's "audio" results are about *control* (routing/volume), not playout.
-- The HUD's "drops" field — it is a literal `0` in the bridge (**2051/2052**), so any number in it is
-  meaningless in both directions.
 - Adaptive bitrate responding to loss — `update_loss` ignores its argument (**2053**).
 - The file browser — the server plugin answers, `listRemoteFiles` has zero call sites (**2874**).
 - Notification per-app channels, grouping, icons, privacy modes (**2898-2905**).
