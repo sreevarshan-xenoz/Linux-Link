@@ -672,8 +672,17 @@ each item is a live defect with a known location, not a wish.
   and a p95 regression is visible in it (`session_telemetry` asserts the tail, `session_record.rs` asserts
   it end to end over loopback QUIC). What is left of this item is the live HUD's single scalar — a p95 you
   can watch while streaming rather than read afterwards — which is 2141-2146, not a missing measurement.
-- 2056 expose goodput/RTT with their confidence and sample count, not as bare numbers the HUD cannot
-  contextualise.
+- 2056 **CLOSED (`42edf12`, `e7ac404`)**: the HUD's rates stopped being a lifetime average and started
+  naming their basis. The bridge keeps the counter reads the display has asked for and diffs them across
+  the newest 3 s (`android/bridge/src/rates.rs`), and the link figure is the median of the session's
+  recent one-second polls instead of whichever poll happened to be current; the DTO carries the span a
+  rate was divided by and the sample count behind a median, and `StatsHud` prints both under the numbers
+  and dims a figure whose basis is still thin. **Confidence is a stated sample count, not an interval,
+  and that is the ceiling:** quinn 0.11's public RTT surface is one smoothed `Connection::rtt()`, and the
+  `PathStats` iroh 1.3 re-exports per path carries `rtt` with no variance beside it — the only place
+  either stack names a variance is the qlog-only `RecoveryMetrics` diagnostic, which is not an accessor
+  an application can read. Successive samples are therefore all the evidence a transport figure here can
+  have. Device behavior unverified (the caption's wording and width are a phone question).
 
 **Input paths that silently degrade**
 - 2057 complete the server keycode map — `server/src/input_injector.rs:27` covers ~26 keys and unmapped

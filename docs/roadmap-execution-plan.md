@@ -178,7 +178,7 @@ Exit gate:
 Each item here is a wrong behaviour with a known location, which makes this the cheapest quality the
 project can buy.
 
-The four that matter most, in order:
+The ones that matter most, in order:
 
 - **2051/2052 — the HUD lies.** `frame_drops` is a literal `0` in `android/bridge/src/api.rs`, so the
   session screen asserts a healthy link it never measured. Make it real, or delete the field. Never keep a
@@ -188,6 +188,17 @@ The four that matter most, in order:
   matter what dropped it (transport backlog trim, reset stream, dead connection). 2052's "delete it
   otherwise" is moot. The number can come back down when an out-of-order frame lands, and the checklist
   says so rather than leaving a tester to read that as a bug.
+- **2056 — a rate nobody can contextualise.** The HUD divided the session's frame and byte totals by its
+  own uptime, so a link that stalled a minute ago read as healthy and one that just recovered read as
+  stalled, and the RTT shown was whichever one-second poll the display happened to land on.
+  **Landed 2026-09-24** (`42edf12`, `e7ac404`): rates are diffs across the newest 3 s of counter reads and
+  the link figure is the median of the session's recent polls, with the span and the sample count reported
+  to the HUD, which names both under the numbers and dims a figure whose basis is still thin. The exit
+  gate's "no reported number produced by anything other than a measurement" now has a second clause this
+  item answers: a measurement is only meaningful with the sample it was taken over. What it cannot offer is
+  a confidence *interval* — quinn publishes one smoothed `rtt()` and iroh's per-path `PathStats` one
+  smoothed `rtt`, both stacks naming a variance only in their qlog diagnostics — so the sample count is
+  the confidence, stated.
 - **2053 — the ABR controller has no input.** `update_loss(_lost_packets)` in
   `core/src/streaming/bitrate.rs` ignores its argument, so packet loss never moves the bitrate and every
   "adaptive" claim in the README is about a no-op.

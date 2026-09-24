@@ -39,7 +39,8 @@ of exactly that, including the one fix that merged without its confirming observ
 
 ## 2. Session shell + video (Tier 1 #5, R2#2, R2#5)
 
-- [ ] Video appears within ~1 s; stats HUD shows fps/bitrate/rtt/e2e/drops.
+- [ ] Video appears within ~1 s; stats HUD shows fps/bitrate/rtt/e2e/drops, plus the caption naming what
+      the rates and the link figure were measured over (§2c).
 - [ ] FGS notification is present ("Streaming to <ip>"), survives home/swipe-away attempts; its Disconnect action ends the session.
 - [ ] Screen-off for 1 min, wake → stream still live (wake lock + keepalive; plan #13).
 - [ ] Drop phone far from AP / saturate link → frames stall, then recover; drops counter rises but no permanent freeze (gap-driven keyframe request, R2#5).
@@ -150,6 +151,31 @@ not part of C4.
       `e2e` figure (± the phone's own present latency, which the probe can't see).
 - [ ] WAN session: `e2e` should ≈ rtt/2 higher than a LAN session on the same desktop motion
       (the network-leg term is RTT/2 by construction).
+
+## 2c. Rate and link basis (roadmap 2056)
+
+The HUD's fps/kbps are now diffs over the newest 3 s of received video and its `rtt` is the median of
+the session's last ≤8 one-second polls; a caption under the numbers names both, and a figure whose basis
+is still filling in is dimmed. What to confirm on a real phone:
+
+- [ ] Right after connect: the caption starts at something like `rates over 0.5s · rtt unsampled` and
+      reaches `rates over 3.0s · rtt median of 8` within ~8 s; fps/kbps are dim until the caption says
+      ~2.5 s or more, and `rtt` is dim until its first poll (~1 s). A number that arrives already bright
+      means the basis is not being reported.
+- [ ] The stall check this replaces: freeze the desktop's output (sleep the display, or `SIGSTOP` the
+      server) → HUD `fps` and `kbps` must reach 0 within ~3 s and stay there, with the caption still
+      naming a real span. Under the old lifetime average this was the bug: a dead link read healthy for
+      minutes. Resume → the rates recover within ~3 s, not within a session's worth of averaging.
+- [ ] Basis reset: end the session and reconnect to the same (or a different) desktop → the caption must
+      come back up from a small span and `rtt median of 1`, never showing a figure or a sample count
+      carried over from the session that just died.
+- [ ] Portrait legibility: the caption is one line of 10 sp monospace; in portrait on a narrow phone it
+      must not wrap into a single-character column the way the six metric chips did before they became a
+      `FlowRow`, and must not be clipped by the HUD panel's padding.
+- [ ] Optional cross-check: while the caption reads `rates over 3.0s`, `linux-link sessions` for the same
+      session should report a mean kbps within the same order of magnitude — the session record averages
+      over the whole session, the HUD does not, and a large disagreement is a measurement bug in one of
+      them.
 
 ## 3. Input paths (R2#4, Tier 1 #2)
 
