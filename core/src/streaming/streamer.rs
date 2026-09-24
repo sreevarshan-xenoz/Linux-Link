@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use super::audio::{AudioConfig, AudioEncoder as AudioOpusEncoder};
 use super::audio_capture;
-use super::bitrate::{AdaptiveBitrate, LossCeiling};
+use super::bitrate::LossCeiling;
 use super::capture;
 use super::connection::{Connection, QuinnConnection, SharedConnection};
 use super::encoder::VideoEncoder;
@@ -39,8 +39,6 @@ pub struct StreamingServer {
     session_id: String,
     /// Watch channel for adaptive bitrate updates
     bitrate_tx: watch::Sender<u32>,
-    /// Adaptive bitrate controller (optional)
-    adaptive_bitrate: Option<AdaptiveBitrate>,
     /// Channel for routing input events received from client over this QUIC connection
     input_tx: Option<tokio::sync::broadcast::Sender<InputPacket>>,
     /// R4 E2: routing for client→server mic audio. `InputPacket::Mic` frames
@@ -94,7 +92,6 @@ impl StreamingServer {
             cancel: CancellationToken::new(),
             session_id: Uuid::new_v4().to_string(),
             bitrate_tx,
-            adaptive_bitrate: None,
             input_tx: None,
             mic_tx: None,
             pairing_gate: None,
@@ -112,13 +109,6 @@ impl StreamingServer {
     /// `session_telemetry::set_session_telemetry_callback`.
     pub fn set_session_telemetry(&mut self, enabled: bool) {
         self.telemetry = enabled;
-    }
-
-    /// Enable adaptive bitrate control with the given controller
-    pub fn with_adaptive_bitrate(mut self, mut adaptive: AdaptiveBitrate) -> Self {
-        adaptive.attach(self.bitrate_tx.clone());
-        self.adaptive_bitrate = Some(adaptive);
-        self
     }
 
     /// Permit H.265/HEVC when the connecting client declares it can decode
@@ -346,7 +336,6 @@ impl StreamingServer {
         // Clone connection for use across multiple tasks
         let conn_for_transport = connection.clone();
         let conn_for_monitor = connection.clone();
-        let conn_for_bitrate = connection.clone();
         let _conn_for_audio = connection.clone();
 
         // Task 2: Video encoding
@@ -948,20 +937,6 @@ impl StreamingServer {
             }
         }.instrument(monitor_span));
 
-        // Task 5: Adaptive bitrate monitoring (if enabled)
-        if let Some(adaptive_bitrate) = self.adaptive_bitrate.take() {
-            let bitrate_cancel = cancel.clone();
-            let bitrate_span = tracing::info_span!("bitrate_monitor");
-            tasks.spawn(
-                async move {
-                    info!("Adaptive bitrate monitor started");
-                    let monitor = AdaptiveBitrateMonitor::new(adaptive_bitrate);
-                    monitor.run(&*conn_for_bitrate, bitrate_cancel).await;
-                }
-                .instrument(bitrate_span),
-            );
-        }
-
         // Task 6: Audio capture + Opus encoding + QUIC send (F1: Audio Streaming)
         let audio_cancel = cancel.clone();
         let audio_conn = connection.clone();
@@ -1235,41 +1210,6 @@ async fn read_with_timeout(stream: &mut dyn super::connection::InStream, buf: &m
         tokio::time::timeout(Duration::from_millis(500), stream.read_exact(buf)).await,
         Ok(Ok(()))
     )
-}
-
-/// Monitors QUIC connection stats and feeds RTT to the adaptive bitrate controller
-struct AdaptiveBitrateMonitor {
-    controller: AdaptiveBitrate,
-    check_interval: tokio::time::Interval,
-}
-
-impl AdaptiveBitrateMonitor {
-    fn new(controller: AdaptiveBitrate) -> Self {
-        let check_interval = tokio::time::interval(tokio::time::Duration::from_secs(1));
-        Self {
-            controller,
-            check_interval,
-        }
-    }
-
-    async fn run(mut self, connection: &dyn Connection, cancel: CancellationToken) {
-        loop {
-            tokio::select! {
-                _ = cancel.cancelled() => {
-                    info!("Adaptive bitrate monitor cancelled");
-                    break;
-                }
-
-                _ = self.check_interval.tick() => {
-                    // Get connection transport stats
-                    let stats = connection.stats();
-                    let rtt_ms = stats.rtt.as_millis();
-                    debug!("RTT: {}ms", rtt_ms);
-                    self.controller.update_rtt(rtt_ms);
-                }
-            }
-        }
-    }
 }
 
 /// Audio pipeline: capture → Opus encode → QUIC send.

@@ -44,7 +44,7 @@ pub mod streamer;
 pub use audio::{AudioConfig, AudioPacket};
 #[cfg(feature = "opus")]
 pub use audio::{AudioDecoder, AudioEncoder};
-pub use bitrate::AdaptiveBitrate;
+pub use bitrate::LossCeiling;
 #[cfg(feature = "capture")]
 pub use capture::{CaptureBackend, start_capture_auto};
 #[cfg(feature = "capture")]

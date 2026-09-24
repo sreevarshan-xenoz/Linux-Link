@@ -188,8 +188,8 @@ The four that matter most, in order:
   **Landed 2026-09-24**: loss is a term in the live arbiter's ceiling chain now (`LossCeiling` sampled from
   the transport's cumulative counters each 2 s tick), and the README describes the controller that exists
   instead of one that never ran. Two honest residuals: the RTT half of that story was *also* dead
-  (`with_adaptive_bitrate` has no callers, so `AdaptiveBitrate` never saw a connection) — removing it is a
-  separate change — and the loss response itself is unit-tested only, since proving it needs a link that
+  (`with_adaptive_bitrate` had no callers, so `AdaptiveBitrate` never saw a connection) and has been deleted
+  rather than revived, and the loss response itself is unit-tested only, since proving it needs a link that
   actually drops (checklist §11).
 - **2054 — advertised audio that cannot play.** `receiveAudio` has no caller: the phone has no Opus
   playout path, so the desktop audio feature is a UI toggle over a dead wire. Either build 2791 or stop

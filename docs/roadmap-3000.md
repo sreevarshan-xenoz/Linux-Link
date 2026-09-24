@@ -639,11 +639,12 @@ each item is a live defect with a known location, not a wish.
   being a term at all, with a 100-datagram floor so a still desktop's near-empty sample cannot cut a
   healthy link, and a 1 Mbit/s floor because below that the right answer is fewer pixels, which this
   controller deliberately does not do mid-session. Eight unit tests on the pure decision function.
-  **Related finding, not fixed here:** the RTT controller those hooks belong to (`AdaptiveBitrate`, plus
-  `BitrateProfiles` and the `AdaptiveBitrateMonitor`) was already unreachable — `with_adaptive_bitrate` has
-  no callers — so no RTT-driven adjustment has ever happened either. 2821 remains as the refinement
-  (loss as a primary congestion indicator alongside RTT, à la RustDesk) once there is one live controller
-  to refine.
+  **Found and closed alongside:** the RTT controller those hooks belonged to (`AdaptiveBitrate`,
+  `BitrateProfiles`, `AdaptiveBitrateMonitor`, and the `StreamingServer::with_adaptive_bitrate` door that
+  nothing ever walked through) had never seen a connection — no RTT-driven adjustment had ever happened, so
+  the README's "RTT-based congestion control" described dead code on top of a no-op. Deleted rather than
+  revived: a second owner would fight the arbiter that exists. 2821 (loss + RTT together, à la RustDesk)
+  stays open as the refinement, and it should be done *in* this arbiter.
 - 2054 stop presenting desktop audio as available: the phone has no player (`receiveAudio` has no caller),
   so either build the playout path (2791-2800) or drop it from the advertised capability set.
 - 2055 report e2e latency as a distribution sample stream rather than one EWMA scalar so a p95 regression
