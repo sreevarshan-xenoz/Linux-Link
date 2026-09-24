@@ -173,3 +173,9 @@ config.json
 settings.json
 !.qoder/settings.json
 local_settings.py
+# Agent/editor-local state and scratch config (never commit)
+.qoder/sessions/
+# A dev run with XDG_CONFIG_HOME=$PWD/devconfig per CONTRIBUTING
+devconfig/
+# Stray directory a tool created when ~ was not expanded: a full Android SDK
+/~/
