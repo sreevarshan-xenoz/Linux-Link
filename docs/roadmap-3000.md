@@ -52,8 +52,9 @@ Execution order, gates and exit criteria: [docs/roadmap-execution-plan.md](roadm
 
 Headline numbers, all verified first-hand on 2026-09-24:
 
-- 282 Rust test functions in the workspace (core 197 lib + 9 integration, server 68 lib + 13
-  integration, bridge 6), of which 10 are `#[ignore]`d. Six integration-test files total.
+- 292 Rust test functions in the workspace as run by `cargo test --workspace` (279 pass, 13 are
+  `#[ignore]`d), across six integration-test files. Feature-gated tests (`wan`, `encode`) are outside
+  that count and only compile under an explicit `--features`.
 - **Zero** Kotlin tests — `android/app` has no `src/test` or `src/androidTest` at all.
 - **Zero** occurrences of `percentile`, `p95`, `p99` or `histogram` anywhere in `core/src`,
   `server/src` or `android/app`. Every latency/quality number the project reports is an average or
@@ -65,9 +66,13 @@ Headline numbers, all verified first-hand on 2026-09-24:
   cannot fail anything. **`main` has been red on every one of the last six pushes** (verified from
   `gh run list`, 2026-06-22 back through the R4 work), and every one fails at the *first* step,
   `cargo fmt --all -- --check`. Measured on a clean checkout of `90d92df`: 96 diff hunks across 22
-  files (12 in `core`, 10 in `server`). The in-flight protocol work in the working tree is not
-  cleaner — `cargo fmt` there aborts before reporting anything, on an internal rustfmt error
+  files (12 in `core`, 10 in `server`). The in-flight protocol work in the working tree was not
+  cleaner — `cargo fmt` there aborted before reporting anything, on an internal rustfmt error
   ("left behind trailing whitespace") at `server/src/v2_multiplexer.rs:102`.
+  **Status moved since that measurement (2026-09-24):** 2102 and 2103 are landed — fmt and
+  `clippy -D warnings` pass on the local `main`, as does the whole test suite. CI is still red on
+  the pushed `main`, because the fixes are unpushed; the pushes and the matrix work (2231) remain
+  open.
 - The Android matrix (`assembleDebug`, `lintDebug`, any bridge cross-compile) is not in CI at all.
 
 ## Structural corrections to the old roadmap
@@ -135,7 +140,11 @@ Headline numbers, all verified first-hand on 2026-09-24:
   104 stream-kind `if/else` with persistent streams discarding their payload, 112 reply ids only for
   notifications, 116 remote errors only in the wake-relay shape, 124 idle timeout fixed at 45 s with
   no config knob, 133 loss hook ignores its argument, 138 dropped packets counted but never exported,
-  146-149 input/control/file/audio each get a stream but no priority mechanism, 156 one unbounded
+  146-149 input/control/file/audio each get a stream and quinn's `set_priority` is called on it, but
+  the priority does not bound anything under loss (measured 2026-09-24, `video_flood_test` routed
+  through the chaos proxy for real: 50/50 urgent packets delivered at 10% datagram loss, avg latency
+  2.2-3.8 s and max 6.3 s against the "sub-300 ms" contract, versus 12-89 ms at 0% loss — the flood
+  there is raw quinn streams, so the production `streamer.rs` path is still unmeasured), 156 one unbounded
   `read_to_end` (`transport.rs:563`), 168 migration left entirely to quinn defaults, 169/173/174/175
   reconnect loops that restore nothing but the socket, 176 relay-vs-direct chosen by iroh with the
   app only latching a boolean, 186 a 3 s UI cooldown standing in for hysteresis, 200 a single
@@ -682,22 +691,26 @@ false-positive for any future audit)
 - 2100 give the reconnect path a visible countdown and reason.
 
 **Harness and repository defects**
-- 2101 make `core/tests/chaos_integration.rs` allocate its own ports — it hardcodes `127.0.0.1:4716/4717`
-  and fails `AddrInUse` against the running user service, so a passing suite and a green host are
-  mutually exclusive today.
-- 2102 restore a green `cargo fmt --all -- --check` on `main` (red for five pushes; the working tree
-  already carries the fixes).
-- 2103 clear or annotate the seven pre-existing clippy findings in `capture.rs` / `capture_x11.rs` /
-  `streamer.rs` that block `-D warnings`.
+- 2101 **LANDED 2026-09-24** make `core/tests/chaos_integration.rs` allocate its own ports — it hardcoded
+  `127.0.0.1:4716/4717` and failed `AddrInUse` against the running user service, so a passing suite and a
+  green host were mutually exclusive. `ChaosProxy::new` now binds and exposes `local_addr()`, and the proxy
+  counts forwarded/dropped so the suite asserts an exact invariant instead of inferring chaos from a
+  100-packet sample (that inference failed 2.65% of the time on its own RNG).
+- 2102 **LANDED 2026-09-24** restore a green `cargo fmt --all -- --check` on `main` (red for six pushes).
+  Local `main` only — CI stays red until the work is pushed.
+- 2103 **LANDED 2026-09-24** the seven clippy findings in `capture.rs` / `capture_x11.rs` / `streamer.rs`
+  are fixed, and with them the ~20 behind them that the build stop was hiding; `cargo clippy --workspace
+  --all-targets -- -D warnings` now passes, as do the `client`, `client,wan`, `wan` and `encode` profiles.
 - 2104 make `cargo audit` fatal in `release.yml` (`|| echo` currently neuters it).
-- 2105 run the ten `#[ignore]`d tests somewhere they can fail — right now they are documentation.
+- 2105 run the thirteen `#[ignore]`d tests somewhere they can fail — right now they are documentation.
 - 2106 stop the `wan` feature from rotting: compile it in CI (`cargo check -p linux-link-core --features
   wan`, and the bridge's `client,wan`).
 - 2107 replace the "Release Ready" badge and `Phase 6 Complete` framing with measured status.
 - 2108 purge the Flutter-era documents (`FIX_PLAN.md`, `ARCHITECTURE.html`, `CHANGELOG.md`) or the sections
   of them that contradict the Kotlin client — they are actively misleading to any reader or agent.
 - 2109 publish a GitHub Release for `v0.1.0` (the tag exists, `gh release list` is empty).
-- 2110 drop the stale "`~35` files not rustfmt-clean" gotcha from AGENTS.md once 2102 lands.
+- 2110 **LANDED 2026-09-24** the stale "`~35` files not rustfmt-clean" gotcha is out of AGENTS.md, which
+  now states the opposite obligation: fmt and `-D warnings` are green, so they must stay green.
 - 2111 pin the JNI export count to reality with a test instead of a prose number that drifts (docs variously
   say 54/57/58).
 - 2112 give session telemetry a failure-reason taxonomy — `SessionOutcome` today cannot answer "why did
