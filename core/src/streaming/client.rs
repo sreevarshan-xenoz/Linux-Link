@@ -522,6 +522,39 @@ impl StreamingClient {
     }
 }
 
+/// Outcome of handing one audio packet to the consumer.
+#[derive(Debug, PartialEq, Eq)]
+enum AudioDelivery {
+    Queued,
+    /// The queue was full, so this packet was not queued.
+    Dropped,
+    /// Nothing is receiving audio any more.
+    NoConsumer,
+}
+
+/// Queue one audio packet without ever making the caller wait for it.
+///
+/// Video and audio share this one demux loop, and the loop is the only thing
+/// reading the connection: if it stops for audio, the *picture* stops too. That
+/// is not hypothetical — a client whose audio consumer is not polling (today's
+/// Android app: `nativeReceiveAudio` has no caller, because the phone has no
+/// Opus playout path) fills the 8-slot queue 160 ms into a session and the
+/// `await`-ing send then wedges video behind it. On a desktop with no PipeWire
+/// loopback the server streams synthesized silence at 50 packets/s, so the
+/// stall is not even rare: it happens on any session that has audio to speak of.
+///
+/// So audio is offered, never insisted on. A full queue means the consumer is
+/// at least 160 ms behind and this packet is already too late to be worth
+/// bumping an older one out of; a closed receiver ends the *audio* path and
+/// nothing else.
+fn try_deliver_audio(tx: &mpsc::Sender<AudioPacket>, packet: AudioPacket) -> AudioDelivery {
+    match tx.try_send(packet) {
+        Ok(()) => AudioDelivery::Queued,
+        Err(mpsc::error::TrySendError::Full(_)) => AudioDelivery::Dropped,
+        Err(mpsc::error::TrySendError::Closed(_)) => AudioDelivery::NoConsumer,
+    }
+}
+
 /// Receive packets with cancellation support — demuxes video and audio streams.
 ///
 /// Reads packet headers and routes to the appropriate channel based on `stream_kind`:
@@ -545,6 +578,9 @@ async fn recv_with_cancel(
     let mut last_video_seq: Option<u64> = None;
     let mut last_idr_request: Option<std::time::Instant> = None;
     const IDR_REQUEST_INTERVAL: Duration = Duration::from_millis(250);
+
+    let mut audio_dropped = 0u64;
+    let mut audio_consumer_gone = false;
 
     loop {
         tokio::select! {
@@ -588,7 +624,7 @@ async fn recv_with_cancel(
                         };
 
                         if header.stream_kind == transport::STREAM_KIND_AUDIO {
-                            // Route to audio channel
+                            // Offered, never insisted on: see `try_deliver_audio`.
                             let packet = AudioPacket {
                                 data,
                                 sequence: header.sequence,
@@ -596,9 +632,25 @@ async fn recv_with_cancel(
                                 is_config: false,
                             };
 
-                            if audio_tx.send(packet).await.is_err() {
-                                debug!("Audio receiver dropped — channel closed");
-                                break;
+                            match try_deliver_audio(&audio_tx, packet) {
+                                AudioDelivery::Queued => {}
+                                AudioDelivery::Dropped => {
+                                    audio_dropped += 1;
+                                    if audio_dropped.is_multiple_of(100) {
+                                        debug!(
+                                            dropped = audio_dropped,
+                                            "Audio consumer behind — packets skipped"
+                                        );
+                                    }
+                                }
+                                AudioDelivery::NoConsumer => {
+                                    if !audio_consumer_gone {
+                                        audio_consumer_gone = true;
+                                        info!(
+                                            "Audio consumer gone — audio skipped, video continues"
+                                        );
+                                    }
+                                }
                             }
                         } else {
                             // Gap detection: a missing frame between the last
@@ -770,6 +822,53 @@ async fn send_stats_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn audio_packet(sequence: u64) -> AudioPacket {
+        AudioPacket {
+            data: vec![0xf8],
+            sequence,
+            timestamp: std::time::Instant::now(),
+            is_config: false,
+        }
+    }
+
+    #[test]
+    fn a_full_audio_queue_is_a_drop_not_a_wait() {
+        // The demux loop shares its progress with video, so nothing on the
+        // audio side may block: a full queue means this packet is skipped and
+        // the older ones stay queued for whoever finally reads them.
+        let (tx, mut rx) = mpsc::channel(2);
+        assert_eq!(
+            try_deliver_audio(&tx, audio_packet(0)),
+            AudioDelivery::Queued
+        );
+        assert_eq!(
+            try_deliver_audio(&tx, audio_packet(1)),
+            AudioDelivery::Queued
+        );
+        assert_eq!(
+            try_deliver_audio(&tx, audio_packet(2)),
+            AudioDelivery::Dropped,
+            "the third packet must return immediately, not wait for a consumer"
+        );
+        assert_eq!(rx.try_recv().ok().map(|p| p.sequence), Some(0));
+        assert_eq!(rx.try_recv().ok().map(|p| p.sequence), Some(1));
+        assert!(
+            rx.try_recv().is_err(),
+            "the skipped packet is gone for good, not queued behind the others"
+        );
+    }
+
+    #[test]
+    fn a_gone_audio_consumer_ends_audio_not_the_session() {
+        let (tx, rx) = mpsc::channel(1);
+        drop(rx);
+        assert_eq!(
+            try_deliver_audio(&tx, audio_packet(0)),
+            AudioDelivery::NoConsumer,
+            "no listener is a reason to stop sending audio, not to stop the link"
+        );
+    }
 
     #[test]
     fn e2e_sample_math() {

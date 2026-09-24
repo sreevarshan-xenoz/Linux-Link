@@ -647,6 +647,15 @@ each item is a live defect with a known location, not a wish.
   stays open as the refinement, and it should be done *in* this arbiter.
 - 2054 stop presenting desktop audio as available: the phone has no player (`receiveAudio` has no caller),
   so either build the playout path (2791-2800) or drop it from the advertised capability set.
+  **Hazard found while verifying this, fixed 2026-09-24:** the unconsumed audio queue was not merely idle.
+  The client's one demux loop handed every audio packet to an 8-slot channel with `send().await`, so a
+  consumer that never polls (the Android app today) fills it 160 ms in and then **stalls video behind it** —
+  and because the desktop-side audio task falls back to streaming synthesized silence when PipeWire capture
+  is unavailable, that was not a rare interleaving but the normal shape of a session on such a machine. A
+  closed audio receiver also `break`s the loop, tearing the whole session down for an audio-only teardown.
+  Audio is now offered, never insisted on (`try_deliver_audio`: skip when full, log once when the consumer
+  is gone, video unaffected), proven by two unit tests. Still open in this item: the silence stream itself,
+  and the capability row that presents `desktop -> phone` as a live direction.
 - 2055 report e2e latency as a distribution sample stream rather than one EWMA scalar so a p95 regression
   is visible at all (pairs with 2141-2146).
 - 2056 expose goodput/RTT with their confidence and sample count, not as bare numbers the HUD cannot
