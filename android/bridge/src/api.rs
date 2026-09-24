@@ -2606,7 +2606,7 @@ fn android_to_evdev_keycode(android_keycode: i32) -> u16 {
         23 => 28,   // DPAD_CENTER -> KEY_ENTER
         24 => 115,  // VOLUME_UP
         25 => 114,  // VOLUME_DOWN
-        82 => 139,  // MENU -> KEY_COMPOSE
+        82 => 139,  // MENU -> KEY_MENU (the application-keys key; KEY_COMPOSE is 127)
         85 => 164,  // MEDIA_PLAY_PAUSE
         87 => 163,  // MEDIA_NEXT
         88 => 165,  // MEDIA_PREVIOUS
@@ -2725,7 +2725,26 @@ mod keymap_tests {
         assert_eq!(k(131), 59); // F1
         assert_eq!(k(140), 68); // F10 — where evdev stops being contiguous
         assert_eq!(k(141), 87, "F11 is not KEY_NUMLOCK");
-        assert_eq!(k(142), 88, "F12 is not KEY_F1");
+        assert_eq!(k(142), 88, "F12 is not KEY_SCROLLLOCK");
+    }
+
+    /// The client half of the key contract in `core::input::keys`: whatever this
+    /// table produces must be inside the set the server is required to cover,
+    /// and the set must not claim keys this table cannot produce. A new row here
+    /// without a mapping there (or vice versa) fails a test instead of arriving
+    /// on a desktop as a dead key.
+    #[test]
+    fn emitted_codes_are_exactly_the_contracted_set() {
+        let mut emitted: Vec<u16> = (0..1000)
+            .map(k)
+            .filter(|&code| code != 0) // KEY_RESERVED: an unknown Android key, ignored
+            .collect();
+        emitted.sort_unstable();
+        emitted.dedup();
+        assert_eq!(
+            emitted,
+            linux_link_core::input::keys::phone_emittable_codes()
+        );
     }
 
     #[test]
