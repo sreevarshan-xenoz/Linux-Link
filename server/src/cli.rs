@@ -29,6 +29,44 @@ pub enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Run the pinned encoder benchmark on this machine and, given a baseline,
+    /// gate on it (roadmap 2195-2200). Exit codes: 0 pass, 1 regression,
+    /// 2 bad arguments, 3 no comparable baseline, 4 could not measure.
+    Bench {
+        /// Encoder rung to measure. Deliberately not "auto": a baseline whose
+        /// backend was decided by probe order cannot be compared after a driver
+        /// update.
+        #[arg(long, default_value = "software")]
+        target: String,
+        /// Frames to encode; the first 30 are discarded as warm-up
+        #[arg(
+            long,
+            default_value_t = linux_link_core::streaming::bench::DEFAULT_FRAMES
+        )]
+        frames: u32,
+        /// Repeat the clip and keep the fastest run: other work on the machine
+        /// can only make an encode slower, so a busy desktop still records a
+        /// usable baseline. 1 is fine on an idle CI runner.
+        #[arg(long, default_value_t = 3)]
+        repeat: u32,
+        /// Emit the record as JSON on stdout
+        #[arg(long)]
+        json: bool,
+        /// Write the record here. A file is written as given; a directory (or a
+        /// path with no extension) gets one file named after backend + host
+        #[arg(long, value_name = "PATH")]
+        record: Option<std::path::PathBuf>,
+        /// Baseline record to compare against: a file, or a directory of records
+        /// matched by host
+        #[arg(long, value_name = "PATH")]
+        baseline: Option<std::path::PathBuf>,
+        /// How much a percentile may grow before it counts as a regression.
+        /// Records are whole milliseconds, so the allowance has to be wide
+        /// enough that a one-millisecond rounding at the median is not a red
+        /// build; measured run-to-run noise on this workload is <=1 ms.
+        #[arg(long, default_value_t = 50)]
+        tolerance_pct: u64,
+    },
     /// List peers currently visible on the tailnet
     List,
     /// Continuously watch peer discovery events

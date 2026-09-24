@@ -40,6 +40,27 @@ async fn main() -> Result<()> {
         cli::Commands::Stop => service::stop().await,
         cli::Commands::Status => service::print_status().await,
         cli::Commands::Sessions { count, json } => session_telemetry::print_sessions(count, json),
+        cli::Commands::Bench {
+            target,
+            frames,
+            repeat,
+            json,
+            record,
+            baseline,
+            tolerance_pct,
+        } => {
+            // The exit code is the contract a CI job reads, so it is the only
+            // place in this binary that ends the process directly.
+            std::process::exit(bench::run(
+                &target,
+                frames,
+                repeat,
+                json,
+                record,
+                baseline,
+                tolerance_pct,
+            ))
+        }
         cli::Commands::List => service::list_peers().await,
         cli::Commands::Watch { interval } => service::watch_peers(interval).await,
         cli::Commands::Capabilities { json, markdown } => {

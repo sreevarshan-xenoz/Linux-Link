@@ -100,9 +100,24 @@ Work in this order:
    round-trip (2141-2146), emitted into a per-session record (2167) and retained for comparison (2168).
    This is the highest-leverage hundred ids in the document: without a p99 there is no way to see a
    regression that hurts 5 % of frames, which is exactly the class of bug this project keeps shipping.
+   **Partly landed 2026-09-24** (`5e442e9`, `b3deb18`, `d8b3750`): `core::metrics::Samples` is a bounded
+   reservoir (exact percentiles below capacity, Algorithm R above it, count/max always exact) and every
+   streaming session now carries `encode` and `rtt` distributions into a retained JSONL record that
+   `linux-link sessions --json` prints one object per session. **Still open: decode and render percentiles,
+   which are phone-side** — they need a client→server stats reply before they can join a server-written
+   record, and nothing pretends otherwise in the meantime.
 4. **A pinned benchmark workload plus a committed baseline.** One clip, one desktop state, one link
    condition, run in CI where the hardware allows and skipped-with-reason where it does not; a regression
    is a p95 delta beyond a stated threshold failing the job (2195-2200, with the CI half in 2231-2250).
+   **Landed 2026-09-24 for the encode half**: `core::streaming::bench` generates the clip (a pure function
+   of frame index — static gradient plus a moving block, so the encoder cannot coast on zero-residual skip
+   blocks), `linux-link bench --baseline bench/baselines` grades a run against a committed record and exits
+   0/1/3 for pass/regression/not-comparable, and the CI `bench` job turns red only on a real tail move. Two
+   baselines are committed from this box (`in-process` p50 7 ms, `in-process-vaapi` p50 4 ms at 720p/5 Mbit).
+   **Honest scope:** "one clip" is now true; "one desktop state, one link condition" is not — that half
+   needs a live client and a link impairor, which is an on-device run, not a CI step. And a hosted runner
+   has no baseline of its own yet, so its first real outcome is `SKIP` naming its host until someone commits
+   the artifact the job uploads.
 5. **Transport exposure, not transport implementation.** Surface what quinn and iroh already know
    (2151-2170) instead of the old roadmap's plan to "implement" congestion control and path-MTU, which are
    library internals with no application surface.

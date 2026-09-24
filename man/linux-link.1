@@ -26,6 +26,26 @@ Show recorded streaming\-session outcomes (default: last 10); with
 emit the retained per\-session records as JSON lines (one object per session,
 including the p50/p90/p95/p99/max tails) instead of the human tally
 .TP
+.B bench [\-\-target software|vaapi] [\-\-frames \fIN\fR] [\-\-repeat \fIN\fR] [\-\-baseline \fIPATH\fR] [\-\-record \fIPATH\fR] [\-\-tolerance-pct \fIPCT\fR] [\-\-json]
+Run the pinned encoder benchmark on this machine: the same generated 720p clip,
+the same bitrate and preset every time, reported as per\-frame encode percentiles
+(p50/p90/p95/p99/max). With
+.BR \-\-baseline ,
+grade the run against a committed record \(em a file, or a directory of records
+matched by host and backend \(em and exit
+.B 1
+if a percentile grew beyond
+.BR \-\-tolerance-pct .
+Exit
+.B 3
+means no baseline matches this machine, which is reported as a skip rather than
+a pass: encode throughput does not travel between CPUs.
+.B \-\-record
+writes the measured record out, naming it after backend + host when given a
+directory. See
+.I bench/README.md
+in the source tree.
+.TP
 .B list
 List peers currently visible on the tailnet
 .TP
@@ -79,7 +99,7 @@ flags are listed with each command above.
 Configuration file
 .TP
 .I ~/.local/state/linux-link/streaming_sessions.log
-Session outcome log, tab\-separated Ikey=valueR lines, rotated at 1 MiB
+Session outcome log, tab\-separated \fIkey=value\fR lines, rotated at 1 MiB
 .TP
 .I ~/.local/state/linux-link/streaming_sessions.jsonl
 The same reports as one JSON object per session \- the record a benchmark

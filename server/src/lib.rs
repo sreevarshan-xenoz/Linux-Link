@@ -3,6 +3,7 @@
 //! Re-exports for integration testing. The `main.rs` binary uses these same modules.
 
 pub mod audio_control;
+pub mod bench;
 pub mod cli;
 pub mod config;
 pub mod hypr_events;

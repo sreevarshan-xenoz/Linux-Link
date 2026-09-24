@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "unix_secs": 1790251344,
+  "backend": "in-process-vaapi",
+  "width": 1280,
+  "height": 720,
+  "fps": 30,
+  "bitrate_bps": 5000000,
+  "preset": "veryfast",
+  "codec": "h264",
+  "frames": 300,
+  "warmup": 30,
+  "host": "Intel(R) Core(TM) i5-1035G1 CPU @ 1.00GHz / 7.2.5-3-omarchy",
+  "encode_ms": {
+    "count": 270,
+    "mean_ms": 4,
+    "p50_ms": 4,
+    "p90_ms": 5,
+    "p95_ms": 5,
+    "p99_ms": 6,
+    "max_ms": 8
+  },
+  "elapsed_ms": 1793,
+  "output_bytes": 6229422,
+  "keyframes": 5,
+  "frames_without_packet": 1
+}

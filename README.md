@@ -122,6 +122,7 @@ curl -fsSL https://raw.githubusercontent.com/sreevarshan-xenoz/Linux-Link/main/s
 ```bash
 linux-link status             # Tailscale status of this machine
 linux-link sessions           # Recent streaming-session outcomes
+linux-link bench --baseline bench/baselines   # Encode tail vs the committed baseline
 linux-link capabilities       # KDE Connect capability sets in use
 linux-link pair --grant 15m   # Time-boxed one-off support PIN
 linux-link kick <id|prefix|peer-ip|all>   # Drop a live session
@@ -232,6 +233,7 @@ lingering first: `sudo loginctl enable-linger $USER`.
 | `linux-link pair [pin] [--grant 15m]` | Print a 5-minute pairing PIN for the phone (generate or set); `--grant` time-boxes the trust pairing stores (`s/m/h/d`, e.g. `45s`, `15m`, `2h`, `1h30m`) for one-off support sessions |
 | `linux-link unpair [device-id]` | Remove a paired device from the trust store (all if omitted) |
 | `linux-link sessions [--count N] [--json]` | Show recorded streaming-session outcomes (LAN/WAN-punched/WAN-relayed tally + recent log tail); `--json` emits the retained per-session records as JSON lines for tooling and benchmark comparison |
+| `linux-link bench [--target software\|vaapi] [--baseline PATH] [--record PATH]` | Run the pinned 720p encode clip on this machine; with `--baseline`, exit non-zero if a percentile regressed past `--tolerance-pct` (exit 3 means no baseline matches this host, which is a skip, not a pass) |
 | `linux-link capabilities [--json\|--markdown]` | Show the negotiated protocol versions, transports, capture backends and codecs this build actually speaks, plus its KDE Connect capability sets |
 | `linux-link kick <id\|prefix\|peer-ip\|all>` | Drop a live streaming session (R4 D2) |
 
@@ -256,6 +258,29 @@ linux-link capabilities --markdown   # the source of docs/capabilities.md
 [`docs/capabilities.md`](docs/capabilities.md) is that Markdown output, committed,
 and `server/tests/capabilities_doc.rs` fails when it stops matching the build —
 regenerate it in the same commit as the constant you changed.
+
+### The Encoder Benchmark Is Pinned, Not Improvised
+
+`linux-link bench` exists because "it felt laggy today" is not a regression test. It encodes
+one generated 720p clip — 300 frames, 5 Mbit/s, veryfast, H.264 — and reports the per-frame
+encode distribution (`p50/p90/p95/p99/max`). The clip is a pure function of its frame index
+(`scene_frame`), so the workload is byte-identical between runs without committing a gigabyte
+of raw frames, and it mixes a static gradient with a moving block so the encoder cannot coast
+on zero-residual skip blocks and measure nothing.
+
+```bash
+linux-link bench --target vaapi --repeat 5           # measure this machine
+linux-link bench --baseline bench/baselines          # grade against a committed record
+linux-link bench --record bench/baselines            # add this machine's record
+```
+
+A baseline is only comparable to a run on the same host, backend, geometry, bitrate, preset
+and codec — anything else is reported as `SKIP` (exit 3), never as a pass, because encode
+throughput does not travel between CPUs. `--repeat N` keeps the fastest run: other work on the
+machine can only make an encode slower, and on a desktop with a load average near 6 the best of
+seven runs reproduced the quiet-machine number (p50 7 ms) while a single run reported 11 ms.
+Encode time is the half this measures; decode and render live on the phone. CI runs the same
+command on every push — see [`bench/README.md`](bench/README.md).
 
 ### Man Page
 
