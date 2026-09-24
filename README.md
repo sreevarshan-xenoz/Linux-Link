@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT%2FApache--2.0-blue)](LICENSE)
 [![CI](https://github.com/sreevarshan-xenoz/Linux-Link/actions/workflows/ci.yml/badge.svg)](https://github.com/sreevarshan-xenoz/Linux-Link/actions)
 [![Issues](https://img.shields.io/github/issues/sreevarshan-xenoz/Linux-Link)](https://github.com/sreevarshan-xenoz/Linux-Link/issues)
-[![Phase](https://img.shields.io/badge/Phase-6%20Complete%20--%20Release%20Ready-brightgreen)](plan.md)
+[![Status](https://img.shields.io/badge/status-beta%20-%20feature%20complete%2C%20gates%20not%20green-orange)](#roadmap)
 
 > **Target:** Sub-100ms latency screen streaming + KDE Connect integration + zero-config Tailscale connectivity
 
@@ -120,11 +120,21 @@ curl -fsSL https://raw.githubusercontent.com/sreevarshan-xenoz/Linux-Link/main/s
 **Management commands** (after install):
 
 ```bash
-linux-link --status           # Show installed version and config
-linux-link --check-updates    # Check for available updates
-linux-link --list-versions    # List all available releases
-linux-link --rollback         # Roll back to previous version
-linux-link --uninstall        # Remove installation
+linux-link status             # Tailscale status of this machine
+linux-link sessions           # Recent streaming-session outcomes
+linux-link capabilities       # KDE Connect capability sets in use
+linux-link pair --grant 15m   # Time-boxed one-off support PIN
+linux-link kick <id|prefix|peer-ip|all>   # Drop a live session
+```
+
+The update/rollback/uninstall verbs belong to the install script, not the binary:
+
+```bash
+./scripts/install.sh --status           # Installation info (prefix, version, service)
+./scripts/install.sh --check-updates    # Compare installed version with GitHub
+./scripts/install.sh --list-versions    # List published releases
+./scripts/install.sh --rollback         # Return to the previously installed version
+./scripts/install.sh --uninstall        # Remove the installation
 ```
 
 ### Build from Source
@@ -167,10 +177,11 @@ linux-link start
 
 # Or with cargo
 cargo run --release --bin linux-link -- start
-
-# With custom config
-linux-link --config ~/.config/linux-link/config.toml start
 ```
+
+There is no `--config` flag: the server reads `$XDG_CONFIG_HOME/linux-link/config.toml`
+(default `~/.config/linux-link/config.toml`) if present, and falls back to built-in defaults.
+`-v`/`--verbose` and `RUST_LOG` control logging.
 
 ### Configuration
 
@@ -344,14 +355,22 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for full guidelines.
 
 ## Roadmap
 
-All 6 phases are **complete**. Remaining items are environmental:
+All 6 development phases and the RustDesk research round (R4) have landed in code: the native
+Kotlin client, the Rust↔JNI bridge, MediaCodec decode, and the streaming/transport/security stack
+are in `main`, and `v0.1.0` is tagged and pushed.
 
-- [ ] Native Kotlin client: Rust↔JNI bridge + MediaCodec decode
-- [ ] `assembleDebug` verification (requires Android SDK on CI machine)
-- [ ] E2E testing on live Hyprland + PipeWire + Tailscale setup
-- [ ] First release tag (`v0.1.0`) pushed to GitHub
+What is *not* done is verification and hardening, so treat this as beta rather than a release:
 
-See [plan.md](plan.md) for the full development plan.
+- [ ] Green CI on `main` (`cargo fmt --all -- --check` currently fails at the first gate)
+- [ ] On-device verification for the large majority of shipped Android features (see
+      [docs/device-verification-checklist.md](docs/device-verification-checklist.md))
+- [ ] Cross-network (cellular ↔ LAN) WAN test over iroh; the Tailscale path is device-verified
+- [ ] A GitHub Release with artifacts (`v0.1.0` is a tag only)
+
+The full backlog, with every item's verified status against this tree, is
+[docs/roadmap-3000.md](docs/roadmap-3000.md); how that backlog gets executed is
+[docs/roadmap-execution-plan.md](docs/roadmap-execution-plan.md). See [plan.md](plan.md) for the
+development journal.
 
 ---
 
