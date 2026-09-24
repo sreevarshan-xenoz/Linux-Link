@@ -121,6 +121,27 @@ Work in this order:
 5. **Transport exposure, not transport implementation.** Surface what quinn and iroh already know
    (2151-2170) instead of the old roadmap's plan to "implement" congestion control and path-MTU, which are
    library internals with no application surface.
+   **Landed 2026-09-24 for the statistics that exist.** `ConnectionStats` now carries what the connection
+   reports — cumulative lost packets/bytes, datagrams and bytes moved, and on quinn the congestion-event
+   count, congestion window, discovered path MTU and black-hole count — and the session recorder turns
+   that into a `LinkReport` in every record: peak window rather than last (a window that collapsed and is
+   still recovering must not read as uncongested), the number of times the selected path's address changed
+   (2155), and wall-clock seconds spent riding a relay (2157's "for how long"). The two halves of the old
+   plan are resolved the way the libraries allow: path-MTU is already discovered by both stacks and is now
+   reported (2151's "where exposed"), and the congestion controller is a `TransportConfig` field
+   (quinn's default is CUBIC) — switching it is one line of configuration, not an implementation, and is
+   deliberately not switched here because there is no measurement yet saying which tail it would move.
+   iroh's connection-level statistics sum bytes across paths and drop the per-path values outright, and the
+   per-path accessor is not re-exported, so those four fields are **absent** on a WAN record instead of
+   zero — the omission is asserted by a test in each family.
+   **Open, with the reason:** 2152 (per-channel stream backlog — nothing counts it today), 2153 (datagram
+   queue state, gated on the datagram path in 2491 not existing), 2154's per-path split (one path is all
+   either library exposes to us), 2156 (neither reports connection-ID rotation), 2158 (the direct-vs-relay
+   delta is now computable from the records, but nothing computes it), 2159 (a failed session is still one
+   bucket, not attributed to a layer), 2160 (no live `stats --json`; the counters are historical), 2162
+   (the session record has no schema version, unlike the benchmark record, so a shape change is not yet
+   detectable in retained history), and 2170 (the phone cannot reach any of this — it needs the same
+   client→server stats reply that decode percentiles need in step 3).
 
 Exit gate:
 

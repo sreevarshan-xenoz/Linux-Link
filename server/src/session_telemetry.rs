@@ -2,7 +2,8 @@
 //!
 //! Registers a sink with `core`'s session recorder so every streaming
 //! pipeline run appends one outcome line (LAN / WAN punched / WAN relayed /
-//! rejected / failed, with duration, mean RTT and wire goodput) to a
+//! rejected / failed, with duration, mean RTT, wire goodput and the transport's
+//! own account of loss, congestion window, path MTU and path changes) to a
 //! size-capped log under the state dir. The production counterpart of the
 //! research finding that hole punching succeeds ~70% of the time even after
 //! prerequisites — the relayed share is a number we must measure, not
@@ -185,6 +186,20 @@ pub fn print_sessions(count: usize, json: bool) -> Result<()> {
             all.len(),
             100.0 * relayed as f64 / all.len() as f64
         );
+        // A session whose path moved address is a migration or a relay giving
+        // way to a punched direct path. Counted from the transport's own
+        // report, so a moved path is never inferred from a log gap.
+        let moved = all
+            .iter()
+            .filter(|line| {
+                line.split('\t')
+                    .find_map(|field| field.strip_prefix("path_chg="))
+                    .is_some_and(|value| value != "0")
+            })
+            .count() as u64;
+        if moved > 0 {
+            println!("paths moved mid-session: {moved} of {}", all.len());
+        }
     }
     println!("last {}:", count);
     for line in &lines {
@@ -218,6 +233,7 @@ mod tests {
             device_id: Some("pixel-9".into()),
             rtt_tail: None,
             encode_tail: None,
+            link: None,
         }
     }
 
@@ -311,6 +327,48 @@ mod tests {
         assert!(records.iter().all(|r| r["i"].is_number()));
         let newest = records.last().unwrap()["i"].as_u64().unwrap();
         assert_eq!(newest, 199, "rotation must keep the tail, not the head");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_link_record_keeps_absent_and_zero_apart_in_both_stores() {
+        let dir = std::env::temp_dir().join(format!("ll-link-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("streaming_sessions.jsonl");
+
+        let mut report = report("wan_punched");
+        report.link = Some(linux_link_core::streaming::LinkReport {
+            lost_packets: 12,
+            lost_bytes: 4096,
+            datagrams_sent: 9_000,
+            bytes_sent: 5_000_000,
+            path_changes: 1,
+            relayed_secs: 4,
+            // iroh reports none of these; a `0` would read as an uncongested
+            // path and a missing key reads as unmeasured.
+            congestion_events: None,
+            peak_cwnd_bytes: None,
+            path_mtu: None,
+            black_holes_detected: None,
+        });
+        append(
+            path.clone(),
+            serde_json::to_string(&report).unwrap(),
+            MAX_RECORD_BYTES,
+        )
+        .unwrap();
+
+        let line = report.format();
+        assert!(line.contains("path_chg=1"), "{line}");
+        assert!(line.contains("relayed_s=4"), "{line}");
+        assert!(line.contains("lost_pk=12"), "{line}");
+        assert!(!line.contains("mtu="), "{line}");
+
+        let records = read_records_from(&path, 10).unwrap();
+        let link = &records[0]["link"];
+        assert_eq!(link["path_changes"], 1);
+        assert_eq!(link["relayed_secs"], 4);
+        assert!(link["path_mtu"].is_null(), "{link}");
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -61,7 +61,8 @@ pub use input_packet::InputPacket;
 pub use iroh_connection::{IrohConnection, IrohDial};
 pub use session::{SessionType, detect_session_type};
 pub use session_telemetry::{
-    SessionGuard, SessionOutcome, SessionRecorder, SessionReport, set_session_telemetry_callback,
+    LinkReport, SessionGuard, SessionOutcome, SessionRecorder, SessionReport,
+    set_session_telemetry_callback,
 };
 #[cfg(feature = "server")]
 pub use streamer::StreamingServer;

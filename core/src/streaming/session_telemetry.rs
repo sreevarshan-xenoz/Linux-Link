@@ -10,14 +10,22 @@
 //! Wire-level goodput (bytes the transport actually pushed) is logged, not
 //! encoder output: backlog trims make those numbers differ, and the transport
 //! number is what the user experiences.
+//!
+//! A record also carries what the transport itself reported — loss, the widest
+//! congestion window, the path MTU, how many times the selected path moved, and
+//! how long a relay it rode — because "that session was slow" only becomes
+//! actionable once it can be blamed on a layer. Those are the library's numbers,
+//! and where iroh does not expose one it is absent from the line rather than
+//! reported as zero.
 
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::metrics::{Samples, Summary};
 
-use super::connection::{SharedConnection, TransportFamily};
+use super::connection::{ConnectionStats, SharedConnection, TransportFamily};
 
 /// Terminal classification of one streaming session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -72,6 +80,99 @@ pub struct SessionReport {
     pub rtt_tail: Option<Summary>,
     /// Per-frame encode time distribution, or `None` when no frame was encoded.
     pub encode_tail: Option<Summary>,
+    /// What the transport itself said about the link, or `None` for a session
+    /// that never got far enough to sample one.
+    pub link: Option<LinkReport>,
+}
+
+/// The transport's own account of a session's link, read from quinn or iroh
+/// rather than measured by us.
+///
+/// This exists so "it was slow" can be settled after the fact: an encode tail
+/// that moved with a congestion window that closed is a bandwidth problem, and
+/// one that moved with an untouched window is not. The `Option` fields are
+/// `None` on a WAN session because iroh's connection-level statistics sum the
+/// byte counters across paths and drop the per-path ones outright — see
+/// [`ConnectionStats`]. A key that is `None` is omitted from the log line
+/// entirely, so `key=0` always means "measured zero" and a missing key always
+/// means "nobody looked".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct LinkReport {
+    /// Packets and bytes the transport declared lost over the whole connection.
+    pub lost_packets: u64,
+    pub lost_bytes: u64,
+    /// Datagram and byte totals the transport moved, which is what the link
+    /// actually carried (headers, probes and retransmits included) rather than
+    /// what the encoder handed it.
+    pub datagrams_sent: u64,
+    pub bytes_sent: u64,
+    /// Times the selected path's peer address changed mid-session: a QUIC
+    /// migration, or an iroh relay path giving way to a punched direct one.
+    pub path_changes: u32,
+    /// Seconds spent riding a relay, from the wall clock between observations.
+    /// Bounded by the sampling interval on one sample's worth of slop; a
+    /// session that never sampled reports no link at all rather than zero.
+    pub relayed_secs: u64,
+    pub congestion_events: Option<u64>,
+    /// Widest congestion window seen, not the last one: the window collapses on
+    /// loss and creeps back, so the closing sample is the least informative.
+    /// `None` when the transport never reported one, which is not the same
+    /// claim as a window of zero bytes.
+    pub peak_cwnd_bytes: Option<u64>,
+    /// Largest UDP payload the path was found to carry.
+    pub path_mtu: Option<u16>,
+    pub black_holes_detected: Option<u64>,
+}
+
+impl LinkReport {
+    fn from_observed(
+        stats: &ConnectionStats,
+        peak_cwnd_bytes: Option<u64>,
+        relayed_secs: u64,
+        path_changes: u32,
+    ) -> Self {
+        Self {
+            lost_packets: stats.lost_packets,
+            lost_bytes: stats.lost_bytes,
+            datagrams_sent: stats.datagrams_sent,
+            bytes_sent: stats.bytes_sent,
+            path_changes,
+            relayed_secs,
+            congestion_events: stats.congestion_events,
+            peak_cwnd_bytes,
+            path_mtu: stats.path_mtu,
+            black_holes_detected: stats.black_holes_detected,
+        }
+    }
+
+    /// The `key=value` tail of one log line, tab-prefixed and empty when there
+    /// is nothing to say.
+    fn format(&self) -> String {
+        use std::fmt::Write as _;
+        let mut tail = String::with_capacity(96);
+        write!(
+            tail,
+            "\tlost_pk={}\tlost_b={}\tdgrams={}\ttx_b={}\tpath_chg={}\trelayed_s={}",
+            self.lost_packets,
+            self.lost_bytes,
+            self.datagrams_sent,
+            self.bytes_sent,
+            self.path_changes,
+            self.relayed_secs,
+        )
+        .expect("infallible");
+        for (key, value) in [
+            ("cong_ev", self.congestion_events.map(|v| v.to_string())),
+            ("cwnd_pk", self.peak_cwnd_bytes.map(|v| v.to_string())),
+            ("mtu", self.path_mtu.map(|v| v.to_string())),
+            ("black", self.black_holes_detected.map(|v| v.to_string())),
+        ] {
+            if let Some(value) = value {
+                write!(tail, "\t{key}={value}").expect("infallible");
+            }
+        }
+        tail
+    }
 }
 
 impl SessionReport {
@@ -96,6 +197,9 @@ impl SessionReport {
         if let Some(tail) = &self.encode_tail {
             write!(line, "\t{}", tail.format_tail("enc")).expect("infallible");
         }
+        if let Some(link) = &self.link {
+            write!(line, "{}", link.format()).expect("infallible");
+        }
         if let Some(id) = &self.device_id {
             // Defensive: ids are UTF-8 device names from the pairing layer.
             let id = id.replace(['\t', '\n'], " ");
@@ -106,6 +210,60 @@ impl SessionReport {
 }
 
 type Sink = std::sync::Arc<dyn Fn(&SessionReport) + Send + Sync + 'static>;
+
+/// The path history one session accumulated, kept off the hot atomics because
+/// it is touched once per sample and needs several values to agree. No
+/// `Debug`: the connection handle inside it is not printable, and the fields
+/// are all in the report.
+#[derive(Default)]
+struct PathObserver {
+    /// The connection last sampled, so teardown can take a final reading.
+    connection: Option<SharedConnection>,
+    last_stats: Option<ConnectionStats>,
+    last_address: Option<SocketAddr>,
+    /// When the current relay ride began, `None` while the path is direct.
+    relayed_since: Option<Instant>,
+    path_changes: u32,
+    relayed_us: u64,
+    peak_cwnd_bytes: Option<u64>,
+}
+
+impl PathObserver {
+    /// Fold one transport reading in. `at` is a parameter rather than
+    /// `Instant::now()` so the relay accounting can be tested on synthetic
+    /// timestamps instead of by sleeping.
+    fn observe(&mut self, stats: &ConnectionStats, address: SocketAddr, at: Instant) {
+        if self
+            .last_address
+            .is_some_and(|previous| previous != address)
+        {
+            self.path_changes += 1;
+        }
+        self.last_address = Some(address);
+
+        match (stats.relayed, self.relayed_since) {
+            (true, None) => self.relayed_since = Some(at),
+            (false, Some(since)) => {
+                self.relayed_us += at.saturating_duration_since(since).as_micros() as u64;
+                self.relayed_since = None;
+            }
+            _ => {}
+        }
+
+        if let Some(cwnd) = stats.cwnd_bytes {
+            self.peak_cwnd_bytes = Some(self.peak_cwnd_bytes.map_or(cwnd, |peak| peak.max(cwnd)));
+        }
+        self.last_stats = Some(*stats);
+    }
+
+    /// Close any relay ride still open at `at`, then report the total seconds.
+    fn relayed_secs(&mut self, at: Instant) -> u64 {
+        if let Some(since) = self.relayed_since.take() {
+            self.relayed_us += at.saturating_duration_since(since).as_micros() as u64;
+        }
+        self.relayed_us / 1_000_000
+    }
+}
 
 static SINK: OnceLock<Sink> = OnceLock::new();
 
@@ -134,6 +292,7 @@ pub struct SessionRecorder {
     rtt_samples: AtomicU64,
     rtt_tail: Samples,
     encode_tail: Samples,
+    observed: Mutex<PathObserver>,
     family: TransportFamily,
     device_id: Option<String>,
 }
@@ -147,6 +306,7 @@ impl SessionRecorder {
             rtt_samples: AtomicU64::new(0),
             rtt_tail: Samples::new(),
             encode_tail: Samples::new(),
+            observed: Mutex::new(PathObserver::default()),
             family,
             device_id,
         }
@@ -154,9 +314,14 @@ impl SessionRecorder {
 
     /// Observe the connection once. Call every few seconds from a pipeline
     /// task; sessions that never sample (immediate teardown) still log, with
-    /// zero-valued samples.
+    /// zero-valued samples and no link report.
     pub fn sample(&self, connection: &SharedConnection) {
+        // Read the transport outside the lock: `stats()` takes quinn's own
+        // connection lock, and a connection that is stalling on its way out
+        // must not be able to block whoever holds ours.
         let stats = connection.stats();
+        let address = connection.remote_address();
+        let now = Instant::now();
         if stats.relayed {
             self.ever_relayed.store(1, Ordering::Relaxed);
         }
@@ -164,12 +329,44 @@ impl SessionRecorder {
             .fetch_add(stats.rtt.as_micros() as u64, Ordering::Relaxed);
         self.rtt_samples.fetch_add(1, Ordering::Relaxed);
         self.rtt_tail.push_micros(stats.rtt.as_micros() as u64);
+        let mut observed = self.observed.lock().unwrap_or_else(|p| p.into_inner());
+        observed.connection = Some(connection.clone());
+        observed.observe(&stats, address, now);
     }
 
     /// Time one `encode_frame` call. Called per frame from the encode task, so
     /// it must stay cheap: a mutex over a bounded array, no allocation.
     pub fn record_encode(&self, elapsed: Duration) {
         self.encode_tail.push_micros(elapsed.as_micros() as u64);
+    }
+
+    /// The transport's account of the link, or `None` if it was never sampled.
+    ///
+    /// A session's last seconds are where a stall lives, and the pipeline only
+    /// polls every few of them, so the recorder re-reads the handle it holds
+    /// instead of reporting the link as it looked at the previous poll.
+    fn link_report(&self) -> Option<LinkReport> {
+        // Read the transport before taking the lock again, exactly as `sample`
+        // does: `stats()` reaches into quinn's own lock.
+        let connection = self
+            .observed
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .connection
+            .clone()?;
+        let stats = connection.stats();
+        let address = connection.remote_address();
+        let now = Instant::now();
+        let mut observed = self.observed.lock().unwrap_or_else(|p| p.into_inner());
+        observed.observe(&stats, address, now);
+        let relayed_secs = observed.relayed_secs(now);
+        let last = observed.last_stats?;
+        Some(LinkReport::from_observed(
+            &last,
+            observed.peak_cwnd_bytes,
+            relayed_secs,
+            observed.path_changes,
+        ))
     }
 
     pub fn finish(&self, outcome: SessionOutcome, bytes_sent: u64) -> SessionReport {
@@ -194,6 +391,7 @@ impl SessionRecorder {
             device_id: self.device_id.clone(),
             rtt_tail: self.rtt_tail.summary_ms(),
             encode_tail: self.encode_tail.summary_ms(),
+            link: self.link_report(),
         }
     }
 
@@ -291,6 +489,54 @@ fn info_line(report: &SessionReport) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::streaming::connection::{Connection, ConnectionError, InStream, OutStream};
+    use async_trait::async_trait;
+    use std::net::{IpAddr, Ipv4Addr};
+
+    /// A connection whose transport statistics the test drives by hand — the
+    /// only way to observe a relay ride, a path change and a closing congestion
+    /// window without renting a network.
+    struct FakeLink {
+        stats: Mutex<ConnectionStats>,
+        address: SocketAddr,
+    }
+
+    impl FakeLink {
+        fn set(&self, stats: ConnectionStats) {
+            *self.stats.lock().unwrap() = stats;
+        }
+    }
+
+    #[async_trait]
+    impl Connection for FakeLink {
+        async fn open_uni(&self) -> Result<Box<dyn OutStream>, ConnectionError> {
+            unimplemented!()
+        }
+        async fn accept_uni(&self) -> Result<Box<dyn InStream>, ConnectionError> {
+            unimplemented!()
+        }
+        fn remote_address(&self) -> SocketAddr {
+            self.address
+        }
+        fn stats(&self) -> ConnectionStats {
+            *self.stats.lock().unwrap()
+        }
+        fn transport_family(&self) -> TransportFamily {
+            TransportFamily::Iroh
+        }
+        fn close(&self, _code: u32, _reason: &[u8]) {}
+    }
+
+    fn addr(last: u8) -> SocketAddr {
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::new(100, 64, 0, last)), 4433)
+    }
+
+    fn relayed(stats: ConnectionStats) -> ConnectionStats {
+        ConnectionStats {
+            relayed: true,
+            ..stats
+        }
+    }
 
     fn report(outcome: SessionOutcome) -> SessionReport {
         SessionReport {
@@ -303,6 +549,7 @@ mod tests {
             device_id: Some("phone-1".into()),
             rtt_tail: None,
             encode_tail: None,
+            link: None,
         }
     }
 
@@ -427,5 +674,162 @@ mod tests {
         }
         // guard() is what the pipeline arms; it must be constructible.
         let _guard = rec.guard(Arc::new(AtomicU64::new(0)));
+    }
+
+    fn fake(stats: ConnectionStats, address: SocketAddr) -> (Arc<FakeLink>, SharedConnection) {
+        let link = Arc::new(FakeLink {
+            stats: Mutex::new(stats),
+            address,
+        });
+        let connection: SharedConnection = link.clone();
+        (link, connection)
+    }
+
+    #[test]
+    fn a_session_that_never_touched_a_transport_reports_no_link() {
+        let rec = SessionRecorder::new(TransportFamily::Quinn, None);
+        let report = rec.finish(SessionOutcome::Completed, 0);
+        assert!(report.link.is_none());
+        // Not a row of zeros pretending the link was pristine.
+        let line = report.format();
+        assert!(!line.contains("lost_pk="), "{line}");
+        assert!(!line.contains("cwnd_pk="), "{line}");
+    }
+
+    #[test]
+    fn the_link_is_read_again_at_teardown_not_frozen_at_the_last_poll() {
+        // The pipeline polls every few seconds. Loss in the final stretch is
+        // exactly where a stall lives, so it must not be discarded with the
+        // gap between the last sample and the session ending.
+        let (link, connection) = fake(
+            ConnectionStats {
+                lost_packets: 5,
+                ..Default::default()
+            },
+            addr(7),
+        );
+        let rec = SessionRecorder::new(TransportFamily::Quinn, None);
+        rec.sample(&connection);
+        link.set(ConnectionStats {
+            lost_packets: 9,
+            ..Default::default()
+        });
+        let report = rec.finish(SessionOutcome::Completed, 0);
+        assert_eq!(report.link.expect("sampled").lost_packets, 9);
+    }
+
+    #[test]
+    fn a_relay_that_gives_way_to_direct_is_counted_and_timed() {
+        // Pure over the observer's clock: an `Instant` is a parameter precisely
+        // so this does not have to sleep to prove the arithmetic.
+        let start = Instant::now() + Duration::from_secs(1_000);
+        let mut observer = PathObserver::default();
+        let relayed = relayed(ConnectionStats::default());
+        observer.observe(&relayed, addr(1), start);
+        observer.observe(&relayed, addr(1), start + Duration::from_secs(4));
+        observer.observe(
+            &ConnectionStats::default(),
+            addr(2),
+            start + Duration::from_secs(5),
+        );
+        assert_eq!(
+            observer.path_changes, 1,
+            "the relay-to-direct hop is a path change"
+        );
+        assert_eq!(
+            observer.relayed_secs(start + Duration::from_secs(5)),
+            5,
+            "riding the relay from the first sample to the punched one"
+        );
+    }
+
+    #[test]
+    fn a_relay_ride_still_open_at_teardown_is_billed_to_the_end() {
+        let start = Instant::now() + Duration::from_secs(1_000);
+        let mut observer = PathObserver::default();
+        let relayed = relayed(ConnectionStats::default());
+        observer.observe(&relayed, addr(1), start);
+        observer.observe(&relayed, addr(1), start + Duration::from_secs(3));
+        assert_eq!(observer.relayed_secs(start + Duration::from_secs(6)), 6);
+    }
+
+    #[test]
+    fn the_widest_congestion_window_is_the_one_kept() {
+        let mut observer = PathObserver::default();
+        let wide = ConnectionStats {
+            cwnd_bytes: Some(50_000),
+            ..Default::default()
+        };
+        let collapsed = ConnectionStats {
+            cwnd_bytes: Some(12_000),
+            ..Default::default()
+        };
+        let at = Instant::now() + Duration::from_secs(1_000);
+        observer.observe(&collapsed, addr(1), at);
+        observer.observe(&wide, addr(1), at + Duration::from_secs(1));
+        observer.observe(&collapsed, addr(1), at + Duration::from_secs(2));
+        assert_eq!(
+            observer.peak_cwnd_bytes,
+            Some(50_000),
+            "a window that closed and is still recovering must not read as never-congested"
+        );
+    }
+
+    #[test]
+    fn a_field_the_library_does_not_report_stays_absent_in_both_renderings() {
+        // WAN: noq's aggregate drops the per-path fields, so a session record
+        // must not show `mtu=0` where the honest answer is "not reported".
+        let rec = SessionRecorder::new(TransportFamily::Iroh, None);
+        let (_, connection) = fake(
+            ConnectionStats {
+                lost_packets: 3,
+                bytes_sent: 4_000_000,
+                datagrams_sent: 3_000,
+                relayed: true,
+                ..Default::default()
+            },
+            addr(9),
+        );
+        rec.sample(&connection);
+        let report = rec.finish(SessionOutcome::Completed, 0);
+        let line = report.format();
+        let link = report.link.expect("sampled");
+        assert_eq!(
+            (link.path_mtu, link.peak_cwnd_bytes, link.congestion_events),
+            (None, None, None)
+        );
+        for absent in ["mtu=", "cwnd_pk=", "cong_ev=", "black="] {
+            assert!(!line.contains(absent), "{absent} in {line}");
+        }
+        assert!(
+            line.contains("relayed_s=0"),
+            "a ride too short to round to a second still counts the relay: {line}"
+        );
+        assert!(line.contains("path_chg=0"), "{line}");
+        let json: serde_json::Value = serde_json::to_value(&report).unwrap();
+        assert!(json["link"]["path_mtu"].is_null(), "{json}");
+        assert_eq!(json["link"]["lost_packets"], 3);
+
+        // LAN: the same record shape with the per-path fields present.
+        let rec = SessionRecorder::new(TransportFamily::Quinn, None);
+        let (_, connection) = fake(
+            ConnectionStats {
+                cwnd_bytes: Some(48_000),
+                path_mtu: Some(1420),
+                congestion_events: Some(2),
+                black_holes_detected: Some(0),
+                ..Default::default()
+            },
+            addr(9),
+        );
+        rec.sample(&connection);
+        let report = rec.finish(SessionOutcome::Completed, 0);
+        let line = report.format();
+        assert!(line.contains("mtu=1420"), "{line}");
+        assert!(line.contains("cwnd_pk=48000"), "{line}");
+        assert!(line.contains("cong_ev=2"), "{line}");
+        let json: serde_json::Value = serde_json::to_value(&report).unwrap();
+        assert_eq!(json["link"]["path_mtu"], 1420);
+        assert_eq!(json["link"]["peak_cwnd_bytes"], 48_000);
     }
 }
