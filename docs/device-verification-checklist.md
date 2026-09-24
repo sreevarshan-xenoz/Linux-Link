@@ -1,12 +1,13 @@
 # Device Verification Checklist
 
-Everything in the Current Status log of `AGENTS.md` says "device behavior
-unverified (no device)". This is the ordered battery to run once a real
-phone (arm64, Android 8.0+/API 26, debug APK with the bridge `.so`) is
-attached to a real desktop. Work top-to-bottom: later sections assume
-earlier ones pass. Record failures as `FAIL: <symptom>` next to the box;
-each item maps to the commit/feature noted so fixes land in the right
+The ordered battery to run against a real phone (arm64, Android 8.0+/API 26, debug APK with the bridge
+`.so`) and a real desktop. Work top-to-bottom: later sections assume earlier ones pass. Record failures as
+`FAIL: <symptom>` next to the box; each item maps to the commit/feature noted so fixes land in the right
 place.
+
+Several sections are now ticked from real runs (OPPO CPH2359 over LAN and tailnet, 2026-09-22 onward).
+What is *not* ticked is not verified, however confident the code looks — and §22 is the standing register
+of exactly that, including the one fix that merged without its confirming observation.
 
 ## 0. Prerequisites
 
@@ -373,6 +374,67 @@ Items below are re-scored against that build.
 - [x] Shortcut bar: System | Workspaces groups with divider and localized captions; chips are ≥32 dp touch targets; key caps stay literal in es/ta. *Now a dark floating pill, legible over video; scrolls horizontally past PrtSc.*
 - [x] es/ta: every Phase-C string shipped (locales in sync at 161 each).
 - [x] Launcher icon: the adaptive icon renders on ColorOS (phone-into-monitor mark on the brand pine plate) instead of the default Android blob. Needed filled paths in a scaled group — stroke-only adaptive foregrounds are not rasterized there.
+
+## 22. Owed verification register
+
+**This is the gate for Phase 0 of [roadmap-execution-plan.md](roadmap-execution-plan.md) item 5 — nothing
+in Phase 1 starts while it is open.** Every line here is a claim the repo already makes that no human has
+checked on hardware, or a fix that shipped without its one confirming observation.
+
+### 22.1 One shared control connection (`90d92df`) — the check that was promised
+
+The reconnect storm fix is merged but its own success criterion needs the phone attached:
+
+```bash
+adb devices -l                                   # confirm the phone is really there
+journalctl --user -u linux-link.service -f > /tmp/ll-journal.log &
+# then, on the phone: connect, open the quick-settings sheet, the monitor picker,
+# the window picker, the clipboard sheet, watch the battery row for 60 s, exit.
+kill %1
+```
+
+- [ ] **PASS condition:** zero `Incoming v1 TCP connection from` lines (`server/src/service.rs:330`) after
+      the single session-establishing connection, while every sheet and picker above is used.
+- [ ] **PASS condition:** zero `Broken pipe (os error 32)` WARN lines from any plugin.
+- [ ] **PASS condition:** zero `Kicked 1 stale session(s) due to reconnect storm` from the server.
+- [ ] Battery/clipboard/monitors/window rows still show *current* values — the shared connection must not
+      trade churn for staleness.
+- [ ] The no-session fallback still works: a query issued with **no** live control session must take the
+      `oneshot_request` branch (`android/bridge/src/api.rs`, reached from `control_request` when
+      `CONTROL_WRITER` is `None`) and still get an answer — that is the path that runs before you connect,
+      and it is the one the rewrite could plausibly have broken. Same for `push_packet`'s dedicated socket.
+
+### 22.2 Phase-C items §21 never re-scored on the current build
+
+Eight boxes in §21 are still open and cannot be closed by reading code (they are visual, timing or OEM
+behaviour): theme-follows-system + cold-start window colour (358), Material You on/off (359), edge-to-edge
+with nothing unreachable (360), the pairing sheet's progress/focus/eye/animated-check flow (366), the Home
+empty state (368), the siren full-screen dialog plus its 30 s auto-stop (369), clipboard Clear confirmation
+(370), and the haptics matrix with the Settings mute (371).
+
+### 22.3 §20 host-management gaps
+
+Wake row only appearing for a host with a saved WoL MAC (345), and multi-host ordering + remove-then-readd
+with es/ta strings (346).
+
+### 22.4 The only genuinely-blocking device test: WAN over cellular (§11)
+
+The iroh path has never been exercised across a real network boundary — the phone's cellular radio was
+OUT_OF_SERVICE during the tailnet run, so §1.1 LAN and §18 tailnet results do **not** stand in for it.
+Requires: SIM with data, Wi-Fi off, and an external relay or a second network.
+
+### 22.5 Claims that must not be tested because the feature is absent
+
+Recording these here so a tester does not file them as regressions:
+
+- Desktop audio audible on the phone — there is no client-side Opus player (`receiveAudio` has no caller);
+  see roadmap-3000 **2791-2800**, and §10's "audio" results are about *control* (routing/volume), not playout.
+- The HUD's "drops" field — it is a literal `0` in the bridge (**2051/2052**), so any number in it is
+  meaningless in both directions.
+- Adaptive bitrate responding to loss — `update_loss` ignores its argument (**2053**).
+- The file browser — the server plugin answers, `listRemoteFiles` has zero call sites (**2874**).
+- Notification per-app channels, grouping, icons, privacy modes (**2898-2905**).
+- Every K (virtual display) and L (macro/automation) behaviour — neither subsystem exists.
 
 ## Recording results
 

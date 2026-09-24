@@ -52,8 +52,10 @@ Phase 1 may not start until they close:
 4. ⬜ A single source of truth for negotiated protocol version, supported transports, supported capture
    backends and supported codecs, generated from `linux-link capabilities` output rather than prose. Today
    those four things are described in README, `docs/`, and three constants in `core`.
-5. ⬜ The owed device verifications from `90d92df` (shared control connection) and the §21 checklist items
-   recorded as *owed* in `docs/device-verification-checklist.md`, not silently dropped.
+5. ✅ (2026-09-24) The owed device verifications are §22 of `docs/device-verification-checklist.md`: the
+   `90d92df` journal pass with its exact PASS conditions, the eight open §21 items, §20's two gaps, the
+   cellular WAN run, and a list of claims that must *not* be tested because the feature is absent (no Opus
+   player, fabricated drops field, dead ABR loss input, uncalled `listRemoteFiles`).
 
 ## 2. Phase 1 — Green main, then measurement
 
