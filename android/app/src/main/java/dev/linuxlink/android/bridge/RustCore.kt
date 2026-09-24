@@ -405,8 +405,11 @@ object RustCore {
         (offset / size.coerceAtLeast(1) * NORM_COORD_MAX).roundToInt().coerceIn(0, NORM_COORD_MAX)
 
     /**
-     * Direct-touch tap: absolute move to the normalized point (server puts
-     * the virtual finger down), then press + left release (which lifts it).
+     * Direct-touch tap: warp the pointer to the normalized point, then press
+     * and release the left button. Absolute motion alone moves the cursor and
+     * puts nothing down — the server's pointer device reports the button
+     * separately from the axes — so a tap that skips the press is invisible to
+     * anything that acts on button-down.
      */
     fun tapAbsolute(xNorm: Int, yNorm: Int): Result<Unit> {
         val moved = sendMouseAbs(xNorm, yNorm)

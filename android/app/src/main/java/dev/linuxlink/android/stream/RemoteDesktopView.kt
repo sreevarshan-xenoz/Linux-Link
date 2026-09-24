@@ -317,7 +317,7 @@ private fun InputOverlay(
 
     Box(
         modifier.pointerInput(address to port to mode to layout to mapping) {
-            fun sendAbs(pos: Offset) {
+            fun mappedPoint(pos: Offset): Pair<Int, Int> {
                 // Viewport -> scale-1 content space -> letterboxed video
                 // pixel -> desktop coordinate -> normalized axis value.
                 // Without the video-pixel step a touch outside the fitted
@@ -339,6 +339,11 @@ private fun InputOverlay(
                     xNorm = RustCore.normalizedCoord(vx.coerceIn(0f, layout.videoW.toFloat()), layout.videoW)
                     yNorm = RustCore.normalizedCoord(vy.coerceIn(0f, layout.videoH.toFloat()), layout.videoH)
                 }
+                return xNorm to yNorm
+            }
+
+            fun sendAbs(pos: Offset) {
+                val (xNorm, yNorm) = mappedPoint(pos)
                 send { RustCore.sendMouseAbs(xNorm, yNorm) }
             }
 
@@ -349,29 +354,53 @@ private fun InputOverlay(
                         // Defer the first packet until we know this is a
                         // one-finger gesture, not the start of a pinch.
                         var cancelled = false
+                        var buttonDown = false
                         var lastPos = down.position
                         var done = false
                         while (!done) {
                             val event = awaitPointerEvent()
-                            val pressed = event.changes.filter { it.pressed }
+                            val held = event.changes.filter { it.pressed }
                             when {
                                 cancelled -> {
-                                    if (pressed.isEmpty()) done = true
+                                    if (held.isEmpty()) {
+                                        // A pinch that started as a drag has already
+                                        // put the button down; leaving it pressed is a
+                                        // stuck drag on the desktop.
+                                        if (buttonDown) send { RustCore.sendMouseClick(0, false) }
+                                        done = true
+                                    }
                                 }
 
-                                pressed.size >= 2 -> {
+                                held.size >= 2 -> {
                                     cancelled = true
                                 }
 
-                                pressed.isEmpty() -> {
-                                    sendAbs(lastPos)
-                                    send { RustCore.sendMouseClick(0, false) }
+                                held.isEmpty() -> {
+                                    val (xNorm, yNorm) = mappedPoint(lastPos)
+                                    if (buttonDown) {
+                                        send {
+                                            RustCore.sendMouseAbs(xNorm, yNorm)
+                                            RustCore.sendMouseClick(0, false)
+                                        }
+                                    } else {
+                                        // Never moved far enough to be a drag: a tap is
+                                        // warp, press, release at one point.
+                                        send { RustCore.tapAbsolute(xNorm, yNorm) }
+                                    }
                                     done = true
                                 }
 
                                 else -> {
-                                    lastPos = pressed.first().position
-                                    sendAbs(lastPos)
+                                    lastPos = held.first().position
+                                    if (!buttonDown) {
+                                        buttonDown = true
+                                        // Warp before pressing: a drag belongs to the
+                                        // touched point, not wherever the cursor was.
+                                        sendAbs(lastPos)
+                                        send { RustCore.sendMouseClick(0, true) }
+                                    } else {
+                                        sendAbs(lastPos)
+                                    }
                                 }
                             }
                         }

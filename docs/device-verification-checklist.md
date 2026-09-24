@@ -179,8 +179,13 @@ is still filling in is dimmed. What to confirm on a real phone:
 
 ## 3. Input paths (R2#4, Tier 1 #2)
 
-- [x] Direct-touch: tap = left click at the touched point. **Verified 2026-09-22 on OPPO CPH2359 → Hyprland:** taps map pixel-exact through the letterbox (phone (540,1230) → cursor (768,432) = desktop center) and click (BTN_LEFT) lands. Under Wayland the injector now uses uinput (enigo/XTEST is inert on Hyprland): motion rides the "Linux Link Virtual Abs Pointer" device (ABS_X/ABS_Y + BTN_LEFT, created eagerly at startup so the first tap is not lost); keyboard/relative ride "Linux Link Virtual Input".
-- [ ] Drag = finger-down motion; lift = left release.
+- [x] Direct-touch: tap lands at the touched point. **Verified 2026-09-22 on OPPO CPH2359 → Hyprland:** taps map pixel-exact through the letterbox (phone (540,1230) → cursor (768,432) = desktop center). Under Wayland the injector uses uinput (enigo/XTEST is inert on Hyprland): motion rides the "Linux Link Virtual Abs Pointer" device (ABS_X/ABS_Y + BTN_LEFT, created eagerly at startup so the first tap is not lost); keyboard/relative ride "Linux Link Virtual Input".
+- [ ] ...and a tap is actually a **click** (roadmap 2061, re-verify 2026-09-24). The 2026-09-22 note above
+      claimed "click (BTN_LEFT) lands", but the code that ran sent absolute motion plus a left *release* and
+      never a press — so that half was either an inference or a window reacting to something else. A tap
+      must now put `BTN_LEFT` down (value 1) and up (value 0) at the touched point: check with `evtest` on
+      the abs-pointer device rather than by whether a window happened to react.
+- [ ] Drag (roadmap 2061, shipped 2026-09-24, device-unverified): start a slow drag-select across desktop text — `evtest` should show the pointer warp to the touched point, `BTN_LEFT 1`, moving `ABS_X/ABS_Y` while held, `BTN_LEFT 0` on lift, and the selection must follow the finger (before this change a drag was motion-with-button-up: nothing began, and the release landed on a button that was never pressed). Then the leak check: begin a one-finger drag and add a second finger mid-drag (pinch) — the button must still come up, and the desktop must not be left dragging. Note there is no server-side safety net for a lost release packet yet (roadmap 2272): a session that dies mid-drag leaves `BTN_LEFT` held on the uinput device until the next release.
 - [ ] Trackpad mode: pointer moves without jumping to touch point; tap = click; two-finger = scroll.
 - [ ] Mode toggle switches behavior live, no session restart.
 - [ ] Keyboard: type letters/digits/modifiers via on-screen shortcuts + remote input — check against `evtest`: Super, Alt+Tab, Ctrl+Alt+Del, PrtSc, Esc, Super+1..9 work (ShortcutBar). (Esc tap verified 2026-09-22; this box binds workspace cycling to Super+Tab, so the bar's Alt+Tab is config-dependent, not a pipeline failure.)
