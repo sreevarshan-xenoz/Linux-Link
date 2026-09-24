@@ -40,7 +40,7 @@ of exactly that, including the one fix that merged without its confirming observ
 ## 2. Session shell + video (Tier 1 #5, R2#2, R2#5)
 
 - [ ] Video appears within ~1 s; stats HUD shows fps/bitrate/rtt/e2e/drops, plus the caption naming what
-      the rates and the link figure were measured over (§2c).
+      the rates and the link figure were measured over (§2d).
 - [ ] FGS notification is present ("Streaming to <ip>"), survives home/swipe-away attempts; its Disconnect action ends the session.
 - [ ] Screen-off for 1 min, wake → stream still live (wake lock + keepalive; plan #13).
 - [ ] Drop phone far from AP / saturate link → frames stall, then recover; drops counter rises but no permanent freeze (gap-driven keyframe request, R2#5).
@@ -152,7 +152,7 @@ not part of C4.
 - [ ] WAN session: `e2e` should ≈ rtt/2 higher than a LAN session on the same desktop motion
       (the network-leg term is RTT/2 by construction).
 
-## 2c. Rate and link basis (roadmap 2056)
+## 2d. Rate and link basis (roadmap 2056)
 
 The HUD's fps/kbps are now diffs over the newest 3 s of received video and its `rtt` is the median of
 the session's last ≤8 one-second polls; a caption under the numbers names both, and a figure whose basis
