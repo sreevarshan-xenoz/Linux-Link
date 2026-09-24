@@ -8,6 +8,7 @@ pub mod error;
 // Input injection is Linux-only (requires evdev)
 #[cfg(feature = "injection")]
 pub mod input;
+pub mod metrics;
 pub mod protocol;
 pub mod streaming;
 pub mod tailscale;
