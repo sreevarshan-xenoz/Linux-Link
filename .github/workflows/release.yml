@@ -20,6 +20,12 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
+      # The server binary links PipeWire/Wayland and, under the `encode` feature,
+      # libav* — without the dev packages this job fails at the link step, so no
+      # tag has ever produced a release artifact from CI.
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libpipewire-0.3-dev libwayland-dev libegl1-mesa-dev libgbm-dev pkg-config libavcodec-dev libavdevice-dev libavfilter-dev libavformat-dev libavutil-dev libswresample-dev libswscale-dev
+
       - name: Build release binary
         run: cargo build --release --bin linux-link
 
