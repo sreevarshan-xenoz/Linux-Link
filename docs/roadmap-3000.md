@@ -768,7 +768,7 @@ each item is a live defect with a known location, not a wish.
   list, and the `localectl` parser against that tool's real output.
 
 **State that goes stale or is dropped at a boundary**
-- 2066 **CLOSED (this commit; the reaction itself is hardware-unverified)** — output add/remove no longer
+- 2066 **CLOSED (`210f240`; the reaction itself is hardware-unverified)** — output add/remove no longer
   fall on the floor. The audit's wording was overstated and is corrected here: the phone never *kept* a
   monitor list that no longer exists, because `kdeconnect.linuxlink.monitors` is answered from a live
   `enumerate_monitors()` on every query (so the picker refetches current state on open) and `service.rs`

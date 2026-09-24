@@ -243,6 +243,16 @@ The ones that matter most, in order:
   construction, and the remaining behaviour — honouring a non-`us` layout, and telling the phone which one
   was found — is 2665 with a recorded repro. Injecting anyway was the deliberate call: refusing a non-`us`
   desktop would take the keyboard away from every non-US user rather than fix them.
+- **2066 — compositor output events drove nothing.** `monitoradded`/`monitorremoved` arrived on socket2 and
+  matched no handler, so the HUD's screen box and window-crop geometry could be up to a snapshot tick stale
+  after a display changed.
+  **Landed 2026-09-24** (`210f240`): both names now force an immediate `state_packet` re-push to every
+  client, and the 4 s tick's fan-out was folded into the same helper. The audit's phrasing is corrected in
+  the roadmap — the phone never held a dead monitor list, because the monitors query is answered live and
+  the picker refetches on open — and `monitorchanged` turned out not to exist on this Hyprland, which is why
+  mode/scale/orientation hotplug stays open as 2566 and the capture-side restart as 2567. Not seen with a
+  real cable: single built-in output, and the compositor's write dispatchers are broken upstream, so
+  checklist §6 carries the watch-the-log proof.
 
 Exit gate: every U id is closed or converted into a named bug with a repro; no reported number in the UI is
 produced by anything other than a measurement; the dead-link watchdog's behaviour is asserted by an
