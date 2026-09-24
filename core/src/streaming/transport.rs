@@ -30,7 +30,7 @@ impl Default for StreamTransportConfig {
     fn default() -> Self {
         Self {
             address: "0.0.0.0:4716".parse().unwrap(),
-            alpn: b"linux-link-stream".to_vec(),
+            alpn: crate::protocol::ALPN_V1_STREAM.to_vec(),
             use_datagrams: true,
         }
     }
@@ -647,7 +647,7 @@ mod tests {
     #[test]
     fn test_transport_config_default() {
         let config = StreamTransportConfig::default();
-        assert_eq!(config.alpn, b"linux-link-stream");
+        assert_eq!(config.alpn, crate::protocol::ALPN_V1_STREAM);
         assert!(config.use_datagrams);
     }
 

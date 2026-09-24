@@ -232,7 +232,30 @@ lingering first: `sudo loginctl enable-linger $USER`.
 | `linux-link pair [pin] [--grant 15m]` | Print a 5-minute pairing PIN for the phone (generate or set); `--grant` time-boxes the trust pairing stores (`s/m/h/d`, e.g. `45s`, `15m`, `2h`, `1h30m`) for one-off support sessions |
 | `linux-link unpair [device-id]` | Remove a paired device from the trust store (all if omitted) |
 | `linux-link sessions [--count N]` | Show recorded streaming-session outcomes (LAN/WAN-punched/WAN-relayed tally + recent log tail) |
-| `linux-link capabilities` | Show KDE Connect capabilities |
+| `linux-link capabilities [--json\|--markdown]` | Show the negotiated protocol versions, transports, capture backends and codecs this build actually speaks, plus its KDE Connect capability sets |
+| `linux-link kick <id\|prefix\|peer-ip\|all>` | Drop a live streaming session (R4 D2) |
+
+### Capabilities Are Generated, Not Written
+
+`linux-link capabilities` is the single source of truth for the four numbers and
+lists a reader otherwise has to trust prose for: the negotiated protocol version,
+which transports a given build carries, which capture backends exist and in what
+order `Auto` tries them, and which codecs can be encoded/decoded on each side.
+Every value is read from the constants and decision tables the wire uses —
+`protocol::{HANDSHAKE_HELLO, ALPN_V1_STREAM}`, `protocol::v2::{ALPN_V2, V2_MIN_VERSION..}`,
+`streaming::capture::capture_attempts`, `VideoCodec::ALL`, `AudioConfig::default()` —
+so a client-profile build reports `capture: unavailable` instead of an empty list,
+and a version bump appears in the report the moment it appears in the code.
+
+```bash
+linux-link capabilities              # human listing
+linux-link capabilities --json       # for scripts
+linux-link capabilities --markdown   # the source of docs/capabilities.md
+```
+
+[`docs/capabilities.md`](docs/capabilities.md) is that Markdown output, committed,
+and `server/tests/capabilities_doc.rs` fails when it stops matching the build —
+regenerate it in the same commit as the constant you changed.
 
 ### Man Page
 

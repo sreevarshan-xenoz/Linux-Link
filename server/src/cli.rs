@@ -33,8 +33,17 @@ pub enum Commands {
         #[arg(short, long, default_value_t = 10)]
         interval: u64,
     },
-    /// Show configured KDE Connect capability sets
-    Capabilities,
+    /// Show negotiated protocol versions, transports, capture backends and
+    /// codecs (generated from the constants the wire uses), plus the configured
+    /// KDE Connect capability sets
+    Capabilities {
+        /// Emit the machine-readable JSON report
+        #[arg(long)]
+        json: bool,
+        /// Emit the Markdown block that docs/capabilities.md is generated from
+        #[arg(long)]
+        markdown: bool,
+    },
     /// Connect to a peer and perform a basic control-channel handshake
     Connect {
         /// Peer hostname, MagicDNS name, or Tailscale IP

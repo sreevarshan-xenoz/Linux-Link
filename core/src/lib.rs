@@ -2,6 +2,7 @@
 //!
 //! Shared protocol types and cross-platform logic.
 
+pub mod capabilities;
 pub mod error;
 
 // Input injection is Linux-only (requires evdev)

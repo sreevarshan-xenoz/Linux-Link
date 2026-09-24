@@ -536,6 +536,28 @@ pub enum CaptureBackend {
     X11,
 }
 
+impl CaptureBackend {
+    /// Every backend this build can drive, in `Auto`'s preference order.
+    /// `linux-link capabilities` enumerates from here (roadmap item 4).
+    pub const ALL: [CaptureBackend; 4] = [
+        CaptureBackend::Auto,
+        CaptureBackend::Screencopy,
+        CaptureBackend::Portal,
+        CaptureBackend::X11,
+    ];
+
+    /// The `capture_backend` value that pins this backend in config.toml — the
+    /// serde spelling, so the reported name is always the accepted one.
+    pub fn config_key(&self) -> &'static str {
+        match self {
+            CaptureBackend::Auto => "auto",
+            CaptureBackend::Screencopy => "screencopy",
+            CaptureBackend::Portal => "portal",
+            CaptureBackend::X11 => "x11",
+        }
+    }
+}
+
 /// Auto-detect display server and start the appropriate capture method.
 ///
 /// With `CaptureBackend::Auto` this tries screencopy first on wlroots
@@ -592,7 +614,7 @@ pub async fn start_capture_auto(
 /// `backend` given the `detected` display server. `Err` means the combination
 /// cannot work. Keeping this separate from [`start_capture_auto`] makes the
 /// ordering testable without spawning real capture.
-fn capture_attempts(
+pub fn capture_attempts(
     backend: CaptureBackend,
     detected: DisplayServer,
 ) -> Result<Vec<CaptureBackend>> {

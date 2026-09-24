@@ -46,6 +46,11 @@ XDG_CONFIG_HOME=$PWD/devconfig cargo run --bin linux-link -- start
 - **Rust:** Follow `cargo fmt` and `cargo clippy -D warnings`. No warnings allowed.
 - **Kotlin:** Follow Android Lint; format with `ktfmt`/`ktlint` defaults.
 - **Commits:** Use conventional commit messages (`feat:`, `fix:`, `docs:`, `chore:`, etc.)
+- **Generated docs:** `docs/capabilities.md` is the output of
+  `linux-link capabilities --markdown`. If you change a protocol version constant, an ALPN,
+  a capture backend, or a codec, regenerate it in the same commit —
+  `cargo test -p linux-link-server --test capabilities_doc` fails while it is stale.
+  A command's log output goes to stderr, never stdout, because stdout is data.
 
 ## Pull Request Process
 

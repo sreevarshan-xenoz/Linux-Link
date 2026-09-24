@@ -38,8 +38,7 @@ phase below exists to make a claim verifiable before it makes the claim louder.
 The first phase is the synchronisation itself, because a roadmap written against a wrong description of
 the tree produces another wrong roadmap. Ids: docs only.
 
-Exit criteria — all five. Items 1-3 landed with this document (2026-09-24); **4 and 5 are still open**, and
-Phase 1 may not start until they close:
+Exit criteria — all five landed 2026-09-24, so Phase 0 is closed and Phase 1 is the live phase:
 
 1. ✅ `README.md` matches the binary: exactly ten `linux-link` verbs
    (`start|stop|status|sessions|list|watch|capabilities|connect|pair|unpair|kick`), install/update/rollback/
@@ -49,9 +48,17 @@ Phase 1 may not start until they close:
    this file committed, and no document links to a file that does not exist.
 3. ✅ AGENTS.md *Current Status* states what the tree disagrees about today: CI red at HEAD on
    `cargo fmt --all -- --check`, and the release badge's "feature complete" was aspirational.
-4. ⬜ A single source of truth for negotiated protocol version, supported transports, supported capture
-   backends and supported codecs, generated from `linux-link capabilities` output rather than prose. Today
-   those four things are described in README, `docs/`, and three constants in `core`.
+4. ✅ (2026-09-24) `core/src/capabilities.rs` is that source: it reads the negotiated
+   protocol versions, the transport set, the capture-backend list **and** `Auto`'s order
+   (by calling the same `capture_attempts` the capture pipeline calls) and the codec table
+   from the constants the wire uses, and reports feature-gated sections as unavailable
+   rather than empty. `linux-link capabilities` prints it, `--json` makes it scriptable,
+   `--markdown` generates [`capabilities.md`](capabilities.md), and
+   `server/tests/capabilities_doc.rs` fails when the committed doc stops matching the build.
+   Duplication removed on the way: both ends now build their `IdentityPacketV2` from
+   `v2::{V2_MIN_VERSION, V2_MAX_VERSION}` instead of their own `2`/`2`, the
+   `linux-link-stream` ALPN exists once as `protocol::ALPN_V1_STREAM` (was four literals),
+   and the mic relay's Opus rate/channels moved into `core::streaming::audio`.
 5. ✅ (2026-09-24) The owed device verifications are §22 of `docs/device-verification-checklist.md`: the
    `90d92df` journal pass with its exact PASS conditions, the eight open §21 items, §20's two gaps, the
    cellular WAN run, and a list of claims that must *not* be tested because the feature is absent (no Opus

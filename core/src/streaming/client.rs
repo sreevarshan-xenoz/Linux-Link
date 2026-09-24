@@ -31,7 +31,7 @@ pub(crate) const DEVICE_ID_MARKER: [u8; 2] = [0xFE, 0x00];
 
 /// Marker bytes for a client-to-server codec-capability QUIC stream (R4 C1):
 /// `[0xFD, 0x00, caps:u8]`. Absent = legacy client that only decodes H.264.
-pub(crate) const CODEC_CAPS_MARKER: [u8; 2] = [0xFD, 0x00];
+pub const CODEC_CAPS_MARKER: [u8; 2] = [0xFD, 0x00];
 
 /// `CODEC_CAPS_MARKER` bit 0: the client can decode H.265/HEVC Annex-B.
 /// H.264 is assumed for every client; future bits cover AV1 etc.

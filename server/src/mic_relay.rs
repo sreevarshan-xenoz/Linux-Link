@@ -30,9 +30,9 @@ use tracing::{info, warn};
 
 use linux_link_core::streaming::{AudioDecoder, InputPacket};
 
-/// The phone encodes at this fixed rate; the decoder must match.
-pub const MIC_SAMPLE_RATE: u32 = 48_000;
-pub const MIC_CHANNELS: u16 = 1;
+/// Defined in `core::streaming::audio` because the phone's encoder has to match
+/// them; re-exported here so the relay reads as one file.
+pub use linux_link_core::streaming::audio::{MIC_CHANNELS, MIC_SAMPLE_RATE};
 
 /// Minimum spacing between node spawn attempts after a failure (the phone
 /// sends a frame every 20 ms — without this a missing pw-loopback would

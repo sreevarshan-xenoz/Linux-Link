@@ -10,6 +10,12 @@
 #[cfg(feature = "opus")]
 use anyhow::{Context, Result};
 
+/// Wire format of the phone->desktop mic relay (R4 E2). The phone's Opus
+/// encoder is configured to these and the server's decoder must match, so they
+/// live here rather than in one crate's private constants.
+pub const MIC_SAMPLE_RATE: u32 = 48_000;
+pub const MIC_CHANNELS: u16 = 1;
+
 /// Audio configuration for capture and encoding.
 #[derive(Debug, Clone, Copy)]
 pub struct AudioConfig {

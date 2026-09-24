@@ -8,11 +8,12 @@ use crate::notification_monitor::start_notification_monitor;
 use crate::state;
 use crate::v2_multiplexer::handle_v2_session;
 use anyhow::{Context, Result, bail};
+use linux_link_core::protocol::ALPN_V1_STREAM;
 use linux_link_core::protocol::connection::ConnectionManager;
 use linux_link_core::protocol::kdeconnect::{
     DeviceIdentity, DeviceSender, NetworkPacket, PluginRegistry, TcpDeviceSender, TrustStore,
 };
-use linux_link_core::protocol::v2::{ALPN_V2, IdentityPacketV2};
+use linux_link_core::protocol::v2::{ALPN_V2, IdentityPacketV2, V2_MAX_VERSION, V2_MIN_VERSION};
 use linux_link_core::protocol::{HANDSHAKE_HELLO, HANDSHAKE_OK};
 use linux_link_core::streaming::QuinnConnection;
 use linux_link_core::streaming::StreamingServer;
@@ -105,8 +106,8 @@ pub async fn run(config: Config) -> Result<()> {
             .map(|i| i.device_id.clone())
             .unwrap_or_default(),
         device_name: host_name.clone(),
-        min_version: 2,
-        max_version: 2,
+        min_version: V2_MIN_VERSION,
+        max_version: V2_MAX_VERSION,
         capabilities: registry.plugin_names(),
     };
 
@@ -122,7 +123,7 @@ pub async fn run(config: Config) -> Result<()> {
     let quic_addr = format!("0.0.0.0:{}", streaming_port)
         .parse::<std::net::SocketAddr>()
         .with_context(|| format!("invalid QUIC listen address for port {streaming_port}"))?;
-    let alpns = vec![ALPN_V2.to_vec(), b"linux-link-stream".to_vec()];
+    let alpns = vec![ALPN_V2.to_vec(), ALPN_V1_STREAM.to_vec()];
     let server_config = cert_manager
         .server_config(alpns)
         .context("Failed to create QUIC server config")?;
@@ -379,12 +380,12 @@ pub async fn run(config: Config) -> Result<()> {
                         };
 
                         match alpn.as_deref() {
-                            Some(b"linux-link-v2") => {
+                            Some(ALPN_V2) => {
                                 if let Err(e) = handle_v2_session(conn, local_v2_identity, registry_clone, pairing_required).await {
                                     tracing::error!("v2 session error: {}", e);
                                 }
                             }
-                            Some(b"linux-link-stream") => {
+                            Some(ALPN_V1_STREAM) => {
                                 let mut streaming_server = StreamingServer::new(
                                     streaming_config,
                                     StreamTransportConfig::default(),
@@ -810,7 +811,21 @@ async fn handle_connection_with_kde(
     .await
 }
 
-pub async fn print_capabilities() -> Result<()> {
+pub async fn print_capabilities(json: bool, markdown: bool) -> Result<()> {
+    if json && markdown {
+        bail!("--json and --markdown are mutually exclusive");
+    }
+    let capabilities = linux_link_core::capabilities::Capabilities::collect();
+    if json {
+        println!("{}", capabilities.render_json());
+        return Ok(());
+    }
+    if markdown {
+        print!("{}", capabilities.render_markdown());
+        return Ok(());
+    }
+    print!("{}", capabilities.render_text());
+
     let kde_service = kde::build_default_service().context("failed to initialize KDE service")?;
     let plugin_names = kde_service.registry.plugin_names();
     let (incoming, outgoing) = kde_service.registry.capability_sets();

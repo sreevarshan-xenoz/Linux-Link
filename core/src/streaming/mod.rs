@@ -138,11 +138,26 @@ pub enum VideoCodec {
 }
 
 impl VideoCodec {
+    /// Every codec this build knows about, in negotiation-preference order.
+    /// `linux-link capabilities` enumerates from here (roadmap item 4), so a new
+    /// variant cannot be added without showing up in the reported set.
+    pub const ALL: [VideoCodec; 2] = [VideoCodec::H264, VideoCodec::H265];
+
     /// Human-readable display name.
     pub fn display_name(&self) -> &'static str {
         match self {
             VideoCodec::H264 => "H.264",
             VideoCodec::H265 => "H.265 (HEVC)",
+        }
+    }
+
+    /// The R4 C1 client-capability bit that advertises decodability of this
+    /// codec, or `None` when the codec needs no advertisement (H.264 is assumed
+    /// for every client, so its absence from the caps byte still means yes).
+    pub fn codec_cap_bit(&self) -> Option<u8> {
+        match self {
+            VideoCodec::H264 => None,
+            VideoCodec::H265 => Some(crate::streaming::client::CODEC_CAP_HEVC),
         }
     }
 

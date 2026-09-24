@@ -7,6 +7,14 @@ use crate::error::{LinuxLinkError, Result};
 
 pub const ALPN_V2: &[u8] = b"linux-link-v2";
 
+/// The v2 handshake version range this build speaks.
+///
+/// Both ends construct their [`IdentityPacketV2`] from these two numbers, so a
+/// bump is one edit here rather than one per side that can silently disagree
+/// (roadmap Phase 0 item 4). `linux-link capabilities` reports them.
+pub const V2_MIN_VERSION: u32 = 2;
+pub const V2_MAX_VERSION: u32 = 2;
+
 /// Maximum size for control payloads to prevent OOM attacks.
 pub const MAX_CONTROL_PAYLOAD_SIZE: usize = 16 * 1024 * 1024; // 16 MB
 

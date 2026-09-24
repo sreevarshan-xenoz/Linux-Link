@@ -1388,8 +1388,8 @@ pub async fn connect_v2(address: String, port: u16) -> Result<(), String> {
         let local_identity = IdentityPacketV2 {
             device_id: identity.device_id,
             device_name: identity.device_name,
-            min_version: 2,
-            max_version: 2,
+            min_version: linux_link_core::protocol::v2::V2_MIN_VERSION,
+            max_version: linux_link_core::protocol::v2::V2_MAX_VERSION,
             capabilities: vec!["streaming".to_string(), "input".to_string()],
         };
 

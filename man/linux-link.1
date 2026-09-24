@@ -1,4 +1,4 @@
-.TH LINUX-LINK 1 "2026-04-11" "Linux Link 0.1.0"
+.TH LINUX-LINK 1 "2026-09-24" "Linux Link 0.1.0"
 .SH NAME
 linux-link \- Remote desktop over Tailscale with KDE Connect integration
 .SH SYNOPSIS
@@ -14,41 +14,62 @@ screen streaming over Tailscale.
 Start the server daemon
 .TP
 .B stop
-Stop the running daemon
+Stop a running daemon started with
+.B "linux-link start"
 .TP
 .B status
-Show connection status
+Print local tailscale status
+.TP
+.B sessions [\-\-count \fIN\fR]
+Show recorded streaming\-session outcomes (default: last 10)
 .TP
 .B list
-List available peers on tailnet
+List peers currently visible on the tailnet
 .TP
-.B connect \fIPEER\fR
-Connect to a specific peer
+.B watch [\-\-interval \fISECONDS\fR]
+Continuously watch peer discovery events (default: 10s)
 .TP
-.B watch
-Watch for peer discovery events
+.B capabilities [\-\-json | \-\-markdown]
+Show the negotiated protocol versions, transports, capture backends and codecs
+this build actually speaks \(em generated from the constants the wire uses \(em
+followed by the configured KDE Connect capability sets and trusted devices.
+.B \-\-json
+emits the machine\(hyreadable report and
+.B \-\-markdown
+emits the source of
+.IR docs/capabilities.md ;
+both are mutually exclusive.
 .TP
-.B capabilities
-Show KDE Connect capabilities
+.B connect \fIPEER\fR [\-\-port \fIPORT\fR]
+Connect to a peer and perform a basic control\-channel handshake
 .TP
-.B pair \fIPIN\fR
-Pair with a new device
+.B pair [\fIPIN\fR] [\-\-grant \fIDURATION\fR]
+Set or generate a temporary 6\-digit pairing PIN;
+.B \-\-grant
+(s/m/h/d, e.g. 15m, 1h30m) puts a time limit on the trust the PIN grants, for
+one\-off support sessions
+.TP
+.B unpair [\fIDEVICE\-ID\fR]
+Remove a paired device from the trust store (all devices if omitted)
+.TP
+.B kick \fITARGET\fR
+Drop a live streaming session: device id, a unique id prefix of >=6 chars,
+the peer IP, or
+.B all
 .SH OPTIONS
-.TP
-.BI "\-\-config " PATH
-Config file path (default: ~/.config/linux-link/config.toml)
-.TP
-.BI "\-\-port " PORT
-Override the control port
 .TP
 .B \-v, \-\-verbose
 Verbose output
 .TP
 .B \-h, \-\-help
 Print help
-.TP
-.B \-V, \-\-version
-Print version
+.sp
+There is no
+.B \-\-config
+or top\(hylevel
+.B \-\-port
+flag: the server reads its configuration from the path below, and per\-command
+flags are listed with each command above.
 .SH FILES
 .TP
 .I ~/.config/linux-link/config.toml
