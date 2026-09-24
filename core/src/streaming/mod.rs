@@ -20,6 +20,8 @@ pub mod transport;
 // Server-only modules — these require Linux-specific dependencies
 #[cfg(feature = "capture")]
 pub mod audio_capture;
+#[cfg(feature = "encode")]
+pub mod bench;
 #[cfg(feature = "capture")]
 pub mod capture;
 #[cfg(feature = "capture")]

@@ -22,7 +22,7 @@ use std::sync::Mutex;
 pub const DEFAULT_CAPACITY: usize = 8_192;
 
 /// One percentile read-out, in milliseconds, as it appears in a session record.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Summary {
     /// Observations taken over the whole session (not the retained subset).
     pub count: u64,
