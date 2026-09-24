@@ -34,6 +34,11 @@ pub(crate) const MAX_AUDIO_PACKETS_PER_RECEIVE: usize = 32;
 pub(crate) static CONTROL_WRITER: LazyLock<TokioMutex<Option<Arc<TokioMutex<OwnedWriteHalf>>>>> =
     LazyLock::new(|| TokioMutex::new(None));
 
+/// `{address, port}` the writer above belongs to, so `connect_to_peer` can
+/// tell a live session to the requested desktop from one to another host.
+pub(crate) static CONTROL_PEER: LazyLock<TokioMutex<Option<(String, u16)>>> =
+    LazyLock::new(|| TokioMutex::new(None));
+
 /// Global handle for the active control connection state.
 pub(crate) static CONNECTION_STATE: LazyLock<TokioMutex<api::ConnectionState>> =
     LazyLock::new(|| TokioMutex::new(api::ConnectionState::Disconnected));

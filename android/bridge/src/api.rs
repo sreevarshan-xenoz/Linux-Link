@@ -18,9 +18,9 @@ use tokio::sync::broadcast;
 use linux_link_core::streaming::InputPacket;
 
 use crate::{
-    CONNECTION_STATE, CONTROL_WRITER, MAX_AUDIO_PACKETS_PER_RECEIVE, MAX_FRAMES_PER_RECEIVE,
-    STREAMING_ACTIVE, STREAMING_BYTE_COUNT, STREAMING_FRAME_COUNT, STREAMING_HANDLE,
-    STREAMING_RTT_US, StreamingHandle, update_streaming_rtt,
+    CONNECTION_STATE, CONTROL_PEER, CONTROL_WRITER, MAX_AUDIO_PACKETS_PER_RECEIVE,
+    MAX_FRAMES_PER_RECEIVE, STREAMING_ACTIVE, STREAMING_BYTE_COUNT, STREAMING_FRAME_COUNT,
+    STREAMING_HANDLE, STREAMING_RTT_US, StreamingHandle, update_streaming_rtt,
 };
 
 /// Initialize the Linux Link backend
@@ -269,6 +269,25 @@ pub async fn get_peers() -> Result<Vec<PeerInfoDto>, String> {
 
 /// Connect to a peer
 pub async fn connect_to_peer(address: String, port: u16) -> Result<ConnectionState, String> {
+    // Kotlin calls this from several poll loops (clipboard sync, quick
+    // settings, retry paths) without coordinating. A second call while the
+    // first connection is still up would tear down a working control session
+    // and re-register the same device_id, which the server reads as a
+    // reconnect storm. Reuse what is already connected.
+    {
+        // Locked in the same order as the control reader (writer, then peer) so
+        // the two can never dead-lock against each other.
+        let writer_live = (*CONTROL_WRITER).lock().await.is_some();
+        let live = (*CONTROL_PEER).lock().await;
+        if writer_live
+            && live
+                .as_ref()
+                .is_some_and(|(host, live_port)| *host == address && *live_port == port)
+        {
+            return Ok(ConnectionState::Connected);
+        }
+    }
+
     let mut state_guard = (*CONNECTION_STATE).lock().await;
     *state_guard = ConnectionState::Connecting;
 
@@ -292,8 +311,12 @@ pub async fn connect_to_peer(address: String, port: u16) -> Result<ConnectionSta
         match conn_mgr.connect(&address, port, &identity).await {
             Ok(stream) => {
                 let (reader, writer) = stream.into_split();
-                let mut writer_guard = (*CONTROL_WRITER).lock().await;
-                *writer_guard = Some(Arc::new(Mutex::new(writer)));
+                let writer_arc = Arc::new(Mutex::new(writer));
+                {
+                    let mut writer_guard = (*CONTROL_WRITER).lock().await;
+                    *writer_guard = Some(writer_arc.clone());
+                }
+                *crate::CONTROL_PEER.lock().await = Some((address.clone(), port));
 
                 // Create a broadcast channel for forwarding incoming packets to Flutter
                 let (packet_tx, _) = broadcast::channel(256);
@@ -374,12 +397,26 @@ pub async fn connect_to_peer(address: String, port: u16) -> Result<ConnectionSta
                             line.clear();
                         }
                         tracing::warn!("Control connection lost");
+                        // Only retire the shared slots if they still belong to
+                        // *this* connection. An older reader that dies late
+                        // would otherwise wipe a newer connection's writer,
+                        // permanently pushing every query onto the one-shot
+                        // fallback path.
+                        let still_ours = {
+                            let guard = (*CONTROL_WRITER).lock().await;
+                            guard
+                                .as_ref()
+                                .is_some_and(|live| Arc::ptr_eq(live, &writer_arc))
+                        };
+                        if !still_ours {
+                            return;
+                        }
+                        *crate::CONTROL_PEER.lock().await = None;
+                        *crate::INCOMING_PACKETS.lock().await = None;
                         let mut state_guard = (*CONNECTION_STATE).lock().await;
                         *state_guard = ConnectionState::Disconnected;
                         let mut writer_guard = (*CONTROL_WRITER).lock().await;
                         *writer_guard = None;
-                        let mut incoming = crate::INCOMING_PACKETS.lock().await;
-                        *incoming = None;
                         *crate::WAN_IDENTITY.lock().await = None;
                         crate::SIREN_RINGING.store(false, std::sync::atomic::Ordering::SeqCst);
                         *crate::PAIR_RESULT.lock().await = None;
@@ -448,23 +485,12 @@ pub fn check_siren() -> bool {
     crate::SIREN_RINGING.swap(false, std::sync::atomic::Ordering::SeqCst)
 }
 
-/// Make the remote desktop ring (find-my-device). Opens a control connection
-/// like the other one-shot queries and pushes `{ring: true}`.
+/// Make the remote desktop ring (find-my-device): push `{ring: true}` over the
+/// control connection.
 pub async fn send_findmydevice(address: String, port: u16) -> Result<(), String> {
-    let conn_mgr = ConnectionManager::new(Duration::from_secs(5));
-    let identity = client_identity();
-    let stream = conn_mgr
-        .connect(&address, port, &identity)
-        .await
-        .map_err(|e| format!("Connection failed: {e}"))?;
-    let (_reader, writer) = tokio::io::split(stream);
-    let sender = TcpDeviceSender::new(writer, address);
     let request = NetworkPacket::new("kdeconnect.findmydevice")
         .with_body(serde_json::json!({ "ring": true }));
-    sender
-        .send_packet(&request)
-        .await
-        .map_err(|e| format!("Failed to send findmydevice: {e}"))
+    push_packet(&address, port, &request).await
 }
 
 // ---------------------------------------------------------------------------
@@ -662,48 +688,230 @@ pub fn take_pending_notifications() -> String {
     serde_json::to_string(&drained).unwrap_or_else(|_| "[]".to_string())
 }
 
-/// Reply to a desktop notification (R3 Tier-2 #11c). One-shot control
-/// connection like the other queries; the server's notification_reply plugin
-/// relays the text (replies.log + clipboard + on-screen confirmation).
+/// Reply to a desktop notification (R3 Tier-2 #11c) over the control
+/// connection; the server's notification_reply plugin relays the text
+/// (replies.log + clipboard + on-screen confirmation).
 pub async fn send_notification_reply(
     address: String,
     port: u16,
     id: String,
     text: String,
 ) -> Result<(), String> {
+    let request = NetworkPacket::new("kdeconnect.linuxlink.notification_reply")
+        .with_body(serde_json::json!({ "id": id, "reply": text, "passive": false }));
+    push_packet(&address, port, &request).await
+}
+
+/// A control request that got no answer on the shared connection.
+///
+/// The server is talking to us — it just never sent `reply_type` — so opening
+/// a second connection cannot help. Callers must surface this as an error
+/// instead of falling back.
+#[derive(Debug)]
+pub struct NoReply;
+
+impl std::fmt::Display for NoReply {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("The desktop did not answer over the control connection")
+    }
+}
+
+impl From<NoReply> for String {
+    fn from(e: NoReply) -> Self {
+        e.to_string()
+    }
+}
+
+/// Send `request` on the shared control connection and resolve with the body
+/// of the first packet whose type is `reply_type`.
+///
+/// Every query used to open its own throwaway TCP connection carrying the same
+/// device_id. The server keys its client registry by device_id, so each of
+/// those evicted the real control session (which is how the phone silently
+/// stopped receiving desktop notifications), and dropping the socket the moment
+/// the answer arrived left the server writing into a dead pipe — the source of
+/// the `Broken pipe` plugin errors and the "reconnect storm" kicks. One shared
+/// connection for everything instead.
+///
+/// `Ok(None)` means there is no live control connection: the caller should use
+/// [`oneshot_request`]. `Err(NoReply)` means the connection is live but the
+/// server never answered.
+async fn control_request(
+    address: &str,
+    request: &NetworkPacket,
+    reply_type: &str,
+    timeout: Duration,
+) -> Result<Option<serde_json::Value>, NoReply> {
+    let writer = {
+        let guard = (*CONTROL_WRITER).lock().await;
+        guard.as_ref().cloned()
+    };
+    // Subscribe before sending: the answer can otherwise land in the broadcast
+    // before there is anyone listening for it.
+    let rx = {
+        let guard = crate::INCOMING_PACKETS.lock().await;
+        guard.as_ref().map(|tx| tx.subscribe())
+    };
+    let (Some(writer), Some(mut rx)) = (writer, rx) else {
+        return Ok(None);
+    };
+
+    let sender = TcpDeviceSender::from_arc(writer, address.to_string());
+    sender.send_packet(request).await.map_err(|e| {
+        tracing::warn!("Control request failed to send: {e}");
+        NoReply
+    })?;
+
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(NoReply);
+        }
+        match tokio::time::timeout(remaining, rx.recv()).await {
+            Ok(Ok(line)) => {
+                if let Ok(packet) = NetworkPacket::from_wire(&line)
+                    && packet.packet_type == reply_type
+                {
+                    return Ok(Some(packet.body));
+                }
+            }
+            // The reader loop retires the shared writer when the socket dies,
+            // so a lagging subscriber simply means "no answer on this one".
+            Ok(Err(_)) | Err(_) => return Err(NoReply),
+        }
+    }
+}
+
+/// Open a control connection for a single request, answer it, and close it
+/// politely.
+///
+/// Only for callers with no live control connection to share. The write half is
+/// shut down and the socket drained before returning so the server's last
+/// writes land on a closed-but-flushing pipe rather than an aborted one —
+/// closing mid-write is what produced the `Broken pipe` plugin errors.
+async fn oneshot_request(
+    address: &str,
+    port: u16,
+    request: &NetworkPacket,
+    reply_type: &str,
+    timeout: Duration,
+) -> Result<serde_json::Value, String> {
     let conn_mgr = ConnectionManager::new(Duration::from_secs(5));
     let identity = client_identity();
     let stream = conn_mgr
-        .connect(&address, port, &identity)
+        .connect(address, port, &identity)
         .await
         .map_err(|e| format!("Connection failed: {e}"))?;
-    let (_reader, writer) = tokio::io::split(stream);
-    let sender = TcpDeviceSender::new(writer, address);
-    let request = NetworkPacket::new("kdeconnect.linuxlink.notification_reply")
-        .with_body(serde_json::json!({ "id": id, "reply": text, "passive": false }));
+    let (reader, writer) = tokio::io::split(stream);
+    let writer = Arc::new(Mutex::new(writer));
+    let sender = TcpDeviceSender::from_arc(writer.clone(), address.to_string());
     sender
-        .send_packet(&request)
+        .send_packet(request)
         .await
-        .map_err(|e| format!("Failed to send notification reply: {e}"))
+        .map_err(|e| format!("Failed to send {reply_type} query: {e}"))?;
+
+    let mut lines = tokio::io::BufReader::new(reader).lines();
+    let deadline = tokio::time::Instant::now() + timeout;
+    let reply = loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(format!("Timeout waiting for {reply_type} response"));
+        }
+        match tokio::time::timeout(remaining, lines.next_line()).await {
+            Ok(Ok(Some(line))) => {
+                if let Ok(packet) = NetworkPacket::from_wire(&line)
+                    && packet.packet_type == reply_type
+                {
+                    break packet.body;
+                }
+            }
+            Ok(Ok(None)) => return Err("Connection closed by peer".to_string()),
+            Ok(Err(e)) => return Err(format!("Read error: {e}")),
+            Err(_) => return Err(format!("Timeout waiting for {reply_type} response")),
+        }
+    };
+    let mut writer = writer.lock().await;
+    let _ = writer.shutdown().await;
+    drop(writer);
+    // Read the server's remaining packets to EOF. Closing a socket with unread
+    // receive data sends RST, and that is exactly what the server's plugins
+    // report as `Broken pipe`.
+    let _ = tokio::time::timeout(Duration::from_millis(250), async {
+        while let Ok(Some(_)) = lines.next_line().await {}
+    })
+    .await;
+    Ok(reply)
+}
+
+/// Request/reply for a desktop query: reuse the live control connection, and
+/// only open a short-lived one when there is nothing to reuse.
+async fn query_peer(
+    address: &str,
+    port: u16,
+    request: &NetworkPacket,
+    reply_type: &str,
+    timeout: Duration,
+) -> Result<serde_json::Value, String> {
+    match control_request(address, request, reply_type, timeout).await? {
+        Some(body) => Ok(body),
+        None => oneshot_request(address, port, request, reply_type, timeout).await,
+    }
+}
+
+/// Fire-and-forget push: write `request` on the live control connection, or on
+/// a dedicated one when the phone is not connected yet.
+///
+/// The dedicated connection is half-closed and drained rather than dropped, for
+/// the same reason [`oneshot_request`] is: an abrupt close with data still in
+/// flight shows up server-side as a `Broken pipe` plugin error.
+async fn push_packet(address: &str, port: u16, request: &NetworkPacket) -> Result<(), String> {
+    let writer = {
+        let guard = (*CONTROL_WRITER).lock().await;
+        guard.as_ref().cloned()
+    };
+    if let Some(writer) = writer {
+        let sender = TcpDeviceSender::from_arc(writer, address.to_string());
+        return sender
+            .send_packet(request)
+            .await
+            .map_err(|e| format!("Failed to send {}: {e}", request.packet_type));
+    }
+
+    let conn_mgr = ConnectionManager::new(Duration::from_secs(5));
+    let identity = client_identity();
+    let stream = conn_mgr
+        .connect(address, port, &identity)
+        .await
+        .map_err(|e| format!("Connection failed: {e}"))?;
+    let (mut reader, writer) = tokio::io::split(stream);
+    let writer = Arc::new(Mutex::new(writer));
+    let sender = TcpDeviceSender::from_arc(writer.clone(), address.to_string());
+    let sent = sender
+        .send_packet(request)
+        .await
+        .map_err(|e| format!("Failed to send {}: {e}", request.packet_type));
+    let mut writer = writer.lock().await;
+    let _ = writer.shutdown().await;
+    drop(writer);
+    let mut sink = [0u8; 512];
+    let _ = tokio::time::timeout(Duration::from_millis(250), async {
+        while let Ok(n) = reader.read(&mut sink).await {
+            if n == 0 {
+                break;
+            }
+        }
+    })
+    .await;
+    sent
 }
 
 /// Send clipboard content to peer using KDE Connect protocol.
 pub async fn send_clipboard(address: String, port: u16, content: String) -> Result<(), String> {
-    let writer_arc = {
-        let guard = (*CONTROL_WRITER).lock().await;
-        guard
-            .as_ref()
-            .cloned()
-            .ok_or_else(|| "Not connected".to_string())?
-    };
-    let sender = TcpDeviceSender::from_arc(writer_arc, address.clone());
     let packet = NetworkPacket::new("kdeconnect.clipboard").with_body(serde_json::json!({
         "content": content,
     }));
-    sender
-        .send_packet(&packet)
-        .await
-        .map_err(|e| e.to_string())?;
+    push_packet(&address, port, &packet).await?;
     tracing::info!(
         "Clipboard sent to {}:{} ({} chars)",
         address,
@@ -714,91 +922,21 @@ pub async fn send_clipboard(address: String, port: u16, content: String) -> Resu
 }
 
 /// Get clipboard content from peer.
-///
-/// Tries the existing control connection first for lower latency.
-/// Falls back to a new TCP connection if not currently connected.
 pub async fn get_clipboard(address: String, port: u16) -> Result<String, String> {
-    // Try existing control connection first
-    let writer_opt = {
-        let guard = (*CONTROL_WRITER).lock().await;
-        guard.as_ref().cloned()
-    };
-
-    if let Some(writer) = writer_opt {
-        let sender = TcpDeviceSender::from_arc(writer, address.clone());
-        let request = NetworkPacket::new("kdeconnect.clipboard.connect");
-        sender
-            .send_packet(&request)
-            .await
-            .map_err(|e| e.to_string())?;
-
-        // Subscribe to incoming packets and wait for the clipboard response
-        let rx = {
-            let guard = crate::INCOMING_PACKETS.lock().await;
-            guard.as_ref().map(|tx| tx.subscribe())
-        };
-        if let Some(mut rx) = rx {
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-            loop {
-                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-                if remaining.is_zero() {
-                    return Err("Timeout waiting for clipboard response".to_string());
-                }
-                match tokio::time::timeout(remaining, rx.recv()).await {
-                    Ok(Ok(line)) => {
-                        if let Ok(packet) = NetworkPacket::from_wire(&line)
-                            && packet.packet_type == "kdeconnect.clipboard"
-                        {
-                            let content = packet
-                                .body
-                                .get("content")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .to_string();
-                            return Ok(content);
-                        }
-                    }
-                    Ok(Err(_)) => return Err("Connection closed".to_string()),
-                    Err(_) => return Err("Timeout waiting for clipboard response".to_string()),
-                }
-            }
-        }
-    }
-
-    // Fall back to a new TCP connection
-    let conn_mgr = ConnectionManager::new(Duration::from_secs(10));
-    let identity = client_identity();
-    let stream = conn_mgr
-        .connect(&address, port, &identity)
-        .await
-        .map_err(|e| e.to_string())?;
-    let (reader, writer) = tokio::io::split(stream);
-    let sender = TcpDeviceSender::new(writer, address);
     let request = NetworkPacket::new("kdeconnect.clipboard.connect");
-    sender
-        .send_packet(&request)
-        .await
-        .map_err(|e| e.to_string())?;
-    let mut lines = tokio::io::BufReader::new(reader).lines();
-    match tokio::time::timeout(Duration::from_secs(5), lines.next_line()).await {
-        Ok(Ok(Some(line))) => {
-            let packet = NetworkPacket::from_wire(&line).map_err(|e| e.to_string())?;
-            if packet.packet_type == "kdeconnect.clipboard" {
-                let content = packet
-                    .body
-                    .get("content")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                Ok(content)
-            } else {
-                Err(format!("Unexpected packet type: {}", packet.packet_type))
-            }
-        }
-        Ok(Ok(None)) => Err("Connection closed before response".to_string()),
-        Ok(Err(e)) => Err(format!("Read error: {}", e)),
-        Err(_) => Err("Timeout waiting for clipboard response".to_string()),
-    }
+    let body = query_peer(
+        &address,
+        port,
+        &request,
+        "kdeconnect.clipboard",
+        Duration::from_secs(5),
+    )
+    .await?;
+    Ok(body
+        .get("content")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string())
 }
 
 /// Send file to peer using KDE Share protocol.
@@ -871,52 +1009,34 @@ pub async fn list_remote_files(
     port: u16,
     remote_path: String,
 ) -> Result<Vec<RemoteFileDto>, String> {
-    let conn_mgr = ConnectionManager::new(Duration::from_secs(10));
-    let identity = client_identity();
-    let stream = conn_mgr
-        .connect(&address, port, &identity)
-        .await
-        .map_err(|e| e.to_string())?;
-    let (reader, writer) = tokio::io::split(stream);
-    let sender = TcpDeviceSender::new(writer, address);
     let request = NetworkPacket::new("kdeconnect.filebrowse.request")
         .with_body(serde_json::json!({ "path": remote_path }));
-    sender
-        .send_packet(&request)
-        .await
-        .map_err(|e| e.to_string())?;
-    let mut lines = tokio::io::BufReader::new(reader).lines();
-    match tokio::time::timeout(Duration::from_secs(10), lines.next_line()).await {
-        Ok(Ok(Some(line))) => {
-            let packet = NetworkPacket::from_wire(&line).map_err(|e| e.to_string())?;
-            if packet.packet_type != "kdeconnect.filebrowse.response" {
-                return Err(format!("Unexpected packet type: {}", packet.packet_type));
-            }
-            if let Some(error) = packet.body.get("error").and_then(|v| v.as_str()) {
-                return Err(error.to_string());
-            }
-            let files = packet
-                .body
-                .get("files")
-                .and_then(|v| v.as_array())
-                .ok_or_else(|| "Missing 'files' in response".to_string())?;
-            let result: Vec<RemoteFileDto> = files
-                .iter()
-                .filter_map(|f| {
-                    Some(RemoteFileDto {
-                        name: f.get("name")?.as_str()?.to_string(),
-                        is_directory: f.get("isDirectory")?.as_bool()?,
-                        size: f.get("size")?.as_u64()?,
-                        modified: f.get("modified")?.as_u64()?,
-                    })
-                })
-                .collect();
-            Ok(result)
-        }
-        Ok(Ok(None)) => Err("Connection closed before response".to_string()),
-        Ok(Err(e)) => Err(format!("Read error: {}", e)),
-        Err(_) => Err("Timeout waiting for file list response".to_string()),
+    let body = query_peer(
+        &address,
+        port,
+        &request,
+        "kdeconnect.filebrowse.response",
+        Duration::from_secs(10),
+    )
+    .await?;
+    if let Some(error) = body.get("error").and_then(|v| v.as_str()) {
+        return Err(error.to_string());
     }
+    let files = body
+        .get("files")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| "Missing 'files' in response".to_string())?;
+    Ok(files
+        .iter()
+        .filter_map(|f| {
+            Some(RemoteFileDto {
+                name: f.get("name")?.as_str()?.to_string(),
+                is_directory: f.get("isDirectory")?.as_bool()?,
+                size: f.get("size")?.as_u64()?,
+                modified: f.get("modified")?.as_u64()?,
+            })
+        })
+        .collect())
 }
 
 /// Request remote screen streaming.
@@ -1501,67 +1621,36 @@ pub fn forget_trusted_peer(label: String) -> bool {
     }
 }
 
-/// Get the number of monitors available on the remote server.
-///
-/// F2: Multi-monitor support — returns 0 if detection fails or no display.
 /// Get detailed list of monitors available on the remote server.
+///
+/// F2: Multi-monitor support — returns an error if the desktop does not answer.
 pub async fn get_monitors(address: String, port: u16) -> Result<Vec<MonitorInfoDto>, String> {
-    let conn_mgr = ConnectionManager::new(Duration::from_secs(5));
-    let identity = client_identity();
-    match conn_mgr.connect(&address, port, &identity).await {
-        Ok(stream) => {
-            let (reader, writer) = tokio::io::split(stream);
-            let sender = TcpDeviceSender::new(writer, address);
-            let request = NetworkPacket::new("kdeconnect.linuxlink.monitors")
-                .with_body(serde_json::json!({}));
-
-            if let Err(e) = sender.send_packet(&request).await {
-                return Err(format!("Failed to send monitor query: {e}"));
-            }
-
-            let mut lines = tokio::io::BufReader::new(reader).lines();
-            match tokio::time::timeout(Duration::from_secs(5), lines.next_line()).await {
-                Ok(Ok(Some(line))) => {
-                    match NetworkPacket::from_wire(&line) {
-                        Ok(packet) => {
-                            if packet.packet_type == "kdeconnect.linuxlink.monitors" {
-                                let monitors: Vec<MonitorInfoDto> = packet
-                                    .body
-                                    .get("monitors")
-                                    .and_then(|v| serde_json::from_value(v.clone()).ok())
-                                    .unwrap_or_else(|| {
-                                        // Legacy fallback if server only returns count
-                                        let count = packet
-                                            .body
-                                            .get("count")
-                                            .and_then(|v| v.as_u64())
-                                            .unwrap_or(1)
-                                            as u32;
-                                        (0..count)
-                                            .map(|i| MonitorInfoDto {
-                                                index: i,
-                                                name: format!("Monitor {i}"),
-                                                width: 1920,
-                                                height: 1080,
-                                                is_primary: i == 0,
-                                            })
-                                            .collect()
-                                    });
-                                Ok(monitors)
-                            } else {
-                                Err("Unexpected response packet type".to_string())
-                            }
-                        }
-                        Err(e) => Err(format!("Failed to parse monitor response: {e}")),
-                    }
-                }
-                Ok(Ok(None)) => Err("Connection closed by peer".to_string()),
-                Ok(Err(e)) => Err(format!("Read error: {e}")),
-                Err(_) => Err("Timeout waiting for monitor response".to_string()),
-            }
-        }
-        Err(e) => Err(format!("Connection failed: {e}")),
-    }
+    let request =
+        NetworkPacket::new("kdeconnect.linuxlink.monitors").with_body(serde_json::json!({}));
+    let body = query_peer(
+        &address,
+        port,
+        &request,
+        "kdeconnect.linuxlink.monitors",
+        Duration::from_secs(5),
+    )
+    .await?;
+    Ok(body
+        .get("monitors")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_else(|| {
+            // Legacy fallback if server only returns count
+            let count = body.get("count").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+            (0..count)
+                .map(|i| MonitorInfoDto {
+                    index: i,
+                    name: format!("Monitor {i}"),
+                    width: 1920,
+                    height: 1080,
+                    is_primary: i == 0,
+                })
+                .collect()
+        }))
 }
 
 /// Get the number of monitors available on the remote server (legacy).
@@ -1572,88 +1661,44 @@ pub async fn get_monitor_count(address: String, port: u16) -> Result<u32, String
 /// Desktop battery state as `{currentCharge, isCharging}`, or `noBattery` on
 /// desktops without one (KDE Connect parity, Tier-2 #11).
 pub async fn get_battery(address: String, port: u16) -> Result<serde_json::Value, String> {
-    let conn_mgr = ConnectionManager::new(Duration::from_secs(5));
-    let identity = client_identity();
-    let stream = conn_mgr
-        .connect(&address, port, &identity)
-        .await
-        .map_err(|e| format!("Connection failed: {e}"))?;
-    let (reader, writer) = tokio::io::split(stream);
-    let sender = TcpDeviceSender::new(writer, address);
     let request = NetworkPacket::new("kdeconnect.battery.request").with_body(serde_json::json!({}));
-    sender
-        .send_packet(&request)
-        .await
-        .map_err(|e| format!("Failed to send battery query: {e}"))?;
-
-    let mut lines = tokio::io::BufReader::new(reader).lines();
-    match tokio::time::timeout(Duration::from_secs(5), lines.next_line()).await {
-        Ok(Ok(Some(line))) => match NetworkPacket::from_wire(&line) {
-            Ok(packet) if packet.packet_type == "kdeconnect.battery" => Ok(packet.body),
-            Ok(packet) => Err(format!(
-                "Unexpected response packet type {}",
-                packet.packet_type
-            )),
-            Err(e) => Err(format!("Failed to parse battery response: {e}")),
-        },
-        Ok(Ok(None)) => Err("Connection closed by peer".to_string()),
-        Ok(Err(e)) => Err(format!("Read error: {e}")),
-        Err(_) => Err("Timeout waiting for battery response".to_string()),
-    }
+    query_peer(
+        &address,
+        port,
+        &request,
+        "kdeconnect.battery",
+        Duration::from_secs(5),
+    )
+    .await
 }
 
 /// Desktop privacy mode (Tier-3 #15): ask the server to grab/release the
 /// physical keyboard+mouse and/or lock its screen, then wait for the
-/// plugin's reply body (`{ok, grabbed?, locked?, error?}`). Other pushes
-/// may arrive first on the control socket, so lines are matched by packet
-/// type within the timeout.
+/// plugin's reply body (`{ok, grabbed?, locked?, error?}`). Replies are
+/// matched by packet type within the timeout because other pushes may
+/// overtake them on the control connection.
 pub async fn desktop_privacy(
     address: String,
     port: u16,
     action: String,
     lock: bool,
 ) -> Result<serde_json::Value, String> {
-    let conn_mgr = ConnectionManager::new(Duration::from_secs(5));
-    let identity = client_identity();
-    let stream = conn_mgr
-        .connect(&address, port, &identity)
-        .await
-        .map_err(|e| format!("Connection failed: {e}"))?;
-    let (reader, writer) = tokio::io::split(stream);
-    let sender = TcpDeviceSender::new(writer, address);
     let request = NetworkPacket::new("kdeconnect.linuxlink.privacy")
         .with_body(serde_json::json!({ "action": action, "lock": lock }));
-    sender
-        .send_packet(&request)
-        .await
-        .map_err(|e| format!("Failed to send privacy request: {e}"))?;
-
-    let mut lines = tokio::io::BufReader::new(reader).lines();
-    let deadline = tokio::time::sleep(Duration::from_secs(5));
-    tokio::pin!(deadline);
-    loop {
-        let line = tokio::select! {
-            _ = &mut deadline => return Err("Timeout waiting for privacy response".to_string()),
-            l = lines.next_line() => l,
-        };
-        match line {
-            Ok(Some(line)) => {
-                if let Ok(packet) = NetworkPacket::from_wire(&line)
-                    && packet.packet_type == "kdeconnect.linuxlink.privacy"
-                {
-                    return Ok(packet.body);
-                }
-            }
-            Ok(None) => return Err("Connection closed by peer".to_string()),
-            Err(e) => return Err(format!("Read error: {e}")),
-        }
-    }
+    query_peer(
+        &address,
+        port,
+        &request,
+        "kdeconnect.linuxlink.privacy",
+        Duration::from_secs(5),
+    )
+    .await
 }
 
 /// Desktop audio control (Tier-3 #16): send a `kdeconnect.linuxlink.audio`
 /// request built from `body_json` (e.g. `{"action":"setVolume","volume":45}`)
 /// and wait for the plugin's reply, matched by packet type within the
-/// timeout. Same one-shot control-connection shape as [desktop_privacy].
+/// timeout. Same shared-control-connection shape as [desktop_privacy].
 pub async fn audio_control(
     address: String,
     port: u16,
@@ -1661,40 +1706,15 @@ pub async fn audio_control(
 ) -> Result<serde_json::Value, String> {
     let body: serde_json::Value =
         serde_json::from_str(&body_json).map_err(|e| format!("Bad request JSON: {e}"))?;
-    let conn_mgr = ConnectionManager::new(Duration::from_secs(5));
-    let identity = client_identity();
-    let stream = conn_mgr
-        .connect(&address, port, &identity)
-        .await
-        .map_err(|e| format!("Connection failed: {e}"))?;
-    let (reader, writer) = tokio::io::split(stream);
-    let sender = TcpDeviceSender::new(writer, address);
     let request = NetworkPacket::new("kdeconnect.linuxlink.audio").with_body(body);
-    sender
-        .send_packet(&request)
-        .await
-        .map_err(|e| format!("Failed to send audio request: {e}"))?;
-
-    let mut lines = tokio::io::BufReader::new(reader).lines();
-    let deadline = tokio::time::sleep(Duration::from_secs(8));
-    tokio::pin!(deadline);
-    loop {
-        let line = tokio::select! {
-            _ = &mut deadline => return Err("Timeout waiting for audio response".to_string()),
-            l = lines.next_line() => l,
-        };
-        match line {
-            Ok(Some(line)) => {
-                if let Ok(packet) = NetworkPacket::from_wire(&line)
-                    && packet.packet_type == "kdeconnect.linuxlink.audio"
-                {
-                    return Ok(packet.body);
-                }
-            }
-            Ok(None) => return Err("Connection closed by peer".to_string()),
-            Err(e) => return Err(format!("Read error: {e}")),
-        }
-    }
+    query_peer(
+        &address,
+        port,
+        &request,
+        "kdeconnect.linuxlink.audio",
+        Duration::from_secs(8),
+    )
+    .await
 }
 
 /// A desktop window reported by the server's Hyprland windows plugin
@@ -1746,36 +1766,17 @@ pub async fn get_windows(
     address: String,
     port: u16,
 ) -> Result<(Vec<WindowInfoDto>, String, Option<[i32; 4]>), String> {
-    let conn_mgr = ConnectionManager::new(Duration::from_secs(5));
-    let identity = client_identity();
-    let stream = conn_mgr
-        .connect(&address, port, &identity)
-        .await
-        .map_err(|e| format!("Connection failed: {e}"))?;
-    let (reader, writer) = tokio::io::split(stream);
-    let sender = TcpDeviceSender::new(writer, address);
-
     let request =
         NetworkPacket::new("kdeconnect.linuxlink.windows").with_body(serde_json::json!({}));
-    sender
-        .send_packet(&request)
-        .await
-        .map_err(|e| format!("Failed to send window query: {e}"))?;
-
-    let mut lines = tokio::io::BufReader::new(reader).lines();
-    let line = tokio::time::timeout(Duration::from_secs(5), lines.next_line())
-        .await
-        .map_err(|_| "Timeout waiting for window response".to_string())?
-        .map_err(|e| format!("Read error: {e}"))?
-        .ok_or_else(|| "Connection closed by peer".to_string())?;
-
-    let packet = NetworkPacket::from_wire(&line)
-        .map_err(|e| format!("Failed to parse window response: {e}"))?;
-    if packet.packet_type != "kdeconnect.linuxlink.windows" {
-        return Err("Unexpected response packet type".to_string());
-    }
-    if !packet
-        .body
+    let body = query_peer(
+        &address,
+        port,
+        &request,
+        "kdeconnect.linuxlink.windows",
+        Duration::from_secs(5),
+    )
+    .await?;
+    if !body
         .get("available")
         .and_then(|v| v.as_bool())
         .unwrap_or(false)
@@ -1783,14 +1784,12 @@ pub async fn get_windows(
         return Err("Server is not running Hyprland (no window list)".to_string());
     }
 
-    let active = packet
-        .body
+    let active = body
         .get("activeAddress")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let mut windows: Vec<WindowInfoDto> = packet
-        .body
+    let mut windows: Vec<WindowInfoDto> = body
         .get("windows")
         .cloned()
         .and_then(|v| serde_json::from_value(v).ok())
@@ -1798,8 +1797,7 @@ pub async fn get_windows(
     for w in &mut windows {
         w.active = w.address == active;
     }
-    let screen = packet
-        .body
+    let screen = body
         .get("screen")
         .cloned()
         .and_then(|v| serde_json::from_value::<[i32; 4]>(v).ok());
@@ -1809,20 +1807,9 @@ pub async fn get_windows(
 /// Execute a power management command on the remote server.
 /// Supported actions: "sleep", "shutdown", "restart", "hibernate".
 pub async fn send_power_command(address: String, port: u16, action: String) -> Result<(), String> {
-    let conn_mgr = ConnectionManager::new(Duration::from_secs(10));
-    let identity = client_identity();
-    let stream = conn_mgr
-        .connect(&address, port, &identity)
-        .await
-        .map_err(|e| e.to_string())?;
-    let (_reader, writer) = tokio::io::split(stream);
-    let sender = TcpDeviceSender::new(writer, address);
     let packet = NetworkPacket::new("kdeconnect.linuxlink.power")
         .with_body(serde_json::json!({ "action": action }));
-    sender
-        .send_packet(&packet)
-        .await
-        .map_err(|e| e.to_string())?;
+    push_packet(&address, port, &packet).await?;
     tracing::info!("Power command sent: {action}");
     Ok(())
 }
@@ -1833,42 +1820,22 @@ pub async fn execute_remote_command(
     port: u16,
     command: String,
 ) -> Result<String, String> {
-    let conn_mgr = ConnectionManager::new(Duration::from_secs(10));
-    let identity = client_identity();
-    let stream = conn_mgr
-        .connect(&address, port, &identity)
-        .await
-        .map_err(|e| e.to_string())?;
-    let (reader, writer) = tokio::io::split(stream);
-    let sender = TcpDeviceSender::new(writer, address);
     let request = NetworkPacket::new("kdeconnect.linuxlink.exec")
         .with_body(serde_json::json!({ "command": command }));
-    sender
-        .send_packet(&request)
-        .await
-        .map_err(|e| e.to_string())?;
-    let mut lines = tokio::io::BufReader::new(reader).lines();
-    match tokio::time::timeout(Duration::from_secs(10), lines.next_line()).await {
-        Ok(Ok(Some(line))) => match NetworkPacket::from_wire(&line) {
-            Ok(packet) => {
-                if packet.packet_type == "kdeconnect.linuxlink.exec" {
-                    let body = &packet.body;
-                    let stdout = body.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
-                    let stderr = body.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
-                    let exit_code = body.get("exit_code").and_then(|v| v.as_i64()).unwrap_or(-1);
-                    Ok(format!(
-                        "{stdout}\n---END-OUTPUT---\n{stderr}\n---END-ERROR---\n{exit_code}"
-                    ))
-                } else {
-                    Err(format!("Unexpected packet type: {}", packet.packet_type))
-                }
-            }
-            Err(e) => Err(format!("Failed to parse response: {e}")),
-        },
-        Ok(Ok(None)) => Err("Connection closed before response".to_string()),
-        Ok(Err(e)) => Err(format!("Read error: {e}")),
-        Err(_) => Err("Timeout waiting for exec response".to_string()),
-    }
+    let body = query_peer(
+        &address,
+        port,
+        &request,
+        "kdeconnect.linuxlink.exec",
+        Duration::from_secs(10),
+    )
+    .await?;
+    let stdout = body.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
+    let stderr = body.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
+    let exit_code = body.get("exit_code").and_then(|v| v.as_i64()).unwrap_or(-1);
+    Ok(format!(
+        "{stdout}\n---END-OUTPUT---\n{stderr}\n---END-ERROR---\n{exit_code}"
+    ))
 }
 
 /// Receive queued audio packets from the streaming client (F1: Audio Streaming).
