@@ -685,16 +685,37 @@ each item is a live defect with a known location, not a wish.
   have. Device behavior unverified (the caption's wording and width are a phone question).
 
 **Input paths that silently degrade**
-- 2057 complete the server keycode map — `server/src/input_injector.rs:27` covers ~26 keys and unmapped
-  codes fall through to `Key::Unicode` control characters.
-- 2058 fix modifier delivery (Shift/Ctrl/Super absent) so no combo degrades.
-- 2059 map the media/volume keycodes the client already sends.
-- 2060 map `MENU` and F13+ instead of dropping them client-side.
-- Fixed in the client's table while this group was being worked: Android F11/F12 were derived by
+- 2057 **CLOSED (`295ff1c`, `dc9fc22`)** complete the server keycode map. Fixed in the order the
+  diagnosis required: first the architecture, then the table. The uinput backend routed every key through
+  the enigo table on its way to a kernel that only wanted the number (`295ff1c`) — so the key the phone
+  pressed became a `Key`, then a *different* evdev code, then `KEY_UNKNOWN` when the table's reverse
+  lookup found nothing, which is why Wayland input "degraded" on the backend with no table dependency at
+  all. uinput now emits the code off the wire and the table exists only for the X11 rung that genuinely
+  needs a keysym name. There it went from 26 rows to 110 (`dc9fc22`), and its codes are now written as
+  `evdev::KeyCode` names rather than numbers: a wrong number silently injects another key, a wrong name
+  is a compile error.
+- 2058 **CLOSED (`dc9fc22`)**: every modifier the phone sends is in the table — both Shifts, both
+  Controls, left Alt, left Super, plus Caps Lock and Num Lock. Right Alt and right Super go through
+  `Key::Other` with the X keysym, because enigo names no right-hand variant for either on Linux; that is
+  the only place in the table where the key is identified by a number rather than a name, and it says so.
+- 2059 **CLOSED (`dc9fc22`)**: volume up/down and media next/play-pause/previous map. `KEY_MUTE`
+  deliberately does **not** — the client has no control that sends it, and the table's contract test
+  covers what the client can emit, not what a future one might.
+- 2060 **CLOSED (`dc9fc22`)**, with the item's premise corrected: there is nothing to stop dropping
+  F13+ *client-side* because Android has no keycode above F10, so this client cannot name those keys.
+  `KEY_MENU` (139) now maps — to enigo's `LMenu`, which is the X `Menu` keysym, the application-keys key;
+  it is not `KEY_COMPOSE` (127), which is what the client's own comment claimed for the row. F13-F24 are
+  in the server table anyway, so the X11 rung is no weaker than uinput, which will emit any code it
+  declares.
+- **Found while enumerating this group** (`bf88325`, client side): Android F11/F12 were derived by
   continuing the F1..F10 arithmetic, so the phone's F11 pressed **KEY_NUMLOCK** and its F12 pressed
-  **KEY_F1** (evdev 69 and 70, where the real codes are 87 and 88). The bridge test had been asserting
-  the contiguous arithmetic as if it were correct, so the defect had a passing test protecting it; both
-  the row and the test now name the evdev numbers.
+  **KEY_SCROLLLOCK** (evdev 69 and 70, where the real codes are 87 and 88). The bridge test had been
+  asserting the contiguous arithmetic as if it were correct, so the defect had a passing test protecting
+  it. No in-app control sends F11 or F12 today, which is why this stayed latent: the fix is guarded by a
+  unit test, not by a checklist step.
+- **Everything above is unit-verified.** This box injects through uinput, so the completed table — the
+  enigo rung — has not been exercised on a real X11/XWayland session; checklist §3 now asks for the
+  keyboard list to be run once per backend.
 - 2061 make direct-touch send a button **press** — today it moves and releases only, so drag-heavy desktop
   apps see a click that never happened.
 - 2062 delete `tapAbsolute` or route 2061 through it; it is dead either way.
@@ -982,7 +1003,10 @@ false-positive for any future audit)
 - 2268 transport: backoff sequence, jitter bounds, and cap.
 - 2269 transport: a connection that dies mid-request produces a typed error, not a timeout in every caller.
 - 2270 bitrate: hysteresis unit tests for both directions (fixes the asymmetry in 1756).
-- 2271 input: every keycode the client can emit has a server-side mapping (guards 2057-2060).
+- 2271 **CLOSED (`a9b903d`, `db75497`, `dc9fc22`)** input: every keycode the client can emit has a
+  server-side mapping. `core::input::keys::PHONE_EVDEV_KEY_RANGES` is the set; the bridge test
+  `emitted_codes_are_exactly_the_contracted_set` asserts its table produces *exactly* those 91 codes, and
+  the server test `every_key_the_phone_can_send_has_a_mapping` walks the same list against `KEYCODE_MAP`.
 - 2272 input: press/release pairing per device — no synthetic path may leave a key down.
 - 2273 input: view-only drops injection but not queries.
 - 2274 input: absolute coordinate mapping round-trips through letterbox and crop.
@@ -1444,11 +1468,17 @@ per-class semantics, then the v1 plane shrinks to compatibility-only.
 - 2660 assert press/release balance in every test that injects (2272).
 - 2661 a repeat policy (auto-repeat for held keys) and a way to stop it.
 - 2662 make key state queryable so the phone can show what it thinks is held.
-- 2663 the same keymap table shared between client and server, generated from one source — the root cause
-  behind 2057-2060.
-- 2664 tests that enumerate every emitted keycode against the server map (2271).
+- 2663 **PARTIAL (`a9b903d`)**: the *set* of codes is now shared — `core::input::keys` is the one source
+  both ends' tests are written against — but the two *tables* are still hand-written (Android key code →
+  evdev in the bridge, evdev → enigo `Key` in the server). Generating either from the other, or from a
+  single data file, is what remains; 2271 is the guard that makes a drift fail loudly meanwhile.
+- 2664 **CLOSED (`db75497`, `dc9fc22`)** — see 2271; both directions are enumerated in tests.
 - 2665 layout-aware injection (a non-QWERTY desktop must receive the keysym the user pressed).
-- 2666 unicode text injection on the uinput path, not only through enigo.
+- 2666 unicode text injection on the uinput path, not only through enigo. **Mechanism found while working
+  2057-2060 (`dc9fc22`)**: `InputInjector::text()` on uinput goes through `char_to_keycode`, which yields a
+  bare key press with no Shift — so pasted capitals arrive lowercase, and `*`/`+` land on the keypad codes
+  (`KEY_KPASTERISK`, `KEY_KPPLUS`) rather than the shifted digits. The enigo rung's new table cannot fix
+  this; it needs a shift-aware text path.
 
 **Pointer & touch**
 - 2667 right-click and middle-click reachable from a phone gesture.

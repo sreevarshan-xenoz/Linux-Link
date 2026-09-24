@@ -216,9 +216,18 @@ The ones that matter most, in order:
   desktop stopped emitting synthesized silence when it cannot capture. Checking this item is what surfaced a
   live defect behind the dead wire — the client's one demux loop `await`ed on the never-drained 8-slot audio
   queue and so stalled *video* behind it, and an audio-only teardown `break`s that loop and ends the session.
-- **2057/2058 — input that degrades silently.** `KEYCODE_MAP` in `server/src/input_injector.rs:27` covers
-  ~26 keys and unmapped codes fall through to `Key::Unicode`; modifiers are absent; the DirectTouch path
-  sends move+release with no press. These are the reason "it feels wrong" reports exist at all.
+- **2057/2058 — input that degrades silently.** `KEYCODE_MAP` in `server/src/input_injector.rs` covered
+  ~26 keys and unmapped codes fell through to `Key::Unicode`; modifiers were absent.
+  **Landed 2026-09-24** (`295ff1c`, `bf88325`, `a9b903d`, `db75497`, `dc9fc22`): the uinput path now injects
+  the evdev code the phone sent instead of round-tripping it through an enigo `Key`; the bridge's F11/F12
+  row stopped emitting NumLock/F1; `core::input::keys` names the 91 codes the phone can put on the wire and
+  *both* ends' tests are written against that set; the server table names all of them, so no code can
+  silently become a control character. Residuals, recorded rather than hidden: the completed table is the
+  **enigo/X11** rung and this box injects through uinput, so it has never been exercised on a real session
+  (checklist §3 now asks for the keyboard pass under both backends); one table is still generated from the
+  other only by test, not by code (2663 PARTIAL); and shifted text on uinput is a separate live defect with
+  its own id (2666). The other half of this bullet — "the DirectTouch path sends move+release with no
+  press" — is 2061, still open.
 
 Exit gate: every U id is closed or converted into a named bug with a repro; no reported number in the UI is
 produced by anything other than a measurement; the dead-link watchdog's behaviour is asserted by an
