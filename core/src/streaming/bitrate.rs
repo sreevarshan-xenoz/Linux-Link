@@ -74,10 +74,16 @@ impl AdaptiveBitrate {
         // Fast-path: if RTT is extremely high (> 500ms), reduce bitrate immediately
         if rtt_ms > 500 && self.current_bitrate_bps > self.min_bitrate_bps {
             let reduction = (self.current_bitrate_bps as f64 * 0.40) as u32; // Aggressive 40% reduction
-            let new_bitrate = self.current_bitrate_bps.saturating_sub(reduction).max(self.min_bitrate_bps);
-            
+            let new_bitrate = self
+                .current_bitrate_bps
+                .saturating_sub(reduction)
+                .max(self.min_bitrate_bps);
+
             if new_bitrate != self.current_bitrate_bps {
-                warn!("ABR FAST-PATH: Severe latency detected ({}ms), dropping bitrate to {} bps", rtt_ms, new_bitrate);
+                warn!(
+                    "ABR FAST-PATH: Severe latency detected ({}ms), dropping bitrate to {} bps",
+                    rtt_ms, new_bitrate
+                );
                 self.current_bitrate_bps = new_bitrate;
                 self.send_bitrate_update();
                 self.last_evaluation = Instant::now(); // Reset timer to avoid double-dip

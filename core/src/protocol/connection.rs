@@ -4,7 +4,7 @@ use crate::error::{LinuxLinkError, Result};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
-use tracing::{debug, info_span, Instrument};
+use tracing::{Instrument, debug, info_span};
 use uuid;
 
 #[derive(Debug, Clone)]
@@ -80,8 +80,11 @@ impl ConnectionManager {
 
             // Step 3: Read server's identity packet (optional)
             let mut identity_response = String::new();
-            match tokio::time::timeout(Duration::from_secs(3), reader.read_line(&mut identity_response))
-                .await
+            match tokio::time::timeout(
+                Duration::from_secs(3),
+                reader.read_line(&mut identity_response),
+            )
+            .await
             {
                 Ok(Ok(_)) if !identity_response.trim().is_empty() => {
                     debug!("Received server identity: {}", identity_response.trim());
@@ -93,12 +96,13 @@ impl ConnectionManager {
 
             // Step 4: Send client identity packet
             let identity_packet = identity.as_identity_packet();
-            let identity_bytes = identity_packet.to_wire().map_err(|e| {
-                LinuxLinkError::Serialization {
-                    format: "JSON",
-                    detail: e.to_string(),
-                }
-            })?;
+            let identity_bytes =
+                identity_packet
+                    .to_wire()
+                    .map_err(|e| LinuxLinkError::Serialization {
+                        format: "JSON",
+                        detail: e.to_string(),
+                    })?;
 
             let mut stream = reader.into_inner();
             stream

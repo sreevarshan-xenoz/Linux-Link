@@ -30,11 +30,7 @@ impl Plugin for BatteryPlugin {
         &["kdeconnect.battery"]
     }
 
-    async fn handle_packet(
-        &self,
-        packet: &NetworkPacket,
-        sender: &dyn DeviceSender,
-    ) -> Result<()> {
+    async fn handle_packet(&self, packet: &NetworkPacket, sender: &dyn DeviceSender) -> Result<()> {
         if packet.packet_type.as_str() == "kdeconnect.battery.request" {
             let (charge, is_charging) =
                 match (read_battery_charge().await, read_is_charging().await) {

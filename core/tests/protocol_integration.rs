@@ -35,7 +35,10 @@ async fn start_mock_server() -> (u16, Arc<Mutex<Vec<NetworkPacket>>>) {
         assert_eq!(line.trim(), HANDSHAKE_HELLO);
 
         // Step 2: Send OK
-        writer.write_all(format!("{}\n", HANDSHAKE_OK).as_bytes()).await.unwrap();
+        writer
+            .write_all(format!("{}\n", HANDSHAKE_OK).as_bytes())
+            .await
+            .unwrap();
 
         // Step 3: Send identity packet
         let identity = DeviceIdentity::new("mock-server", "Mock Server");
@@ -70,14 +73,8 @@ async fn start_mock_server() -> (u16, Arc<Mutex<Vec<NetworkPacket>>>) {
                                 rx.push(pkt.clone());
                             }
                             // Echo as response
-                            let resp = NetworkPacket::new(format!(
-                                "{}.response",
-                                pkt.packet_type
-                            ));
-                            writer
-                                .write_all(&resp.to_wire().unwrap())
-                                .await
-                                .unwrap();
+                            let resp = NetworkPacket::new(format!("{}.response", pkt.packet_type));
+                            writer.write_all(&resp.to_wire().unwrap()).await.unwrap();
                         }
                         Err(_) => {}
                     }
@@ -96,7 +93,11 @@ async fn test_handshake_success() {
     let manager = ConnectionManager::new(Duration::from_secs(10));
     let identity = DeviceIdentity::new("test-client", "Test Client");
     let result = manager.connect("127.0.0.1", port, &identity).await;
-    assert!(result.is_ok(), "Handshake should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Handshake should succeed: {:?}",
+        result.err()
+    );
 }
 
 #[tokio::test]
@@ -111,10 +112,7 @@ async fn test_handshake_wrong_protocol() {
         let mut reader = BufReader::new(&mut stream);
         reader.read_line(&mut line).await.unwrap();
         // Send wrong protocol version
-        stream
-            .write_all(b"LINUX_LINK_OK 999\n")
-            .await
-            .unwrap();
+        stream.write_all(b"LINUX_LINK_OK 999\n").await.unwrap();
     });
 
     let manager = ConnectionManager::new(Duration::from_secs(5));
@@ -186,14 +184,15 @@ async fn test_packet_with_body() {
     let sender = TcpDeviceSender::new(writer, "127.0.0.1".to_string());
 
     // Send a file browse request with body
-    let request =
-        NetworkPacket::new("kdeconnect.filebrowse.request")
-            .with_body(serde_json::json!({ "path": "/home/test" }));
+    let request = NetworkPacket::new("kdeconnect.filebrowse.request")
+        .with_body(serde_json::json!({ "path": "/home/test" }));
     sender.send_packet(&request).await.unwrap();
 
     tokio::time::sleep(Duration::from_millis(200)).await;
     let rx = received.lock().await;
-    let file_req = rx.iter().find(|p| p.packet_type == "kdeconnect.filebrowse.request");
+    let file_req = rx
+        .iter()
+        .find(|p| p.packet_type == "kdeconnect.filebrowse.request");
     assert!(file_req.is_some());
     if let Some(pkt) = file_req {
         let path = pkt.body.get("path").and_then(|v| v.as_str());

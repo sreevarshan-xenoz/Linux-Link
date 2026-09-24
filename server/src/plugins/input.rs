@@ -22,8 +22,10 @@ impl InputPlugin {
     async fn get_injector(&self) -> Result<Arc<Mutex<Option<InputInjector>>>> {
         let mut opt = self.injector.lock().await;
         if opt.is_none() {
-            *opt = Some(InputInjector::new().map_err(|e| linux_link_core::error::LinuxLinkError::Other {
-                detail: format!("Failed to create input injector: {e}"),
+            *opt = Some(InputInjector::new().map_err(|e| {
+                linux_link_core::error::LinuxLinkError::Other {
+                    detail: format!("Failed to create input injector: {e}"),
+                }
             })?);
             debug!("Input injector initialized on first use");
         }
@@ -70,13 +72,15 @@ impl Plugin for InputPlugin {
                 if let (Some(x), Some(y)) = (
                     body.get("dx").and_then(|v| v.as_f64()),
                     body.get("dy").and_then(|v| v.as_f64()),
-                ) && (x != 0.0 || y != 0.0) {
+                ) && (x != 0.0 || y != 0.0)
+                {
                     let _ = self.move_mouse(x as i32, y as i32).await;
                 }
 
                 // Handle mouse button events
                 if let Some(is_pressed) = body.get("isPressed").and_then(|v| v.as_bool())
-                    && let Some(button) = body.get("button").and_then(|v| v.as_i64()) {
+                    && let Some(button) = body.get("button").and_then(|v| v.as_i64())
+                {
                     let _ = self.mouse_button(button as i32, is_pressed).await;
                 }
 
@@ -101,9 +105,11 @@ impl InputPlugin {
     async fn move_mouse(&self, dx: i32, dy: i32) -> Result<()> {
         let injector = self.get_injector().await?;
         let mut inj = injector.lock().await;
-        let inj = inj.as_mut().ok_or_else(|| linux_link_core::error::LinuxLinkError::Other {
-            detail: "InputInjector not initialized".to_string(),
-        })?;
+        let inj = inj
+            .as_mut()
+            .ok_or_else(|| linux_link_core::error::LinuxLinkError::Other {
+                detail: "InputInjector not initialized".to_string(),
+            })?;
         inj.move_mouse_relative(dx, dy).map_err(Into::into)
     }
 
@@ -111,9 +117,11 @@ impl InputPlugin {
     async fn mouse_button(&self, button: i32, pressed: bool) -> Result<()> {
         let injector = self.get_injector().await?;
         let mut inj = injector.lock().await;
-        let inj = inj.as_mut().ok_or_else(|| linux_link_core::error::LinuxLinkError::Other {
-            detail: "InputInjector not initialized".to_string(),
-        })?;
+        let inj = inj
+            .as_mut()
+            .ok_or_else(|| linux_link_core::error::LinuxLinkError::Other {
+                detail: "InputInjector not initialized".to_string(),
+            })?;
         let mouse_key = button_id_to_mouse(button);
         inj.mouse_button(mouse_key, pressed).map_err(Into::into)
     }
@@ -122,9 +130,11 @@ impl InputPlugin {
     async fn type_text(&self, text: &str) -> Result<()> {
         let injector = self.get_injector().await?;
         let mut inj = injector.lock().await;
-        let inj = inj.as_mut().ok_or_else(|| linux_link_core::error::LinuxLinkError::Other {
-            detail: "InputInjector not initialized".to_string(),
-        })?;
+        let inj = inj
+            .as_mut()
+            .ok_or_else(|| linux_link_core::error::LinuxLinkError::Other {
+                detail: "InputInjector not initialized".to_string(),
+            })?;
         inj.text(text).map_err(Into::into)
     }
 
@@ -132,12 +142,20 @@ impl InputPlugin {
     async fn press_key(&self, key: &str) -> Result<()> {
         let injector = self.get_injector().await?;
         let mut inj = injector.lock().await;
-        let inj = inj.as_mut().ok_or_else(|| linux_link_core::error::LinuxLinkError::Other {
-            detail: "InputInjector not initialized".to_string(),
-        })?;
+        let inj = inj
+            .as_mut()
+            .ok_or_else(|| linux_link_core::error::LinuxLinkError::Other {
+                detail: "InputInjector not initialized".to_string(),
+            })?;
         let enigo_key = key_name_to_enigo_key(key);
-        inj.key(enigo_key, true).map_err(|e| linux_link_core::error::LinuxLinkError::Other { detail: e.to_string() })?;
-        inj.key(enigo_key, false).map_err(|e| linux_link_core::error::LinuxLinkError::Other { detail: e.to_string() })
+        inj.key(enigo_key, true)
+            .map_err(|e| linux_link_core::error::LinuxLinkError::Other {
+                detail: e.to_string(),
+            })?;
+        inj.key(enigo_key, false)
+            .map_err(|e| linux_link_core::error::LinuxLinkError::Other {
+                detail: e.to_string(),
+            })
     }
 
     /// Handle presenter remote actions.

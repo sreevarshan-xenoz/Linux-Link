@@ -11,7 +11,10 @@ pub enum DiscoveryEvent {
     PeerOffline(String),
     ServiceReady,
     /// Discovery encountered a fatal error.
-    DiscoveryError { method: &'static str, reason: String },
+    DiscoveryError {
+        method: &'static str,
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -49,9 +52,9 @@ impl DiscoveryService {
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "Initial Tailscale peer scan failed");
-                    let _ = self.tx.send(DiscoveryEvent::DiscoveryError { 
-                        method: "initial_scan", 
-                        reason: e.to_string() 
+                    let _ = self.tx.send(DiscoveryEvent::DiscoveryError {
+                        method: "initial_scan",
+                        reason: e.to_string(),
                     });
                 }
             }
@@ -76,7 +79,8 @@ impl DiscoveryService {
 
                             if !peer.online && was_online {
                                 tracing::info!(peer = %peer.name, "Peer went offline");
-                                let _ = self.tx.send(DiscoveryEvent::PeerOffline(peer.name.clone()));
+                                let _ =
+                                    self.tx.send(DiscoveryEvent::PeerOffline(peer.name.clone()));
                             }
                         }
 
@@ -94,7 +98,9 @@ impl DiscoveryService {
                     }
                 }
             }
-        }.instrument(span).await
+        }
+        .instrument(span)
+        .await
     }
 
     async fn scan_peers(&self) -> Result<Vec<PeerInfo>> {

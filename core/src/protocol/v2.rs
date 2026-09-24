@@ -39,17 +39,12 @@ pub async fn perform_v2_handshake(
 }
 
 /// Encodes `data` as JSON, prepends a 4-byte Big-Endian length, and writes to the stream.
-pub async fn write_framed_json<T: Serialize>(
-    send: &mut quinn::SendStream,
-    data: &T,
-) -> Result<()> {
+pub async fn write_framed_json<T: Serialize>(send: &mut quinn::SendStream, data: &T) -> Result<()> {
     write_framed_json_internal(send, data).await
 }
 
 /// Reads a 4-byte BE length, then reads that many bytes into a buffer, and decodes as JSON.
-pub async fn read_framed_json<T: DeserializeOwned>(
-    recv: &mut quinn::RecvStream,
-) -> Result<T> {
+pub async fn read_framed_json<T: DeserializeOwned>(recv: &mut quinn::RecvStream) -> Result<T> {
     read_framed_json_internal(recv).await
 }
 
@@ -129,7 +124,10 @@ where
 
     if len > MAX_CONTROL_PAYLOAD_SIZE {
         return Err(LinuxLinkError::ProtocolError {
-            detail: format!("Payload size {} exceeds limit {}", len, MAX_CONTROL_PAYLOAD_SIZE),
+            detail: format!(
+                "Payload size {} exceeds limit {}",
+                len, MAX_CONTROL_PAYLOAD_SIZE
+            ),
         });
     }
 
@@ -263,12 +261,15 @@ mod tests {
         client.write_all(&oversized_len.to_be_bytes()).await?;
 
         let result = read_framed_json_internal::<_, IdentityPacketV2>(&mut server).await;
-        
+
         match result {
             Err(LinuxLinkError::ProtocolError { detail }) => {
                 assert!(detail.contains("exceeds limit"));
             }
-            _ => panic!("Expected ProtocolError for oversized payload, got {:?}", result),
+            _ => panic!(
+                "Expected ProtocolError for oversized payload, got {:?}",
+                result
+            ),
         }
 
         Ok(())
@@ -289,7 +290,10 @@ mod tests {
             Err(LinuxLinkError::Serialization { format, .. }) => {
                 assert_eq!(format, "JSON");
             }
-            _ => panic!("Expected Serialization error for malformed JSON, got {:?}", result),
+            _ => panic!(
+                "Expected Serialization error for malformed JSON, got {:?}",
+                result
+            ),
         }
 
         Ok(())
@@ -310,7 +314,8 @@ mod tests {
 
         // We only start the client side. It will write its identity but will wait for server identity.
         // Since we didn't start the server side, it should timeout.
-        let result = perform_v2_handshake_internal(&mut client_send, &mut client_recv, &client_id).await;
+        let result =
+            perform_v2_handshake_internal(&mut client_send, &mut client_recv, &client_id).await;
 
         match result {
             Err(LinuxLinkError::Timeout { operation, .. }) => {

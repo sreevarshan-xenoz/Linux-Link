@@ -100,12 +100,12 @@ async fn receive_file(filepath: PathBuf, port: u16, expected_size: u64) -> Resul
 
     // Ensure download directory exists
     if let Some(parent) = filepath.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|e| linux_link_core::error::LinuxLinkError::Io {
+        tokio::fs::create_dir_all(parent).await.map_err(|e| {
+            linux_link_core::error::LinuxLinkError::Io {
                 operation: "create_dir_all",
                 detail: e.to_string(),
-            })?;
+            }
+        })?;
     }
 
     let listener = TcpListener::bind(format!("0.0.0.0:{}", port))
@@ -115,13 +115,14 @@ async fn receive_file(filepath: PathBuf, port: u16, expected_size: u64) -> Resul
             detail: e.to_string(),
         })?;
 
-    let (mut stream, addr) = listener
-        .accept()
-        .await
-        .map_err(|e| linux_link_core::error::LinuxLinkError::Io {
-            operation: "accept",
-            detail: e.to_string(),
-        })?;
+    let (mut stream, addr) =
+        listener
+            .accept()
+            .await
+            .map_err(|e| linux_link_core::error::LinuxLinkError::Io {
+                operation: "accept",
+                detail: e.to_string(),
+            })?;
 
     tracing::info!(
         "Receiving file from {} ({} bytes expected)",
@@ -129,35 +130,34 @@ async fn receive_file(filepath: PathBuf, port: u16, expected_size: u64) -> Resul
         expected_size
     );
 
-    let mut file = tokio::fs::File::create(&filepath)
-        .await
-        .map_err(|e| linux_link_core::error::LinuxLinkError::Io {
+    let mut file = tokio::fs::File::create(&filepath).await.map_err(|e| {
+        linux_link_core::error::LinuxLinkError::Io {
             operation: "create_file",
             detail: e.to_string(),
-        })?;
+        }
+    })?;
 
     let mut buffer = vec![0u8; 64 * 1024]; // 64KB chunks
     let mut received: u64 = 0;
 
     loop {
-        let n = stream
-            .read(&mut buffer)
-            .await
-            .map_err(|e| linux_link_core::error::LinuxLinkError::Io {
+        let n = stream.read(&mut buffer).await.map_err(|e| {
+            linux_link_core::error::LinuxLinkError::Io {
                 operation: "read",
                 detail: e.to_string(),
-            })?;
+            }
+        })?;
 
         if n == 0 {
             break;
         }
 
-        file.write_all(&buffer[..n])
-            .await
-            .map_err(|e| linux_link_core::error::LinuxLinkError::Io {
+        file.write_all(&buffer[..n]).await.map_err(|e| {
+            linux_link_core::error::LinuxLinkError::Io {
                 operation: "write",
                 detail: e.to_string(),
-            })?;
+            }
+        })?;
 
         received += n as u64;
 

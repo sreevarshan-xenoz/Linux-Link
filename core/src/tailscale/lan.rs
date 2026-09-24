@@ -33,7 +33,10 @@ pub enum LanEvent {
     /// The service is ready to emit events.
     ServiceReady,
     /// Discovery encountered a fatal error (e.g. daemon died).
-    DiscoveryError { method: &'static str, reason: String },
+    DiscoveryError {
+        method: &'static str,
+        reason: String,
+    },
 }
 
 /// LAN peer discovery service using mDNS.
@@ -61,7 +64,10 @@ impl LanDiscoveryService {
 
         let mut properties = HashMap::new();
         properties.insert("name".to_string(), name.to_string());
-        properties.insert("version".to_string(), crate::protocol::PROTOCOL_VERSION.to_string());
+        properties.insert(
+            "version".to_string(),
+            crate::protocol::PROTOCOL_VERSION.to_string(),
+        );
 
         let service_info = ServiceInfo::new(
             &service_type,
@@ -73,19 +79,20 @@ impl LanDiscoveryService {
         )
         .context("Failed to create service info")?;
 
-        self.daemon
-            .register(service_info)
-            .map_err(|e| {
-                let err = format!("{e}");
-                error!(error = %err, "mDNS registration failed");
-                let _ = self.tx.send(LanEvent::DiscoveryError { 
-                    method: "mdns_register", 
-                    reason: err.clone() 
-                });
-                anyhow::anyhow!("mDNS registration failed: {err}")
-            })?;
+        self.daemon.register(service_info).map_err(|e| {
+            let err = format!("{e}");
+            error!(error = %err, "mDNS registration failed");
+            let _ = self.tx.send(LanEvent::DiscoveryError {
+                method: "mdns_register",
+                reason: err.clone(),
+            });
+            anyhow::anyhow!("mDNS registration failed: {err}")
+        })?;
 
-        info!("Registered mDNS service: {} on port {}", instance_name, port);
+        info!(
+            "Registered mDNS service: {} on port {}",
+            instance_name, port
+        );
         Ok(())
     }
 
@@ -113,9 +120,9 @@ impl LanDiscoveryService {
                 }
                 Err(e) => {
                     warn!(error = %e, "Initial LAN scan failed");
-                    let _ = self.tx.send(LanEvent::DiscoveryError { 
-                        method: "initial_scan", 
-                        reason: e.to_string() 
+                    let _ = self.tx.send(LanEvent::DiscoveryError {
+                        method: "initial_scan",
+                        reason: e.to_string(),
                     });
                 }
             }
@@ -150,7 +157,9 @@ impl LanDiscoveryService {
                     }
                 }
             }
-        }.instrument(span).await
+        }
+        .instrument(span)
+        .await
     }
 
     /// Perform a single scan of the LAN for Linux Link servers.

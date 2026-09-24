@@ -2,12 +2,12 @@ use anyhow::Context;
 use quinn::{Connection, ConnectionError, RecvStream, SendStream};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{debug, info, info_span, trace, warn, Instrument};
+use tracing::{Instrument, debug, info, info_span, trace, warn};
 
 use linux_link_core::error::LinuxLinkError;
 use linux_link_core::protocol::kdeconnect::{DeviceSender, NetworkPacket, PluginRegistry};
 use linux_link_core::protocol::v2::{
-    perform_v2_handshake, read_framed_json, write_framed_json, ChannelKind, IdentityPacketV2,
+    ChannelKind, IdentityPacketV2, perform_v2_handshake, read_framed_json, write_framed_json,
 };
 
 use crate::state;
@@ -99,7 +99,7 @@ pub async fn handle_v2_session(
                          let packet_span = tracing::debug_span!("packet", type = %packet_type);
                          let registry = Arc::clone(&control_registry);
                          let sender = Arc::clone(&control_sender);
-                         
+
                          tokio::spawn(async move {
                              debug!("Processing v1-over-v2 control packet");
                              if let Err(e) = registry.dispatch_packet(&p, &*sender).await {
@@ -199,7 +199,10 @@ async fn handle_unidirectional_stream(mut recv: RecvStream) -> anyhow::Result<()
     }
 }
 
-async fn handle_bidirectional_stream(_send: SendStream, mut recv: RecvStream) -> anyhow::Result<()> {
+async fn handle_bidirectional_stream(
+    _send: SendStream,
+    mut recv: RecvStream,
+) -> anyhow::Result<()> {
     let mut header = [0u8; 1];
     recv.read_exact(&mut header).await?;
     let kind_raw = header[0];

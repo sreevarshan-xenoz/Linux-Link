@@ -60,16 +60,20 @@ impl Plugin for NotificationPlugin {
 async fn send_notification_dbus(summary: &str, body: &str) -> Result<()> {
     use zbus::Connection;
 
-    let conn = Connection::session().await.map_err(|e| linux_link_core::error::LinuxLinkError::Other {
-        detail: format!("D-Bus session failed: {e}"),
-    })?;
+    let conn =
+        Connection::session()
+            .await
+            .map_err(|e| linux_link_core::error::LinuxLinkError::Other {
+                detail: format!("D-Bus session failed: {e}"),
+            })?;
     let proxy = zbus::Proxy::new(
         &conn,
         "org.freedesktop.Notifications",
         "/org/freedesktop/Notifications",
         "org.freedesktop.Notifications",
     )
-    .await.map_err(|e| linux_link_core::error::LinuxLinkError::Other {
+    .await
+    .map_err(|e| linux_link_core::error::LinuxLinkError::Other {
         detail: format!("D-Bus proxy failed: {e}"),
     })?;
 
@@ -87,7 +91,8 @@ async fn send_notification_dbus(summary: &str, body: &str) -> Result<()> {
                 5000i32, // timeout (5 seconds)
             ),
         )
-        .await.map_err(|e| linux_link_core::error::LinuxLinkError::Other {
+        .await
+        .map_err(|e| linux_link_core::error::LinuxLinkError::Other {
             detail: format!("D-Bus call failed: {e}"),
         })?;
 

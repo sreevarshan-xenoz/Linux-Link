@@ -79,7 +79,10 @@ pub async fn register_client(sender: Arc<dyn DeviceSender>) -> usize {
     }
 
     clients.push(sender);
-    tracing::debug!(active_clients = clients.len(), "Client registered for broadcasts");
+    tracing::debug!(
+        active_clients = clients.len(),
+        "Client registered for broadcasts"
+    );
 
     kicked
 }
@@ -88,7 +91,10 @@ pub async fn register_client(sender: Arc<dyn DeviceSender>) -> usize {
 pub async fn unregister_client(connection_id: &str) {
     let mut clients = ACTIVE_CLIENTS.lock().await;
     clients.retain(|c| c.connection_id() != connection_id);
-    tracing::info!(active_clients = clients.len(), "Client disconnected, removed from registry");
+    tracing::info!(
+        active_clients = clients.len(),
+        "Client disconnected, removed from registry"
+    );
 }
 
 /// Clone the current client list (for iteration without holding the lock).

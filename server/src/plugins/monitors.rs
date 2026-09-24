@@ -25,8 +25,8 @@ impl Plugin for MonitorsPlugin {
     async fn handle_packet(&self, packet: &NetworkPacket, sender: &dyn DeviceSender) -> Result<()> {
         if packet.packet_type == "kdeconnect.linuxlink.monitors" {
             let monitors = enumerate_monitors();
-            let response = NetworkPacket::new("kdeconnect.linuxlink.monitors")
-                .with_body(serde_json::json!({
+            let response =
+                NetworkPacket::new("kdeconnect.linuxlink.monitors").with_body(serde_json::json!({
                     "count": monitors.len(),
                     "monitors": monitors
                 }));

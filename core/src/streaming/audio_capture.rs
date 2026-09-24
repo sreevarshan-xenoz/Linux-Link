@@ -58,7 +58,11 @@ pub async fn start_audio_capture(
         .name("pipewire-audio-capture".into())
         .spawn(move || {
             if let Err(e) = run_pipewire_audio_capture(
-                sample_rate, channels, frame_duration_ms, pcm_tx, pw_cancel,
+                sample_rate,
+                channels,
+                frame_duration_ms,
+                pcm_tx,
+                pw_cancel,
             ) {
                 error!("PipeWire audio capture thread exited with error: {e}");
             } else {
@@ -148,7 +152,9 @@ fn run_pipewire_audio_capture(
     info!("PipeWire audio stream connected and active");
 
     loop {
-        mainloop.loop_().iterate(Duration::from_millis(frame_duration_ms as u64));
+        mainloop
+            .loop_()
+            .iterate(Duration::from_millis(frame_duration_ms as u64));
         if cancel.is_cancelled() {
             info!("Cancellation received, exiting PipeWire audio main loop");
             break;

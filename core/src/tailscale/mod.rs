@@ -160,12 +160,10 @@ impl TailscaleClient {
 
         for url in &localapi_addrs {
             match client.get(*url).send().await {
-                Ok(r) if r.status().is_success() => {
-                    match r.json::<TailscaleStatus>().await {
-                        Ok(status) => return Ok(status),
-                        Err(_) => continue,
-                    }
-                }
+                Ok(r) if r.status().is_success() => match r.json::<TailscaleStatus>().await {
+                    Ok(status) => return Ok(status),
+                    Err(_) => continue,
+                },
                 _ => continue,
             }
         }
@@ -185,61 +183,89 @@ impl TailscaleClient {
                     match r.json::<serde_json::Value>().await {
                         Ok(json) => {
                             // Parse the Tailscale Android API format
-                            if let Some(peer_list) = json.get("Peer").or(json.get("peer")).and_then(|v| v.as_array()) {
+                            if let Some(peer_list) = json
+                                .get("Peer")
+                                .or(json.get("peer"))
+                                .and_then(|v| v.as_array())
+                            {
                                 let mut peers = HashMap::new();
                                 for p in peer_list {
-                                    let name = p.get("DNSName")
+                                    let name = p
+                                        .get("DNSName")
                                         .or(p.get("dnsName"))
                                         .or(p.get("HostName"))
                                         .or(p.get("hostName"))
                                         .and_then(|v| v.as_str())
                                         .map(|s| s.trim_end_matches('.').to_string())
                                         .unwrap_or_else(|| "unknown".to_string());
-                                    let ips: Vec<String> = p.get("TailscaleIPs")
+                                    let ips: Vec<String> = p
+                                        .get("TailscaleIPs")
                                         .or(p.get("tailscaleIPs"))
                                         .and_then(|v| v.as_array())
-                                        .map(|arr| arr.iter().filter_map(|ip| ip.as_str().map(String::from)).collect())
+                                        .map(|arr| {
+                                            arr.iter()
+                                                .filter_map(|ip| ip.as_str().map(String::from))
+                                                .collect()
+                                        })
                                         .unwrap_or_default();
-                                    let online = p.get("Online")
+                                    let online = p
+                                        .get("Online")
                                         .or(p.get("online"))
                                         .and_then(|v| v.as_bool())
                                         .unwrap_or(false);
-                                    let dns_name = p.get("DNSName")
+                                    let dns_name = p
+                                        .get("DNSName")
                                         .or(p.get("dnsName"))
                                         .and_then(|v| v.as_str())
                                         .map(String::from)
                                         .unwrap_or_default();
-                                    let host_name = p.get("HostName")
+                                    let host_name = p
+                                        .get("HostName")
                                         .or(p.get("hostName"))
                                         .and_then(|v| v.as_str())
                                         .map(String::from);
-                                    
+
                                     if !ips.is_empty() {
-                                        peers.insert(name.clone(), StatusPeer {
-                                            host_name,
-                                            dns_name: Some(dns_name),
-                                            tailscale_ips: ips,
-                                            active: Some(online),
-                                        });
+                                        peers.insert(
+                                            name.clone(),
+                                            StatusPeer {
+                                                host_name,
+                                                dns_name: Some(dns_name),
+                                                tailscale_ips: ips,
+                                                active: Some(online),
+                                            },
+                                        );
                                     }
                                 }
-                                
+
                                 // Get self info
-                                let self_node = json.get("Self").or(json.get("self"))
-                                    .map(|s| {
-                                        let ips: Vec<String> = s.get("TailscaleIPs")
-                                            .or(s.get("tailscaleIPs"))
-                                            .and_then(|v| v.as_array())
-                                            .map(|arr| arr.iter().filter_map(|ip| ip.as_str().map(String::from)).collect())
-                                            .unwrap_or_default();
-                                        StatusPeer {
-                                            host_name: s.get("HostName").or(s.get("hostName")).and_then(|v| v.as_str()).map(String::from),
-                                            dns_name: s.get("DNSName").or(s.get("dnsName")).and_then(|v| v.as_str()).map(String::from),
-                                            tailscale_ips: ips,
-                                            active: Some(true),
-                                        }
-                                    });
-                                
+                                let self_node = json.get("Self").or(json.get("self")).map(|s| {
+                                    let ips: Vec<String> = s
+                                        .get("TailscaleIPs")
+                                        .or(s.get("tailscaleIPs"))
+                                        .and_then(|v| v.as_array())
+                                        .map(|arr| {
+                                            arr.iter()
+                                                .filter_map(|ip| ip.as_str().map(String::from))
+                                                .collect()
+                                        })
+                                        .unwrap_or_default();
+                                    StatusPeer {
+                                        host_name: s
+                                            .get("HostName")
+                                            .or(s.get("hostName"))
+                                            .and_then(|v| v.as_str())
+                                            .map(String::from),
+                                        dns_name: s
+                                            .get("DNSName")
+                                            .or(s.get("dnsName"))
+                                            .and_then(|v| v.as_str())
+                                            .map(String::from),
+                                        tailscale_ips: ips,
+                                        active: Some(true),
+                                    }
+                                });
+
                                 return Ok(TailscaleStatus {
                                     backend_state: Some("Running".to_string()),
                                     self_node,
@@ -260,7 +286,7 @@ impl TailscaleClient {
             .args(["netcheck", "--json"])
             .output()
             .await;
-        
+
         if let Ok(output) = ts_net
             && output.status.success()
             && String::from_utf8_lossy(&output.stdout).contains("DNSChecked")
@@ -273,7 +299,7 @@ impl TailscaleClient {
             });
         }
 
-        // If all methods failed (common on Android without root), 
+        // If all methods failed (common on Android without root),
         // return empty peers gracefully instead of failing hard.
         tracing::warn!(
             "Tailscale peer discovery unavailable on this platform; returning empty peers"
