@@ -123,9 +123,25 @@ impl Connection for IrohConnection {
             .paths()
             .iter()
             .any(|p| p.is_selected() && p.is_relay());
+        // noq's connection-level stats are an aggregate over every open path,
+        // and the aggregation deliberately discards rtt, cwnd and MTU (they
+        // have no meaning summed across paths) while iroh does not re-export
+        // the per-path accessor. Reporting them as `None` is what makes a WAN
+        // record comparable against a LAN one: a zero here would look like a
+        // healthy, uncongested path.
+        let s = self.inner.stats();
         ConnectionStats {
             rtt: self.inner.rtt(PathId::ZERO).unwrap_or(Duration::ZERO),
-            lost_packets: self.inner.stats().lost_packets,
+            lost_packets: s.lost_packets,
+            lost_bytes: s.lost_bytes,
+            datagrams_sent: s.udp_tx.datagrams,
+            datagrams_received: s.udp_rx.datagrams,
+            bytes_sent: s.udp_tx.bytes,
+            bytes_received: s.udp_rx.bytes,
+            congestion_events: None,
+            cwnd_bytes: None,
+            path_mtu: None,
+            black_holes_detected: None,
             relayed,
         }
     }
@@ -333,6 +349,17 @@ mod tests {
         assert!(
             !client_q.stats().relayed && !server_conn.stats().relayed,
             "relay-less loopback traffic is direct"
+        );
+        let stats = client_q.stats();
+        assert!(
+            stats.bytes_sent > 0 && stats.datagrams_sent > 0,
+            "the aggregate counters do fill in: {stats:?}"
+        );
+        assert_eq!(
+            (stats.cwnd_bytes, stats.path_mtu, stats.congestion_events),
+            (None, None, None),
+            "iroh's connection-level stats throw the per-path fields away, and a \
+             WAN record must say so rather than report a healthy-looking zero"
         );
 
         let payload = tokio::join!(

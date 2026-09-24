@@ -185,8 +185,7 @@ mod tests {
         fn stats(&self) -> ConnectionStats {
             ConnectionStats {
                 rtt: std::time::Duration::ZERO,
-                lost_packets: 0,
-                relayed: false,
+                ..Default::default()
             }
         }
         fn transport_family(&self) -> TransportFamily {

@@ -40,13 +40,41 @@ impl std::fmt::Display for ConnectionError {
 
 impl std::error::Error for ConnectionError {}
 
-/// The connection-level facts the pipeline reads (RTT feedback loop,
-/// adaptive bitrate). Deliberately narrow: extend only when the pipeline
-/// actually needs another field.
+/// The connection-level facts the pipeline reads (RTT feedback loop, adaptive
+/// bitrate) and telemetry records. Deliberately narrow: extend only when a
+/// caller actually needs another field.
+///
+/// The `Option` fields are the honest boundary of what the libraries expose,
+/// which is the whole point of this struct: both stacks keep congestion state
+/// per path, and only quinn's `stats()` flattens the current path's numbers
+/// into what it returns. iroh's connection-level aggregate sums the byte and
+/// packet counters and drops the per-path ones outright, so on a WAN session
+/// those are `None` — a reported absence, never a zero that would read as
+/// "no congestion".
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ConnectionStats {
     pub rtt: Duration,
+    /// Packets the transport has declared lost since the handshake.
     pub lost_packets: u64,
+    pub lost_bytes: u64,
+    /// UDP datagrams and bytes the transport moved, both directions. This is
+    /// goodput's noisy neighbour: it counts headers, probes and retransmits,
+    /// which is what a link is actually carrying.
+    pub datagrams_sent: u64,
+    pub datagrams_received: u64,
+    pub bytes_sent: u64,
+    pub bytes_received: u64,
+    /// Times the congestion controller reacted to loss on the current path.
+    pub congestion_events: Option<u64>,
+    /// Congestion-window ceiling in bytes: how much the transport will have
+    /// outstanding before it starts holding back.
+    pub cwnd_bytes: Option<u64>,
+    /// Largest UDP payload the current path is known to carry, as found by the
+    /// library's own PMTU discovery.
+    pub path_mtu: Option<u16>,
+    /// Times the path stopped accepting anything at all, as detected by the
+    /// PMTU probes.
+    pub black_holes_detected: Option<u64>,
     /// True when the selected transport path rides a relay (iroh WAN), i.e.
     /// hole punching has not produced a direct path yet. Always false for
     /// quinn, which has no relay concept.
@@ -170,6 +198,15 @@ impl Connection for QuinnConnection {
         ConnectionStats {
             rtt: s.path.rtt,
             lost_packets: s.path.lost_packets,
+            lost_bytes: s.path.lost_bytes,
+            datagrams_sent: s.udp_tx.datagrams,
+            datagrams_received: s.udp_rx.datagrams,
+            bytes_sent: s.udp_tx.bytes,
+            bytes_received: s.udp_rx.bytes,
+            congestion_events: Some(s.path.congestion_events),
+            cwnd_bytes: Some(s.path.cwnd),
+            path_mtu: Some(s.path.current_mtu),
+            black_holes_detected: Some(s.path.black_holes_detected),
             relayed: false,
         }
     }
@@ -287,6 +324,23 @@ mod tests {
         assert!(
             !client.stats().relayed && !server.stats().relayed,
             "quinn has no relay concept — traffic is always direct"
+        );
+        let stats = client.stats();
+        assert!(
+            stats.bytes_sent > 0 && stats.datagrams_sent > 0 && stats.bytes_received > 0,
+            "the handshake alone moves datagrams: {stats:?}"
+        );
+        assert!(
+            stats.cwnd_bytes.unwrap_or(0) > 0,
+            "a connection with no congestion window is not sending: {stats:?}"
+        );
+        assert!(
+            stats.path_mtu.unwrap_or(0) >= 500,
+            "quinn reports a path MTU even before probing pays off: {stats:?}"
+        );
+        assert!(
+            stats.congestion_events.is_some(),
+            "the counter exists on a quinn path, even at zero on a loaded box: {stats:?}"
         );
 
         let payload = tokio::join!(
