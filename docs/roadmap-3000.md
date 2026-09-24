@@ -690,6 +690,11 @@ each item is a live defect with a known location, not a wish.
 - 2058 fix modifier delivery (Shift/Ctrl/Super absent) so no combo degrades.
 - 2059 map the media/volume keycodes the client already sends.
 - 2060 map `MENU` and F13+ instead of dropping them client-side.
+- Fixed in the client's table while this group was being worked: Android F11/F12 were derived by
+  continuing the F1..F10 arithmetic, so the phone's F11 pressed **KEY_NUMLOCK** and its F12 pressed
+  **KEY_F1** (evdev 69 and 70, where the real codes are 87 and 88). The bridge test had been asserting
+  the contiguous arithmetic as if it were correct, so the defect had a passing test protecting it; both
+  the row and the test now name the evdev numbers.
 - 2061 make direct-touch send a button **press** — today it moves and releases only, so drag-heavy desktop
   apps see a click that never happened.
 - 2062 delete `tapAbsolute` or route 2061 through it; it is dead either way.

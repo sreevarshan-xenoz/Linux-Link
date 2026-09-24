@@ -2684,8 +2684,13 @@ fn android_to_evdev_keycode(android_keycode: i32) -> u16 {
         52 => 45, // X
         53 => 21, // Y
         54 => 44, // Z
-        // F1..F12 (Android 131..142 -> evdev 59..70)
-        131..=142 => (android_keycode - 72) as u16,
+        // F1..F10 (Android 131..140 -> evdev 59..68). The evdev function keys
+        // stop being contiguous there: F11 and F12 are 87 and 88, while 69 and
+        // 70 are NumLock and F1 — so extending the range would have turned the
+        // phone's F11 into a NumLock press on the desktop.
+        131..=140 => (android_keycode - 72) as u16,
+        141 => 87, // F11 -> KEY_F11
+        142 => 88, // F12 -> KEY_F12
         _ => 0,
     }
 }
@@ -2716,9 +2721,11 @@ mod keymap_tests {
     }
 
     #[test]
-    fn function_keys_are_contiguous() {
+    fn function_keys_map_to_evdev() {
         assert_eq!(k(131), 59); // F1
-        assert_eq!(k(142), 70); // F12
+        assert_eq!(k(140), 68); // F10 — where evdev stops being contiguous
+        assert_eq!(k(141), 87, "F11 is not KEY_NUMLOCK");
+        assert_eq!(k(142), 88, "F12 is not KEY_F1");
     }
 
     #[test]
