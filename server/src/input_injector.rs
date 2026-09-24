@@ -21,40 +21,145 @@ const EV_REL: u16 = 0x02;
 const EV_SYN: u16 = 0x00;
 const SYN_REPORT: u16 = 0;
 
-/// Canonical mapping between Linux evdev keycodes and enigo Key values.
-/// This is the single source of truth for key translation between backends.
-/// `keycode_to_enigo` and `key_to_evdev` must both derive from this table.
+/// Canonical mapping between Linux evdev keycodes and enigo `Key` values.
+///
+/// This is the single source of truth for key translation between backends:
+/// `keycode_to_enigo` and `key_to_evdev` read it in opposite directions, and
+/// `tests::every_key_the_phone_can_send_has_a_mapping` fails the moment it stops
+/// covering `core::input::keys`, the set the Android client emits.
+///
+/// Codes are named through `evdev::KeyCode` instead of written as numbers
+/// because a wrong number here silently injects a different key than the one the
+/// phone pressed; a wrong *name* is a compile error.
+///
+/// Letters, digits and punctuation map to `Key::Unicode`: enigo has no
+/// per-letter variant on Linux (`Key::A` and friends are Windows-only) and its
+/// X11 backend resolves `Unicode(c)` through that character's keysym, which is
+/// what the evdev code stands for anyway. Capitalisation is not this table's
+/// problem — the phone sends Shift as its own key event and X applies it.
 const KEYCODE_MAP: &[(u16, Key)] = &[
-    // Functional keys
-    (1, Key::Escape),     // KEY_ESC
-    (14, Key::Backspace), // KEY_BACKSPACE
-    (15, Key::Tab),       // KEY_TAB
-    (28, Key::Return),    // KEY_ENTER
-    (57, Key::Space),     // KEY_SPACE
+    // Editing and control
+    (KeyCode::KEY_ESC.0, Key::Escape),
+    (KeyCode::KEY_BACKSPACE.0, Key::Backspace),
+    (KeyCode::KEY_TAB.0, Key::Tab),
+    (KeyCode::KEY_ENTER.0, Key::Return),
+    (KeyCode::KEY_SPACE.0, Key::Space),
+    (KeyCode::KEY_CAPSLOCK.0, Key::CapsLock),
+    (KeyCode::KEY_NUMLOCK.0, Key::Numlock),
+    (KeyCode::KEY_INSERT.0, Key::Insert),
+    (KeyCode::KEY_DELETE.0, Key::Delete),
     // Navigation
-    (102, Key::Home),       // KEY_HOME
-    (103, Key::UpArrow),    // KEY_UP
-    (104, Key::PageUp),     // KEY_PAGEUP
-    (105, Key::LeftArrow),  // KEY_LEFT
-    (106, Key::RightArrow), // KEY_RIGHT
-    (107, Key::End),        // KEY_END
-    (108, Key::DownArrow),  // KEY_DOWN
-    (109, Key::PageDown),   // KEY_PAGEDOWN
-    (110, Key::Insert),     // KEY_INSERT
-    (111, Key::Delete),     // KEY_DELETE
-    // Function keys
-    (59, Key::F1),  // KEY_F1
-    (60, Key::F2),  // KEY_F2
-    (61, Key::F3),  // KEY_F3
-    (62, Key::F4),  // KEY_F4
-    (63, Key::F5),  // KEY_F5
-    (64, Key::F6),  // KEY_F6
-    (65, Key::F7),  // KEY_F7
-    (66, Key::F8),  // KEY_F8
-    (67, Key::F9),  // KEY_F9
-    (68, Key::F10), // KEY_F10
-    (87, Key::F11), // KEY_F11
-    (88, Key::F12), // KEY_F12
+    (KeyCode::KEY_HOME.0, Key::Home),
+    (KeyCode::KEY_UP.0, Key::UpArrow),
+    (KeyCode::KEY_PAGEUP.0, Key::PageUp),
+    (KeyCode::KEY_LEFT.0, Key::LeftArrow),
+    (KeyCode::KEY_RIGHT.0, Key::RightArrow),
+    (KeyCode::KEY_END.0, Key::End),
+    (KeyCode::KEY_DOWN.0, Key::DownArrow),
+    (KeyCode::KEY_PAGEDOWN.0, Key::PageDown),
+    // Modifiers. evdev names left and right separately; enigo has a right-hand
+    // variant only for Shift and Control, so Right Alt and Right Super ride
+    // `Key::Other`, which its X11 backend reads as a raw keysym.
+    (KeyCode::KEY_LEFTSHIFT.0, Key::LShift),
+    (KeyCode::KEY_RIGHTSHIFT.0, Key::RShift),
+    (KeyCode::KEY_LEFTCTRL.0, Key::LControl),
+    (KeyCode::KEY_RIGHTCTRL.0, Key::RControl),
+    (KeyCode::KEY_LEFTALT.0, Key::Alt),
+    (KeyCode::KEY_RIGHTALT.0, Key::Other(0xFFEA)), // XK_Alt_R
+    (KeyCode::KEY_LEFTMETA.0, Key::Meta),          // Super
+    (KeyCode::KEY_RIGHTMETA.0, Key::Other(0xFFEC)), // XK_Super_R
+    // Function keys. F11/F12 are 87/88, not the two numbers after F10, because
+    // 69 and 70 are Num Lock and Scroll Lock. F13-F24 stay in this table so the
+    // X11 rung is no weaker than uinput, which will emit any code it declares.
+    (KeyCode::KEY_F1.0, Key::F1),
+    (KeyCode::KEY_F2.0, Key::F2),
+    (KeyCode::KEY_F3.0, Key::F3),
+    (KeyCode::KEY_F4.0, Key::F4),
+    (KeyCode::KEY_F5.0, Key::F5),
+    (KeyCode::KEY_F6.0, Key::F6),
+    (KeyCode::KEY_F7.0, Key::F7),
+    (KeyCode::KEY_F8.0, Key::F8),
+    (KeyCode::KEY_F9.0, Key::F9),
+    (KeyCode::KEY_F10.0, Key::F10),
+    (KeyCode::KEY_F11.0, Key::F11),
+    (KeyCode::KEY_F12.0, Key::F12),
+    (KeyCode::KEY_F13.0, Key::F13),
+    (KeyCode::KEY_F14.0, Key::F14),
+    (KeyCode::KEY_F15.0, Key::F15),
+    (KeyCode::KEY_F16.0, Key::F16),
+    (KeyCode::KEY_F17.0, Key::F17),
+    (KeyCode::KEY_F18.0, Key::F18),
+    (KeyCode::KEY_F19.0, Key::F19),
+    (KeyCode::KEY_F20.0, Key::F20),
+    (KeyCode::KEY_F21.0, Key::F21),
+    (KeyCode::KEY_F22.0, Key::F22),
+    (KeyCode::KEY_F23.0, Key::F23),
+    (KeyCode::KEY_F24.0, Key::F24),
+    // Keys the phone's system bar and shortcut sheet send. The Print key arrives
+    // as KEY_SYSRQ, which is the code XKB binds to the `Print` keysym.
+    (KeyCode::KEY_SYSRQ.0, Key::PrintScr),
+    (KeyCode::KEY_VOLUMEDOWN.0, Key::VolumeDown),
+    (KeyCode::KEY_VOLUMEUP.0, Key::VolumeUp),
+    (KeyCode::KEY_NEXTSONG.0, Key::MediaNextTrack),
+    (KeyCode::KEY_PLAYPAUSE.0, Key::MediaPlayPause),
+    (KeyCode::KEY_PREVIOUSSONG.0, Key::MediaPrevTrack),
+    // enigo calls the X `Menu` keysym `LMenu`; the application-keys key has no
+    // left/right form. (evdev KEY_COMPOSE is 127, a different key.)
+    (KeyCode::KEY_MENU.0, Key::LMenu),
+    // The dialpad's star and plus are keypad codes, so they get the keypad
+    // keysyms; the plain '*' and '+' characters reach the same codes through
+    // `char_to_keycode`.
+    (KeyCode::KEY_KPASTERISK.0, Key::Multiply),
+    (KeyCode::KEY_KPPLUS.0, Key::Add),
+    // Digits, in the order they are printed rather than their codes.
+    (KeyCode::KEY_1.0, Key::Unicode('1')),
+    (KeyCode::KEY_2.0, Key::Unicode('2')),
+    (KeyCode::KEY_3.0, Key::Unicode('3')),
+    (KeyCode::KEY_4.0, Key::Unicode('4')),
+    (KeyCode::KEY_5.0, Key::Unicode('5')),
+    (KeyCode::KEY_6.0, Key::Unicode('6')),
+    (KeyCode::KEY_7.0, Key::Unicode('7')),
+    (KeyCode::KEY_8.0, Key::Unicode('8')),
+    (KeyCode::KEY_9.0, Key::Unicode('9')),
+    (KeyCode::KEY_0.0, Key::Unicode('0')),
+    // Letters, QWERTY rows.
+    (KeyCode::KEY_Q.0, Key::Unicode('q')),
+    (KeyCode::KEY_W.0, Key::Unicode('w')),
+    (KeyCode::KEY_E.0, Key::Unicode('e')),
+    (KeyCode::KEY_R.0, Key::Unicode('r')),
+    (KeyCode::KEY_T.0, Key::Unicode('t')),
+    (KeyCode::KEY_Y.0, Key::Unicode('y')),
+    (KeyCode::KEY_U.0, Key::Unicode('u')),
+    (KeyCode::KEY_I.0, Key::Unicode('i')),
+    (KeyCode::KEY_O.0, Key::Unicode('o')),
+    (KeyCode::KEY_P.0, Key::Unicode('p')),
+    (KeyCode::KEY_A.0, Key::Unicode('a')),
+    (KeyCode::KEY_S.0, Key::Unicode('s')),
+    (KeyCode::KEY_D.0, Key::Unicode('d')),
+    (KeyCode::KEY_F.0, Key::Unicode('f')),
+    (KeyCode::KEY_G.0, Key::Unicode('g')),
+    (KeyCode::KEY_H.0, Key::Unicode('h')),
+    (KeyCode::KEY_J.0, Key::Unicode('j')),
+    (KeyCode::KEY_K.0, Key::Unicode('k')),
+    (KeyCode::KEY_L.0, Key::Unicode('l')),
+    (KeyCode::KEY_Z.0, Key::Unicode('z')),
+    (KeyCode::KEY_X.0, Key::Unicode('x')),
+    (KeyCode::KEY_C.0, Key::Unicode('c')),
+    (KeyCode::KEY_V.0, Key::Unicode('v')),
+    (KeyCode::KEY_B.0, Key::Unicode('b')),
+    (KeyCode::KEY_N.0, Key::Unicode('n')),
+    (KeyCode::KEY_M.0, Key::Unicode('m')),
+    // Punctuation the phone's symbol sheet reaches for most often.
+    (KeyCode::KEY_MINUS.0, Key::Unicode('-')),
+    (KeyCode::KEY_EQUAL.0, Key::Unicode('=')),
+    (KeyCode::KEY_LEFTBRACE.0, Key::Unicode('[')),
+    (KeyCode::KEY_RIGHTBRACE.0, Key::Unicode(']')),
+    (KeyCode::KEY_SEMICOLON.0, Key::Unicode(';')),
+    (KeyCode::KEY_APOSTROPHE.0, Key::Unicode('\'')),
+    (KeyCode::KEY_GRAVE.0, Key::Unicode('`')),
+    (KeyCode::KEY_COMMA.0, Key::Unicode(',')),
+    (KeyCode::KEY_DOT.0, Key::Unicode('.')),
+    (KeyCode::KEY_SLASH.0, Key::Unicode('/')),
 ];
 
 /// Backend for input injection.
@@ -607,53 +712,25 @@ fn key_to_evdev(key: Key) -> KeyCode {
     }
 }
 
-/// Map a character to a Linux evdev keycode.
-/// Only handles basic ASCII. Returns None for unsupported characters.
-/// Uses evdev KeyCode constants for readability and correctness.
+/// Map a character to the Linux evdev keycode that produces it.
+///
+/// Reads [`KEYCODE_MAP`] so the table stays the one place a character's key is
+/// named, then handles the few characters the table spells as a named key rather
+/// than as themselves. Case is folded because this runs on the `text()` path,
+/// which sends no Shift, so an uppercase letter shares the lowercase key.
 fn char_to_keycode(ch: char) -> Option<u16> {
+    if let Some(&(code, _)) = KEYCODE_MAP
+        .iter()
+        .find(|&&(_, key)| key == Key::Unicode(ch.to_ascii_lowercase()))
+    {
+        return Some(code);
+    }
     match ch {
-        // QWERTY layout keycodes (evdev standard)
-        'q' | 'Q' => Some(KeyCode::KEY_Q.0),
-        'w' | 'W' => Some(KeyCode::KEY_W.0),
-        'e' | 'E' => Some(KeyCode::KEY_E.0),
-        'r' | 'R' => Some(KeyCode::KEY_R.0),
-        't' | 'T' => Some(KeyCode::KEY_T.0),
-        'y' | 'Y' => Some(KeyCode::KEY_Y.0),
-        'u' | 'U' => Some(KeyCode::KEY_U.0),
-        'i' | 'I' => Some(KeyCode::KEY_I.0),
-        'o' | 'O' => Some(KeyCode::KEY_O.0),
-        'p' | 'P' => Some(KeyCode::KEY_P.0),
-        'a' | 'A' => Some(KeyCode::KEY_A.0),
-        's' | 'S' => Some(KeyCode::KEY_S.0),
-        'd' | 'D' => Some(KeyCode::KEY_D.0),
-        'f' | 'F' => Some(KeyCode::KEY_F.0),
-        'g' | 'G' => Some(KeyCode::KEY_G.0),
-        'h' | 'H' => Some(KeyCode::KEY_H.0),
-        'j' | 'J' => Some(KeyCode::KEY_J.0),
-        'k' | 'K' => Some(KeyCode::KEY_K.0),
-        'l' | 'L' => Some(KeyCode::KEY_L.0),
-        'z' | 'Z' => Some(KeyCode::KEY_Z.0),
-        'x' | 'X' => Some(KeyCode::KEY_X.0),
-        'c' | 'C' => Some(KeyCode::KEY_C.0),
-        'v' | 'V' => Some(KeyCode::KEY_V.0),
-        'b' | 'B' => Some(KeyCode::KEY_B.0),
-        'n' | 'N' => Some(KeyCode::KEY_N.0),
-        'm' | 'M' => Some(KeyCode::KEY_M.0),
-        // Numbers
-        '0' => Some(KeyCode::KEY_0.0),
-        '1' => Some(KeyCode::KEY_1.0),
-        '2' => Some(KeyCode::KEY_2.0),
-        '3' => Some(KeyCode::KEY_3.0),
-        '4' => Some(KeyCode::KEY_4.0),
-        '5' => Some(KeyCode::KEY_5.0),
-        '6' => Some(KeyCode::KEY_6.0),
-        '7' => Some(KeyCode::KEY_7.0),
-        '8' => Some(KeyCode::KEY_8.0),
-        '9' => Some(KeyCode::KEY_9.0),
-        // Special
         ' ' => Some(KeyCode::KEY_SPACE.0),
         '\n' => Some(KeyCode::KEY_ENTER.0),
         '\t' => Some(KeyCode::KEY_TAB.0),
+        '*' => Some(KeyCode::KEY_KPASTERISK.0),
+        '+' => Some(KeyCode::KEY_KPPLUS.0),
         _ => None,
     }
 }
@@ -817,13 +894,78 @@ mod tests {
 
     #[test]
     fn an_unmapped_keycode_is_not_injected_as_a_control_character() {
-        // KEY_A and KEY_LEFTSHIFT used to become U+001E and U+002A: an
-        // untypeable control character on the uinput path, and a stray '*' on
-        // the X11 one. Refusing the key is the honest outcome until the table
-        // names it (roadmap 2057/2058).
-        assert_eq!(keycode_to_enigo(30), None, "KEY_A");
-        assert_eq!(keycode_to_enigo(42), None, "KEY_LEFTSHIFT");
+        // A code the table does not name is refused rather than turned into the
+        // control character its number happens to be: KEY_SCROLLLOCK = 70 would
+        // otherwise reach XTEST as U+0046, the letter 'F'.
+        assert_eq!(keycode_to_enigo(70), None, "KEY_SCROLLLOCK");
         assert_eq!(keycode_to_enigo(999), None, "beyond the evdev range");
+    }
+
+    /// The server half of the key contract in `core::input::keys`: every code the
+    /// Android client can put on the wire must name a key on the X11 rung too, so
+    /// a phone without /dev/uinput access degrades the same way as one with it.
+    #[test]
+    fn every_key_the_phone_can_send_has_a_mapping() {
+        for code in linux_link_core::input::keys::phone_emittable_codes() {
+            assert!(
+                keycode_to_enigo(code).is_some(),
+                "evdev code {code} is emittable but unmapped"
+            );
+        }
+    }
+
+    #[test]
+    fn modifiers_locks_and_media_keys_map_to_their_named_keys() {
+        let named: [(u16, Key); 19] = [
+            (42, Key::LShift),          // KEY_LEFTSHIFT
+            (54, Key::RShift),          // KEY_RIGHTSHIFT
+            (29, Key::LControl),        // KEY_LEFTCTRL
+            (97, Key::RControl),        // KEY_RIGHTCTRL
+            (56, Key::Alt),             // KEY_LEFTALT
+            (100, Key::Other(0xFFEA)),  // KEY_RIGHTALT, via XK_Alt_R
+            (125, Key::Meta),           // KEY_LEFTMETA
+            (126, Key::Other(0xFFEC)),  // KEY_RIGHTMETA, via XK_Super_R
+            (58, Key::CapsLock),        // KEY_CAPSLOCK
+            (69, Key::Numlock),         // KEY_NUMLOCK
+            (99, Key::PrintScr),        // KEY_SYSRQ, the Print key
+            (139, Key::LMenu),          // KEY_MENU, the application key
+            (114, Key::VolumeDown),     // KEY_VOLUMEDOWN
+            (115, Key::VolumeUp),       // KEY_VOLUMEUP
+            (163, Key::MediaNextTrack), // KEY_NEXTSONG
+            (164, Key::MediaPlayPause), // KEY_PLAYPAUSE
+            (165, Key::MediaPrevTrack), // KEY_PREVIOUSSONG
+            (55, Key::Multiply),        // KEY_KPASTERISK
+            (78, Key::Add),             // KEY_KPPLUS
+        ];
+        for (code, key) in named {
+            assert_eq!(keycode_to_enigo(code), Some(key), "evdev {code}");
+        }
+    }
+
+    #[test]
+    fn letters_digits_and_punctuation_map_to_their_own_characters() {
+        let characters: [(u16, char); 12] = [
+            (30, 'a'),  // KEY_A
+            (44, 'z'),  // KEY_Z
+            (50, 'm'),  // KEY_M
+            (2, '1'),   // KEY_1
+            (11, '0'),  // KEY_0
+            (12, '-'),  // KEY_MINUS
+            (41, '`'),  // KEY_GRAVE
+            (40, '\''), // KEY_APOSTROPHE
+            (51, ','),  // KEY_COMMA
+            (52, '.'),  // KEY_DOT
+            (53, '/'),  // KEY_SLASH
+            (26, '['),  // KEY_LEFTBRACE
+        ];
+        for (code, ch) in characters {
+            assert_eq!(
+                keycode_to_enigo(code),
+                Some(Key::Unicode(ch)),
+                "evdev {code} should be '{ch}'"
+            );
+            assert_eq!(char_to_keycode(ch), Some(code), "'{ch}'");
+        }
     }
 
     #[test]

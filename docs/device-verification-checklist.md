@@ -184,6 +184,13 @@ is still filling in is dimmed. What to confirm on a real phone:
 - [ ] Trackpad mode: pointer moves without jumping to touch point; tap = click; two-finger = scroll.
 - [ ] Mode toggle switches behavior live, no session restart.
 - [ ] Keyboard: type letters/digits/modifiers via on-screen shortcuts + remote input — check against `evtest`: Super, Alt+Tab, Ctrl+Alt+Del, PrtSc, Esc, Super+1..9 work (ShortcutBar). (Esc tap verified 2026-09-22; this box binds workspace cycling to Super+Tab, so the bar's Alt+Tab is config-dependent, not a pipeline failure.)
+- [ ] The same keyboard list **run twice, once per injection backend** (roadmap 2057-2060). Under
+      Wayland the server prefers uinput and emits the evdev code the phone sent, so nothing is
+      translated; the enigo/X11 rung is the one that has to name every key, and it is the rung a
+      machine without `/dev/uinput` access lands on. Read which one is live from the server log
+      ("using uinput" vs "using enigo"), then re-run the list with the other by starting the server
+      as a user who cannot open `/dev/uinput`. Symbols matter most here: `- = [ ] ; ' \` , . /` and
+      the dialpad `*`/`+` were refused outright on that rung before the table was completed.
 - [ ] holdKey/repeat (e.g. hold an arrow key) behaves.
 - [ ] R4 D1 view-only: tap "View-only: off" on the session bar → label flips
       ("View-only: on", amber), desktop log shows "View-only mode changed" (enabled=true), and
