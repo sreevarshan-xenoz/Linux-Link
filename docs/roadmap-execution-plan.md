@@ -100,12 +100,24 @@ Work in this order:
    round-trip (2141-2146), emitted into a per-session record (2167) and retained for comparison (2168).
    This is the highest-leverage hundred ids in the document: without a p99 there is no way to see a
    regression that hurts 5 % of frames, which is exactly the class of bug this project keeps shipping.
-   **Partly landed 2026-09-24** (`5e442e9`, `b3deb18`, `d8b3750`): `core::metrics::Samples` is a bounded
-   reservoir (exact percentiles below capacity, Algorithm R above it, count/max always exact) and every
-   streaming session now carries `encode` and `rtt` distributions into a retained JSONL record that
-   `linux-link sessions --json` prints one object per session. **Still open: decode and render percentiles,
-   which are phone-side** — they need a client→server stats reply before they can join a server-written
-   record, and nothing pretends otherwise in the meantime.
+   **Landed 2026-09-24** (`5e442e9`, `b3deb18`, `d8b3750`, `7a1623e`, `57094da`, `dba5d9e`, `ff1b526`):
+   `core::metrics::Samples` is a bounded reservoir (exact percentiles below capacity, Algorithm R above it,
+   count/max always exact) and one session record now carries five tails. `rtt_*` and `enc_*` are the
+   desktop's own readings; `dec_*`, `rnd_*` and `e2e_*` are measured on the device and shipped back — the
+   client reports raw duration batches (`InputPacket::ClientSamples`, tag 14, plus `LinkFeedback` tag 13 for
+   its view of the path) and the *server* folds them through the same `Samples` code, so every tail in one
+   line is computed identically and is directly comparable. The phone's half is `H264Decoder.kt` pairing each
+   MediaCodec output with the feed that produced it (sound only because the stream is B-frame-free) and
+   dropping rather than guessing anything that cannot be paired. Absence is spelled as absence: an
+   unmeasured key is omitted from the line and `null` in the JSON, so `key=0` always means measured zero.
+   Proven host-side, no device involved: `cargo test -p linux-link-server --test session_record -- --ignored`
+   drives a real capture→encode→send→receive session over loopback and asserts the emitted record holds all
+   five tails plus `phone_rtt`/`phone_lost`. It caught that a session shorter than the server's 5 s path
+   sampler emits no `rtt_*`, no link block and — because the client's readings hang off that same block — no
+   `phone_*` either; that is the shape of a connect-and-drop, not a bug to fix here.
+   **Open:** `rnd_*` is the rendered-frame *interval*, not panel latency, and `dec_*`/`rnd_*` on a real device
+   are still owed (checklist §Transport), as is 2146's input round-trip tail — the record carries `rtt_*` for
+   the connection, not a separate input→echo→input measurement.
 4. **A pinned benchmark workload plus a committed baseline.** One clip, one desktop state, one link
    condition, run in CI where the hardware allows and skipped-with-reason where it does not; a regression
    is a p95 delta beyond a stated threshold failing the job (2195-2200, with the CI half in 2231-2250).
@@ -140,14 +152,18 @@ Work in this order:
    delta is now computable from the records, but nothing computes it), 2159 (a failed session is still one
    bucket, not attributed to a layer), 2160 (no live `stats --json`; the counters are historical), 2162
    (the session record has no schema version, unlike the benchmark record, so a shape change is not yet
-   detectable in retained history), and 2170 (the phone cannot reach any of this — it needs the same
-   client→server stats reply that decode percentiles need in step 3).
+   detectable in retained history), and 2170 (the phone still cannot see any of this — step 3 built the
+   client→server half of that reply, the device→desktop sample batch; 2170 needs the other direction, which
+   does not exist yet).
 
 Exit gate:
 
 - `cargo fmt --all -- --check` and both clippy profiles green on a fresh clone of `main`.
 - CI green across the matrix, `cargo audit` able to fail.
 - One command that produces a session record containing at least p50/p95/p99 for latency, encode, decode.
+  **Satisfied 2026-09-24** by `cargo test -p linux-link-server --test session_record -- --ignored --nocapture`:
+  it runs a real capture→encode→send→receive session on this box and prints the record, which carries all
+  five tails plus the link block. It is a live-capture test, so it is `#[ignore]`d rather than part of CI.
 - A committed baseline record, and a CI check that fails if a re-run regresses past the stated threshold.
 - `grep -rn "percentile\|p95\|histogram" core/src server/src` returns real code, not nothing.
 
