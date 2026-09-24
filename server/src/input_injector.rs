@@ -289,6 +289,7 @@ impl InputInjector {
         let device = build_main_device()?;
 
         info!("Input injector: using uinput (kernel-level, works on all compositors)");
+        report_layout_assumption();
         // The abs pointer is built eagerly: libinput opens new devices
         // asynchronously after UI_DEV_CREATE, so a device created on the
         // first absolute motion loses that very event (the phone's first
@@ -576,6 +577,99 @@ impl InputInjector {
                 Ok(())
             }
         }
+    }
+}
+
+/// The keyboard layout the desktop is typing into, as far as the injector can
+/// tell.
+///
+/// uinput injects *evdev codes*, which are physical key positions: the code for
+/// `A` produces whatever the active layout binds to that position. Every code
+/// this file emits was chosen against a `us` layout (`char_to_keycode`, and the
+/// letter/digit/punctuation rows of `KEYCODE_MAP`), so what reaches the desktop
+/// is only what the phone meant when the desktop agrees. Roadmap 2065 names that
+/// assumption; honouring it on any other layout is 2665.
+#[derive(Debug, PartialEq, Eq)]
+enum KeyboardLayout {
+    /// The layout the injector's codes are chosen for.
+    Us,
+    /// A layout that was actually reported, and is not `us`.
+    Other(String),
+    /// Nothing reported one, so the assumption is unverified.
+    Unknown,
+}
+
+/// Decide from a layout string a probe reported.
+///
+/// Both probes report comma-separated per-group lists, and a variant is written
+/// `us(intl)`, so only the first group's base name decides: a `us` layout with
+/// any variant still binds the letters and punctuation this file emits.
+fn classify_layout(reported: Option<&str>) -> KeyboardLayout {
+    let Some(first_group) = reported.and_then(|raw| raw.split(',').next()) else {
+        return KeyboardLayout::Unknown;
+    };
+    let base = first_group.split('(').next().unwrap_or(first_group).trim();
+    if base.is_empty() {
+        KeyboardLayout::Unknown
+    } else if base == "us" {
+        KeyboardLayout::Us
+    } else {
+        KeyboardLayout::Other(first_group.trim().to_string())
+    }
+}
+
+/// What the desktop's keyboard layout is, best effort, cheapest and most
+/// session-specific source first.
+fn detect_keyboard_layout() -> KeyboardLayout {
+    // What the compositor handed xkbcommon for this session.
+    if let Ok(layout) = std::env::var("XKB_DEFAULT_LAYOUT") {
+        let detected = classify_layout(Some(&layout));
+        if detected != KeyboardLayout::Unknown {
+            return detected;
+        }
+    }
+    classify_layout(localectl_x11_layout().as_deref())
+}
+
+/// systemd's `X11 Layout:` line, or `None` on a host without `localectl` (runit,
+/// a container) or without that line.
+fn localectl_x11_layout() -> Option<String> {
+    let output = std::process::Command::new("localectl")
+        .arg("status")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_localectl_layout(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn parse_localectl_layout(status: &str) -> Option<String> {
+    status.lines().find_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        (key.trim() == "X11 Layout").then(|| value.trim().to_string())
+    })
+}
+
+/// Say out loud what the injector is assuming about the desktop's keyboard.
+///
+/// Deliberately a report, not a refusal: the phone's ordinary key events are
+/// position-based too, so rejecting a non-`us` layout would take the keyboard
+/// away from every non-US desktop rather than fix them.
+fn report_layout_assumption() {
+    match detect_keyboard_layout() {
+        KeyboardLayout::Us => {
+            debug!("uinput key codes are chosen for the `us` layout, which this desktop reports");
+        }
+        KeyboardLayout::Other(layout) => warn!(
+            layout = %layout,
+            "desktop keyboard layout is not `us`: injected key codes land at their `us` \
+             positions, so typed characters differ from what the phone shows (roadmap 2665)"
+        ),
+        KeyboardLayout::Unknown => warn!(
+            "could not determine the desktop keyboard layout; assuming `us`, which is what \
+             every key code in the injector is chosen for"
+        ),
     }
 }
 
@@ -1163,6 +1257,53 @@ mod tests {
         let unmapped = !mapped;
         assert!(gamepad_edges(0, unmapped).is_empty());
         assert!(gamepad_edges(unmapped, 0).is_empty());
+    }
+
+    /// Roadmap 2065: the injector's key codes are chosen for a `us` layout, so
+    /// the layout it is about to type into has to be named before it is used.
+    #[test]
+    fn only_the_first_layout_group_has_to_be_us_for_the_codes_to_match() {
+        assert_eq!(classify_layout(Some("us")), KeyboardLayout::Us);
+        assert_eq!(classify_layout(Some("us(intl)")), KeyboardLayout::Us);
+        // A second group is another layout's keyboard, not a different mapping
+        // for the keys the phone is pressing right now.
+        assert_eq!(classify_layout(Some("us,de")), KeyboardLayout::Us);
+        assert_eq!(classify_layout(Some("us , fr")), KeyboardLayout::Us);
+    }
+
+    #[test]
+    fn a_reported_non_us_layout_is_named_instead_of_assumed_away() {
+        assert_eq!(
+            classify_layout(Some("fr")),
+            KeyboardLayout::Other("fr".to_string())
+        );
+        assert_eq!(
+            classify_layout(Some("de(qwerty),us")),
+            KeyboardLayout::Other("de(qwerty)".to_string())
+        );
+    }
+
+    #[test]
+    fn an_unreportable_layout_is_unknown_rather_than_us() {
+        // The probes fail in different ways: no tool, no line, an empty value.
+        assert_eq!(classify_layout(None), KeyboardLayout::Unknown);
+        assert_eq!(classify_layout(Some("")), KeyboardLayout::Unknown);
+        assert_eq!(classify_layout(Some("  ")), KeyboardLayout::Unknown);
+        assert_eq!(classify_layout(Some(",us")), KeyboardLayout::Unknown);
+        assert_eq!(parse_localectl_layout("System Locale: en_US.UTF-8\n"), None);
+    }
+
+    #[test]
+    fn the_localectl_layout_line_is_the_one_that_is_read() {
+        // `localectl status` on this box: the layout sits between a keymap line
+        // and a model/options pair that must not be mistaken for it.
+        let status = "System Locale: LANG=en_US.UTF-8\n    VC Keymap: us\n   \
+                      X11 Layout: us\n    X11 Model: pc105+inet\n";
+        assert_eq!(parse_localectl_layout(status).as_deref(), Some("us"));
+        assert_eq!(
+            classify_layout(parse_localectl_layout(status).as_deref()),
+            KeyboardLayout::Us
+        );
     }
 
     /// Roadmap 2064: a uinput device that faults at write time is rebuilt and

@@ -752,7 +752,18 @@ each item is a live defect with a known location, not a wish.
   self-skips where `/dev/uinput` is absent. Honest limit: the retried packet itself may still be lost,
   because libinput opens a newly created device asynchronously, so what the rebuild guarantees is recovery
   from the *next* event.
-- 2065 reject or handle injection when the compositor's input layout is not the assumed QWERTY one.
+- 2065 **PARTIAL — converted into a named defect with a repro, which is what this plan's exit gate asks
+  for.** The assumption is no longer invisible: the uinput injector now reads the desktop's keyboard layout
+  (`XKB_DEFAULT_LAYOUT`, then `localectl status`'s `X11 Layout:` line) when it is built and says what it
+  found — `debug!` when the layout is the `us` one its codes were chosen for, a `WARN` naming the layout
+  when it is not, a `WARN` about assuming `us` when neither probe answers. It does **not** reject, and the
+  reason is a design decision, not an omission: the phone's ordinary key events are position-based too, so
+  refusing a non-`us` desktop would take the keyboard away from every non-US user rather than fix them. The
+  fix is 2665, and its acceptance test is this repro: start the server with `XKB_DEFAULT_LAYOUT=fr`, tap
+  `a` on the phone's keyboard, and the desktop receives `q` while the journal says
+  `desktop keyboard layout is not 'us' … layout=fr`. Both branches of the report were observed on this box
+  (which reports `us`); the classification itself is unit-tested, including `us(intl)` and a `us,de` group
+  list, and the `localectl` parser against that tool's real output.
 
 **State that goes stale or is dropped at a boundary**
 - 2066 stop filtering `monitorremoved` — Hyprland monitor events are discarded (`hypr_events.rs:28`), so
@@ -1504,7 +1515,11 @@ per-class semantics, then the v1 plane shrinks to compatibility-only.
   evdev in the bridge, evdev → enigo `Key` in the server). Generating either from the other, or from a
   single data file, is what remains; 2271 is the guard that makes a drift fail loudly meanwhile.
 - 2664 **CLOSED (`db75497`, `dc9fc22`)** — see 2271; both directions are enumerated in tests.
-- 2665 layout-aware injection (a non-QWERTY desktop must receive the keysym the user pressed).
+- 2665 layout-aware injection (a non-QWERTY desktop must receive the keysym the user pressed). The `us`
+  assumption is now *detected and reported* at injector construction (2065), which is what turns this from a
+  hidden behaviour into a measurable one; its repro is recorded there. What remains is the injection itself —
+  resolving the phone's key against the desktop's actual keymap instead of emitting a physical position — and
+  telling the phone which layout was found, so the app can say so before a user types into the wrong keyboard.
 - 2666 unicode text injection on the uinput path, not only through enigo. **Mechanism found while working
   2057-2060 (`dc9fc22`)**: `InputInjector::text()` on uinput goes through `char_to_keycode`, which yields a
   bare key press with no Shift — so pasted capitals arrive lowercase, and `*`/`+` land on the keypad codes
