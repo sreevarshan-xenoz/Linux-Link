@@ -185,6 +185,12 @@ The four that matter most, in order:
 - **2053 — the ABR controller has no input.** `update_loss(_lost_packets)` in
   `core/src/streaming/bitrate.rs` ignores its argument, so packet loss never moves the bitrate and every
   "adaptive" claim in the README is about a no-op.
+  **Landed 2026-09-24**: loss is a term in the live arbiter's ceiling chain now (`LossCeiling` sampled from
+  the transport's cumulative counters each 2 s tick), and the README describes the controller that exists
+  instead of one that never ran. Two honest residuals: the RTT half of that story was *also* dead
+  (`with_adaptive_bitrate` has no callers, so `AdaptiveBitrate` never saw a connection) — removing it is a
+  separate change — and the loss response itself is unit-tested only, since proving it needs a link that
+  actually drops (checklist §11).
 - **2054 — advertised audio that cannot play.** `receiveAudio` has no caller: the phone has no Opus
   playout path, so the desktop audio feature is a UI toggle over a dead wire. Either build 2791 or stop
   advertising the capability.
@@ -392,7 +398,7 @@ Cross-phase hard edges worth respecting:
 
 - Phase 1 gates everything after it: no measurement, no exit criteria.
 - Phase 3's INPUT class gates Phase 6's delivery semantics.
-- Phase 2's `update_loss` fix gates Phase 5's ABR work.
+- Phase 2's loss input (2053) gates Phase 5's ABR work — satisfied 2026-09-24.
 - Phase 4's exec scoping gates any automation or productivity item.
 - Phase 8's 2851-2863 gates every file-transfer item in the old I range and Phase 3's FILES class.
 - Phase 9's 2931-2934 gates Phase 4's fingerprint UX being testable end to end.

@@ -36,7 +36,7 @@ Linux Link is a **pure Rust** remote desktop solution built specifically for Lin
 - **Native wlroots capture** — direct `zwlr_screencopy` on Hyprland (no portal grant dialog), damage-driven variable frame rate; automatic fallback to **PipeWire capture** via XDG Desktop Portal on any other Wayland compositor, X11 grab last
 - **FFmpeg H.264 encoding** with persistent sidecar process for low latency
 - **QUIC transport** (datagram mode) with self-signed TLS certificates
-- **Adaptive bitrate** — 3 presets (LAN/internet/low-bandwidth) with RTT-based congestion control
+- **Adaptive bitrate** — one arbiter owns every rate change: a 2 Mbit/s courtesy ceiling while a WAN session rides a relay, the session's quality preset, and a loss response that backs the encoder off a congested link (20 % per congested tick, to a 1 Mbit/s floor) and walks it back up once the link goes clean
 - **MediaCodec hardware decode** on the native Android client via JNI
 - **Single-window streaming** (Hyprland) — pick any window on the phone and the server crops + re-encodes to just that window
 

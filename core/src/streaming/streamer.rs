@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use super::audio::{AudioConfig, AudioEncoder as AudioOpusEncoder};
 use super::audio_capture;
-use super::bitrate::AdaptiveBitrate;
+use super::bitrate::{AdaptiveBitrate, LossCeiling};
 use super::capture;
 use super::connection::{Connection, QuinnConnection, SharedConnection};
 use super::encoder::VideoEncoder;
@@ -992,15 +992,20 @@ impl StreamingServer {
             });
         }
 
-        // Task 7b: live bitrate arbiter (R4 A3 + E5). One task owns every
-        // link-driven bitrate change so they never fight: it folds the A3
-        // relay floor and the E5 HUD preset ceiling together against the
-        // session's configured rate and pushes the result to the encoder
-        // whenever the effective value changes.
+        // Task 7b: live bitrate arbiter (R4 A3 + E5, roadmap 2053). One task
+        // owns every link-driven bitrate change so they never fight: it folds
+        // the A3 relay floor, the E5 HUD preset ceiling and the loss response
+        // together against the session's configured rate and pushes the result
+        // to the encoder whenever the effective value changes.
         //
         //   effective = configured
         //                 .min(relay_cap)        // 2 Mbit/s while relayed
         //                 .min(preset_ceil)      // HUD profile, relative to native
+        //                 .min(loss_cap)         // 20 % off per congested tick
+        //
+        // Unlike the other two, `loss_cap` has memory: it is a controller
+        // reading the transport's counters once per tick, and it walks back up
+        // on its own when the link goes clean.
         //
         // `FullQuality` clears the relay floor (explicit override). The
         // relay term is inert on quinn (LAN / Tailscale never report a
@@ -1016,13 +1021,16 @@ impl StreamingServer {
             tasks.spawn(async move {
                 // Seed with the configured rate; the first tick reconciles.
                 let mut applied = configured_bitrate;
+                let mut loss = LossCeiling::new(configured_bitrate);
                 loop {
                     tokio::select! {
                         _ = arb_cancel.cancelled() => break,
                         _ = tokio::time::sleep(Duration::from_secs(2)) => {}
                     }
-                    let relayed =
-                        arb_conn.stats().relayed && !arb_full_quality.load(Ordering::Relaxed);
+                    let stats = arb_conn.stats();
+                    loss.sample(stats.lost_packets, stats.datagrams_sent);
+                    let loss_cap = loss.ceiling();
+                    let relayed = stats.relayed && !arb_full_quality.load(Ordering::Relaxed);
                     let relay_cap = if relayed {
                         RELAY_BITRATE_CAP_BPS
                     } else {
@@ -1030,7 +1038,10 @@ impl StreamingServer {
                     };
                     let preset_ceil =
                         preset_bitrate_ceil(arb_preset.load(Ordering::Relaxed), configured_bitrate);
-                    let effective = configured_bitrate.min(relay_cap).min(preset_ceil);
+                    let effective = configured_bitrate
+                        .min(relay_cap)
+                        .min(preset_ceil)
+                        .min(loss_cap);
                     if effective == applied {
                         continue;
                     }
@@ -1039,6 +1050,7 @@ impl StreamingServer {
                         configured_bps = configured_bitrate,
                         relayed,
                         preset = arb_preset.load(Ordering::Relaxed),
+                        loss_cap = (loss_cap != u32::MAX).then_some(loss_cap),
                         "Encoder bitrate target changed"
                     );
                     let _ = arb_bitrate_tx.send(effective);

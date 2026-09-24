@@ -103,13 +103,14 @@ Headline numbers, all verified first-hand on 2026-09-24:
    encoder-verification mechanism; 510-515 are one `setFrameRate` call; 232-235 are four ids for a
    QR feature that does not exist; 875/876/878 duplicate 874/255/259; 1402/1405, 1406/1408/1409,
    1412/1413, 1442/1443 are each the same two lines of Kotlin.
-5. **It missed the defects that actually matter, while implying coverage.** The session HUD's
-   "drops" field is hardcoded `0` (`android/bridge/src/api.rs`, `frame_drops`), so the UI currently
-   lies; the server's `KEYCODE_MAP` (`server/src/input_injector.rs:27`) covers ~26 keys, so
-   modifiers, media keys and function keys past F12 degrade silently; desktop audio dead-ends at the
-   bridge because the phone has no player; and the packet-loss input of the adaptive-bitrate
-   controller is an ignored parameter (`core/src/streaming/bitrate.rs:105`, `update_loss(_lost)`),
-   which the old roadmap listed as "absent elsewhere" without ever naming.
+5. **It missed the defects that actually matter, while implying coverage.** At audit time: the session
+   HUD's "drops" field was a hardcoded `0` (`android/bridge/src/api.rs`, `frame_drops`), so the UI lied;
+   the server's `KEYCODE_MAP` (`server/src/input_injector.rs:27`) covered ~26 keys, so modifiers, media
+   keys and function keys past F12 degraded silently; desktop audio dead-ended at the bridge because the
+   phone has no player; and the packet-loss input of the adaptive-bitrate controller was an ignored
+   parameter (`update_loss(_lost)` in `core/src/streaming/bitrate.rs`), which the old roadmap listed as
+   "absent elsewhere" without ever naming. Each of these is a numbered item in section U, and the ones
+   already fixed are marked there.
 6. **Several sections end with boilerplate "integration tests / soak / release gate" trios**
    (898-900, 998-1000, 1095-1100, …) that describe nothing repo-specific and duplicate section T.
    Testing work is consolidated in 2251-2350 with named targets, and the per-section trios are
@@ -627,8 +628,22 @@ each item is a live defect with a known location, not a wish.
   completion self-corrects instead of accumulating phantom drops, with the window restarted on sequence 0
   because a rebuilt encoder counts from 0 again. Three unit tests, including both of those cases.
 - 2052 **OBSOLETE — superseded by 2051**: the field is a measurement, so there is nothing to remove.
-- 2053 wire the packet-loss input of the adaptive-bitrate controller — `update_loss` takes `_lost_packets`
-  and ignores it, so loss never moves the rate.
+- 2053 **LANDED 2026-09-24** wire the packet-loss input of the adaptive-bitrate controller — `update_loss`
+  took `_lost_packets` and ignored it, so loss never moved the rate. It is wired, but not into that hook:
+  the loss response is a stateful controller (it needs ratios over time and a way back up), so it lives as
+  `LossCeiling` in `core/src/streaming/bitrate.rs` and is folded into the *live* rate owner — the arbiter
+  task in `streamer.rs`, which already composes the relay floor and the HUD preset — as
+  `configured.min(relay_cap).min(preset_ceil).min(loss_cap)`. The input is the transport's own cumulative
+  counters (`lost_packets` / `datagrams_sent` from `ConnectionStats`, reported by both quinn and iroh),
+  sampled per 2 s tick: above 1 % loss the ceiling drops 20 %, below 0.1 % it climbs 10 % until loss stops
+  being a term at all, with a 100-datagram floor so a still desktop's near-empty sample cannot cut a
+  healthy link, and a 1 Mbit/s floor because below that the right answer is fewer pixels, which this
+  controller deliberately does not do mid-session. Eight unit tests on the pure decision function.
+  **Related finding, not fixed here:** the RTT controller those hooks belong to (`AdaptiveBitrate`, plus
+  `BitrateProfiles` and the `AdaptiveBitrateMonitor`) was already unreachable — `with_adaptive_bitrate` has
+  no callers — so no RTT-driven adjustment has ever happened either. 2821 remains as the refinement
+  (loss as a primary congestion indicator alongside RTT, à la RustDesk) once there is one live controller
+  to refine.
 - 2054 stop presenting desktop audio as available: the phone has no player (`receiveAudio` has no caller),
   so either build the playout path (2791-2800) or drop it from the advertised capability set.
 - 2055 report e2e latency as a distribution sample stream rather than one EWMA scalar so a p95 regression

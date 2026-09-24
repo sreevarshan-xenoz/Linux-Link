@@ -262,7 +262,9 @@ not part of C4.
 - [ ] Relayed session (R4 A3): within ~2 s of the badge reading "relayed", the desktop log shows "Encoder bitrate target changed" (relay_cap engaged) at effective ≤ 2 Mbit/s followed by "Encoder rebuilt for new bitrate", and picture is visibly softer than LAN/direct.
 - [ ] Full-quality override (R4 A3): while relaying, the badge area offers "Full quality: off" — tap → log shows "Relay quality override changed" then a fresh "Encoder bitrate target changed" back to configured (`linux-link sessions` kbps over the next session line). Tap again to re-clamp; toggle survives a stream retry (re-arms).
 - [ ] Clamp release on punch-through: start relayed (override off), wait for the direct upgrade → within ~2 s the log shows "Encoder bitrate target changed" back to configured without touching anything.
-- [ ] LAN session (R4 A3): the relay clamp never engages (`stats().relayed` is always false on quinn → relay_cap is unbounded); the arbiter task still runs but emits no bitrate-change line until a preset is chosen below.
+- [ ] LAN session (R4 A3): the relay clamp never engages (`stats().relayed` is always false on quinn → relay_cap is unbounded); the arbiter task still runs but emits no bitrate-change line until a preset is chosen below or the link starts losing packets.
+- [ ] Loss response (roadmap 2053): degrade the link — `tc qdisc add dev <iface> root netem loss 5%` on the desktop, or walk the phone toward the far edge of the Wi-Fi mid-session — and within a few 2 s ticks the desktop log shows "Encoder bitrate target changed" carrying a `loss_cap=` field with effective below configured, then "Encoder rebuilt for new bitrate" and a visibly softer picture. The cut is 20 % per congested tick down to a 1 Mbit/s floor (a configured rate below the floor is never raised to it). Restore the link → the same line reappears **without** `loss_cap=` as the rate climbs back ~10 % per tick to configured, then stops being a term at all.
+- [ ] Loss response must not fire on a quiet desktop: hold the screen still (no window movement, no video) for a minute and the log must show no bitrate-change line. Below 100 datagrams in a tick the controller treats the sample as no information, which is the only thing distinguishing "the link is lossy" from "there was nothing to lose" — a bitrate cut on an idle LAN session is a bug, not a measurement.
 
 ## 11b. HUD link-profile presets (R4 E5)
 
@@ -438,7 +440,6 @@ Recording these here so a tester does not file them as regressions:
 
 - Desktop audio audible on the phone — there is no client-side Opus player (`receiveAudio` has no caller);
   see roadmap-3000 **2791-2800**, and §10's "audio" results are about *control* (routing/volume), not playout.
-- Adaptive bitrate responding to loss — `update_loss` ignores its argument (**2053**).
 - The file browser — the server plugin answers, `listRemoteFiles` has zero call sites (**2874**).
 - Notification per-app channels, grouping, icons, privacy modes (**2898-2905**).
 - Every K (virtual display) and L (macro/automation) behaviour — neither subsystem exists.
