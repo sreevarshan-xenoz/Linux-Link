@@ -654,8 +654,10 @@ each item is a live defect with a known location, not a wish.
   is unavailable, that was not a rare interleaving but the normal shape of a session on such a machine. A
   closed audio receiver also `break`s the loop, tearing the whole session down for an audio-only teardown.
   Audio is now offered, never insisted on (`try_deliver_audio`: skip when full, log once when the consumer
-  is gone, video unaffected), proven by two unit tests. Still open in this item: the silence stream itself,
-  and the capability row that presents `desktop -> phone` as a live direction.
+  is gone, video unaffected), proven by two unit tests; and the silence stream itself is gone — with no
+  PipeWire capture the audio task logs the reason and ends, so a session carries audio only when there is
+  audio to speak of. Still open in this item: the capability row that presents `desktop -> phone` as a
+  live direction, and the playout path (2791-2800) that would make it one.
 - 2055 report e2e latency as a distribution sample stream rather than one EWMA scalar so a p95 regression
   is visible at all (pairs with 2141-2146).
 - 2056 expose goodput/RTT with their confidence and sample count, not as bare numbers the HUD cannot

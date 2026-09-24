@@ -539,9 +539,9 @@ enum AudioDelivery {
 /// is not hypothetical — a client whose audio consumer is not polling (today's
 /// Android app: `nativeReceiveAudio` has no caller, because the phone has no
 /// Opus playout path) fills the 8-slot queue 160 ms into a session and the
-/// `await`-ing send then wedges video behind it. On a desktop with no PipeWire
-/// loopback the server streams synthesized silence at 50 packets/s, so the
-/// stall is not even rare: it happens on any session that has audio to speak of.
+/// `await`-ing send then wedges video behind it. It was not rare either: the
+/// desktop used to stream synthesized silence at 50 packets/s whenever PipeWire
+/// capture was unavailable, so any session on such a machine hit it.
 ///
 /// So audio is offered, never insisted on. A full queue means the consumer is
 /// at least 160 ms behind and this packet is already too late to be worth
