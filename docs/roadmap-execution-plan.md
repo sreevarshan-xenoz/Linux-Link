@@ -236,6 +236,13 @@ The ones that matter most, in order:
   the faulted device and retries, tested by faulting a live device's descriptor with `dup2`. Two residuals
   stay open and are what those ids become next: a release dropped mid-drag still leaves the button held,
   because there is no release-all-on-teardown path (2272), and shifted text still arrives lowercase (2666).
+- **2065 — injection assumed the desktop's keyboard was `us`, and nobody had checked.** The injector emits
+  evdev codes, which are positions.
+  **Landed 2026-09-24** (`fc1b368`) as a *conversion*, which is the other half of this phase's exit gate: the
+  layout is now probed (`XKB_DEFAULT_LAYOUT`, then `localectl status`) and named in the log at injector
+  construction, and the remaining behaviour — honouring a non-`us` layout, and telling the phone which one
+  was found — is 2665 with a recorded repro. Injecting anyway was the deliberate call: refusing a non-`us`
+  desktop would take the keyboard away from every non-US user rather than fix them.
 
 Exit gate: every U id is closed or converted into a named bug with a repro; no reported number in the UI is
 produced by anything other than a measurement; the dead-link watchdog's behaviour is asserted by an

@@ -349,7 +349,9 @@ Headline numbers, all verified first-hand on 2026-09-24:
   the shared code set (`dc9fc22`, `a9b903d`, 2057-2060/2271); 754-756's press-without-release is closed by
   the edge-tracked gamepad handler (2063) — though the *Android source* half of that clause still holds,
   so the path remains unreachable from the app (2695). 778's never-recreated devices are now rebuilt once
-  on a failed write (2064). 736, 740, 744, 766-767 and the ABSENT list are unchanged.
+  on a failed write (2064). 766-767's layout abstraction is now *detected and named* at injector
+  construction (2065), but not honoured — layout-aware injection stays 2665.
+  736, 740, 744 and the ABSENT list are unchanged.
 
 ### I. Files / Clipboard / Notifications 801-900
 
@@ -752,8 +754,8 @@ each item is a live defect with a known location, not a wish.
   self-skips where `/dev/uinput` is absent. Honest limit: the retried packet itself may still be lost,
   because libinput opens a newly created device asynchronously, so what the rebuild guarantees is recovery
   from the *next* event.
-- 2065 **PARTIAL — converted into a named defect with a repro, which is what this plan's exit gate asks
-  for.** The assumption is no longer invisible: the uinput injector now reads the desktop's keyboard layout
+- 2065 **PARTIAL — converted into a named defect with a repro (`fc1b368`), which is what this plan's exit
+  gate asks for.** The assumption is no longer invisible: the uinput injector now reads the desktop's keyboard layout
   (`XKB_DEFAULT_LAYOUT`, then `localectl status`'s `X11 Layout:` line) when it is built and says what it
   found — `debug!` when the layout is the `us` one its codes were chosen for, a `WARN` naming the layout
   when it is not, a `WARN` about assuming `us` when neither probe answers. It does **not** reject, and the
