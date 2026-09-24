@@ -348,8 +348,8 @@ Headline numbers, all verified first-hand on 2026-09-24:
   modifiers, 741's MENU, 742's F-keys and 743's media/volume rows are closed by the completed table plus
   the shared code set (`dc9fc22`, `a9b903d`, 2057-2060/2271); 754-756's press-without-release is closed by
   the edge-tracked gamepad handler (2063) — though the *Android source* half of that clause still holds,
-  so the path remains unreachable from the app (2695). 736, 740, 744, 766-767 and the ABSENT list are
-  unchanged.
+  so the path remains unreachable from the app (2695). 778's never-recreated devices are now rebuilt once
+  on a failed write (2064). 736, 740, 744, 766-767 and the ABSENT list are unchanged.
 
 ### I. Files / Clipboard / Notifications 801-900
 
@@ -740,7 +740,17 @@ each item is a live defect with a known location, not a wish.
   table, and a test asserts the release set equals the press set for all seven bits and that unmapped bits
   reach nothing. Unit-verified only, and honestly so: the path still has no Android source (2695), so no
   control in the app can produce these packets today.
-- 2064 recreate the uinput devices when they fail; they are built once at startup and never rebuilt.
+- 2064 **CLOSED**, uinput devices rebuilt on fault: both emits now go through one helper that retries the
+  write against a freshly built device once, logs the fault with the device's name and the action that hit
+  it, and reports the second failure if the rebuild did not help. Previously the two devices were built at
+  startup and never revisited, so one `write(2)` fault (a destroyed uinput device, an ENODEV) failed every
+  later packet of the session identically and the only trace was an error string. The abs device also keeps
+  its lazy build, so a session that never touched direct-touch still gets one on first use. Proven by a
+  test that retargets a live device's descriptor onto a read-only `/dev/null` with `dup2` — the write then
+  fails `EBADF` exactly as a dead device's would — and asserts the emit recovers on both devices; it
+  self-skips where `/dev/uinput` is absent. Honest limit: the retried packet itself may still be lost,
+  because libinput opens a newly created device asynchronously, so what the rebuild guarantees is recovery
+  from the *next* event.
 - 2065 reject or handle injection when the compositor's input layout is not the assumed QWERTY one.
 
 **State that goes stale or is dropped at a boundary**

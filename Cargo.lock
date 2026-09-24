@@ -2631,6 +2631,7 @@ dependencies = [
  "enigo",
  "evdev",
  "iroh",
+ "libc",
  "linux-link-core",
  "quinn",
  "rustls",

@@ -48,3 +48,5 @@ xcap.workspace = true
 
 [dev-dependencies]
 rustls.workspace = true
+# `dup2` in the uinput rebuild test, to fault a live device's descriptor.
+libc.workspace = true

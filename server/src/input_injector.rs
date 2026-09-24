@@ -284,37 +284,9 @@ impl InputInjector {
             );
         }
 
-        // Build a virtual keyboard + mouse device
-        let mut keys = AttributeSet::<KeyCode>::new();
-        // Add all common keys
-        for keycode in 0..256u16 {
-            keys.insert(KeyCode(keycode));
-        }
-        // Mouse buttons BTN_LEFT..BTN_EXTRA (272..=276): undeclared codes are
-        // rejected by the kernel, so mouse clicks need explicit registration.
-        for keycode in 272..=276u16 {
-            keys.insert(KeyCode(keycode));
-        }
-
-        let mut rel = AttributeSet::<RelativeAxisCode>::new();
-        rel.insert(RelativeAxisCode::REL_X);
-        rel.insert(RelativeAxisCode::REL_Y);
-        rel.insert(RelativeAxisCode::REL_WHEEL);
-        rel.insert(RelativeAxisCode::REL_HWHEEL);
-
-        #[allow(deprecated)]
-        let device = VirtualDeviceBuilder::new()
-            .context("Failed to create virtual device builder")?
-            .with_keys(&keys)
-            .context("Failed to set up virtual keys")?
-            .with_relative_axes(&rel)
-            .context("Failed to set up relative axes")?
-            .name(b"Linux Link Virtual Input")
-            .build()
-            .context(
-                "Failed to build virtual device. \
-                     Ensure /dev/uinput is accessible (add user to 'uinput' group).",
-            )?;
+        // Build a virtual keyboard + mouse device, plus the absolute pointer
+        // direct-touch motion rides.
+        let device = build_main_device()?;
 
         info!("Input injector: using uinput (kernel-level, works on all compositors)");
         // The abs pointer is built eagerly: libinput opens new devices
@@ -340,14 +312,13 @@ impl InputInjector {
                 Ok(())
             }
             InputBackend::Uinput(state) => {
-                let dev = &mut state.get_mut().unwrap().main;
+                let guard = state.get_mut().unwrap();
                 let events = [
                     InputEvent::new(EV_REL, RelativeAxisCode::REL_X.0, dx),
                     InputEvent::new(EV_REL, RelativeAxisCode::REL_Y.0, dy),
                     InputEvent::new(EV_SYN, SYN_REPORT, 0), // SYN_REPORT
                 ];
-                dev.emit(&events).context("uinput mouse move failed")?;
-                Ok(())
+                emit_uinput(guard, UinputDevice::Main, &events, "mouse move")
             }
         }
     }
@@ -370,14 +341,13 @@ impl InputInjector {
                 Ok(())
             }
             InputBackend::Uinput(state) => {
-                let state = state.get_mut().unwrap();
+                let guard = state.get_mut().unwrap();
                 let events = [
                     InputEvent::new(EV_ABS, AbsoluteAxisCode::ABS_X.0, x_norm as i32),
                     InputEvent::new(EV_ABS, AbsoluteAxisCode::ABS_Y.0, y_norm as i32),
                     InputEvent::new(EV_SYN, SYN_REPORT, 0),
                 ];
-                emit_abs(state, &events)?;
-                Ok(())
+                emit_uinput(guard, UinputDevice::Abs, &events, "absolute move")
             }
         }
     }
@@ -397,15 +367,14 @@ impl InputInjector {
                 Ok(())
             }
             InputBackend::Uinput(state) => {
-                let dev = &mut state.get_mut().unwrap().main;
+                let guard = state.get_mut().unwrap();
                 let key = button.as_evdev_key();
                 let value = if pressed { 1 } else { 0 };
                 let events = [
                     InputEvent::new(EV_KEY, key.0, value),
                     InputEvent::new(EV_SYN, SYN_REPORT, 0),
                 ];
-                dev.emit(&events).context("uinput mouse click failed")?;
-                Ok(())
+                emit_uinput(guard, UinputDevice::Main, &events, "mouse click")
             }
         }
     }
@@ -426,14 +395,13 @@ impl InputInjector {
                 Ok(())
             }
             InputBackend::Uinput(state) => {
-                let dev = &mut state.get_mut().unwrap().main;
+                let guard = state.get_mut().unwrap();
                 let events = [
                     InputEvent::new(EV_REL, RelativeAxisCode::REL_WHEEL.0, y),
                     InputEvent::new(EV_REL, RelativeAxisCode::REL_HWHEEL.0, x),
                     InputEvent::new(EV_SYN, SYN_REPORT, 0),
                 ];
-                dev.emit(&events).context("uinput scroll failed")?;
-                Ok(())
+                emit_uinput(guard, UinputDevice::Main, &events, "scroll")
             }
         }
     }
@@ -450,12 +418,12 @@ impl InputInjector {
     fn inject_keycode(&mut self, code: u16, pressed: bool) -> Result<()> {
         match &mut self.backend {
             InputBackend::Uinput(state) => {
-                let dev = &mut state.get_mut().unwrap().main;
+                let guard = state.get_mut().unwrap();
                 let events = [
                     InputEvent::new(EV_KEY, code, i32::from(pressed)),
                     InputEvent::new(EV_SYN, SYN_REPORT, 0),
                 ];
-                dev.emit(&events).context("uinput keycode failed")
+                emit_uinput(guard, UinputDevice::Main, &events, "keycode")
             }
             InputBackend::Enigo(_) => match keycode_to_enigo(code) {
                 Some(key) => self.key(key, pressed),
@@ -482,15 +450,14 @@ impl InputInjector {
                 Ok(())
             }
             InputBackend::Uinput(state) => {
-                let dev = &mut state.get_mut().unwrap().main;
+                let guard = state.get_mut().unwrap();
                 let evdev_key = key_to_evdev(key);
                 let value = if pressed { 1 } else { 0 };
                 let events = [
                     InputEvent::new(EV_KEY, evdev_key.0, value),
                     InputEvent::new(EV_SYN, SYN_REPORT, 0),
                 ];
-                dev.emit(&events).context("uinput key failed")?;
-                Ok(())
+                emit_uinput(guard, UinputDevice::Main, &events, "key")
             }
         }
     }
@@ -506,17 +473,17 @@ impl InputInjector {
             InputBackend::Uinput(state) => {
                 // For uinput, fall back to keycode simulation for ASCII.
                 // This is a best-effort approach and does not handle Unicode.
+                let guard = state.get_mut().unwrap();
                 for ch in text.chars() {
                     if let Some(keycode) = char_to_keycode(ch) {
                         let key = KeyCode(keycode);
-                        let dev = &mut state.get_mut().unwrap().main;
                         let events = [
                             InputEvent::new(EV_KEY, key.0, 1), // press
                             InputEvent::new(EV_SYN, SYN_REPORT, 0),
                             InputEvent::new(EV_KEY, key.0, 0), // release
                             InputEvent::new(EV_SYN, SYN_REPORT, 0),
                         ];
-                        dev.emit(&events).context("uinput text input failed")?;
+                        emit_uinput(guard, UinputDevice::Main, &events, "text input")?;
                     } else {
                         debug!("Cannot type character with uinput: {ch:?}");
                     }
@@ -597,9 +564,13 @@ impl InputInjector {
 
                 // SYN_REPORT
                 if let InputBackend::Uinput(state) = &mut self.backend {
-                    let dev = &mut state.get_mut().unwrap().main;
-                    dev.emit(&[InputEvent::new(EV_SYN, SYN_REPORT, 0)])
-                        .context("gamepad SYN_REPORT failed")?;
+                    let guard = state.get_mut().unwrap();
+                    emit_uinput(
+                        guard,
+                        UinputDevice::Main,
+                        &[InputEvent::new(EV_SYN, SYN_REPORT, 0)],
+                        "gamepad sync",
+                    )?;
                 }
 
                 Ok(())
@@ -608,17 +579,120 @@ impl InputInjector {
     }
 }
 
-/// Emit events on the absolute-pointer device, creating it lazily on first use.
-fn emit_abs(state: &mut UinputState, events: &[InputEvent]) -> Result<()> {
-    if state.abs.is_none() {
+/// Emit events on one of the injector's uinput devices, rebuilding it once if
+/// the write fails.
+///
+/// Both devices used to be created at startup and never revisited, so a fault
+/// on the uinput file was terminal for the session's whole input path: every
+/// later packet failed the same way, and the only trace was an error string
+/// (roadmap 2064).
+///
+/// The retried event may itself be dropped, because libinput opens a newly
+/// `UI_DEV_CREATE`d device asynchronously — the same reason both devices are
+/// built eagerly at startup rather than on first use. What the rebuild buys is
+/// recovery from the *next* event, not survival of the failing one.
+fn emit_uinput(
+    state: &mut UinputState,
+    which: UinputDevice,
+    events: &[InputEvent],
+    what: &str,
+) -> Result<()> {
+    if which == UinputDevice::Abs && state.abs.is_none() {
         state.abs = Some(build_abs_device()?);
     }
-    state
-        .abs
-        .as_mut()
-        .unwrap()
-        .emit(events)
-        .context("uinput absolute-pointer emit failed")
+    let first = match which {
+        UinputDevice::Main => state.main.emit(events),
+        UinputDevice::Abs => state
+            .abs
+            .as_mut()
+            .expect("absent abs device was just built")
+            .emit(events),
+    };
+    match first {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            warn!(
+                error = %e,
+                device = which.label(),
+                action = what,
+                "uinput emit failed, rebuilding the device and retrying"
+            );
+            let fresh = build_uinput(which)?;
+            let dev = match which {
+                UinputDevice::Main => {
+                    state.main = fresh;
+                    &mut state.main
+                }
+                UinputDevice::Abs => {
+                    state.abs = Some(fresh);
+                    state.abs.as_mut().unwrap()
+                }
+            };
+            dev.emit(events)
+                .with_context(|| format!("uinput {what} failed again after its device was rebuilt"))
+        }
+    }
+}
+
+/// Which of the two uinput devices an emit is aimed at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UinputDevice {
+    /// Keyboard + relative pointer + buttons.
+    Main,
+    /// The `ABS_X`/`ABS_Y` pointer direct-touch motion rides.
+    Abs,
+}
+
+impl UinputDevice {
+    fn label(self) -> &'static str {
+        match self {
+            UinputDevice::Main => "Linux Link Virtual Input",
+            UinputDevice::Abs => "Linux Link Virtual Abs Pointer",
+        }
+    }
+}
+
+fn build_uinput(which: UinputDevice) -> Result<VirtualDevice> {
+    match which {
+        UinputDevice::Main => build_main_device(),
+        UinputDevice::Abs => build_abs_device(),
+    }
+}
+
+/// Build the keyboard + relative-pointer + button device.
+fn build_main_device() -> Result<VirtualDevice> {
+    let mut keys = AttributeSet::<KeyCode>::new();
+    // Every common key; the virtual keyboard declares 0..255 so any code the
+    // phone can name is registrable (see inject_keycode).
+    for keycode in 0..256u16 {
+        keys.insert(KeyCode(keycode));
+    }
+    // Mouse buttons BTN_LEFT..BTN_EXTRA (272..=276): undeclared codes are
+    // rejected by the kernel, so mouse clicks need explicit registration.
+    for keycode in 272..=276u16 {
+        keys.insert(KeyCode(keycode));
+    }
+
+    let mut rel = AttributeSet::<RelativeAxisCode>::new();
+    rel.insert(RelativeAxisCode::REL_X);
+    rel.insert(RelativeAxisCode::REL_Y);
+    rel.insert(RelativeAxisCode::REL_WHEEL);
+    rel.insert(RelativeAxisCode::REL_HWHEEL);
+
+    #[allow(deprecated)]
+    let device = VirtualDeviceBuilder::new()
+        .context("Failed to create virtual device builder")?
+        .with_keys(&keys)
+        .context("Failed to set up virtual keys")?
+        .with_relative_axes(&rel)
+        .context("Failed to set up relative axes")?
+        .name(b"Linux Link Virtual Input")
+        .build()
+        .context(
+            "Failed to build virtual device. \
+                 Ensure /dev/uinput is accessible (add user to 'uinput' group).",
+        )?;
+    Ok(device)
 }
 
 /// Build an `ABS_X`/`ABS_Y` virtual pointer. Coordinates arrive normalized
@@ -1089,5 +1163,75 @@ mod tests {
         let unmapped = !mapped;
         assert!(gamepad_edges(0, unmapped).is_empty());
         assert!(gamepad_edges(unmapped, 0).is_empty());
+    }
+
+    /// Roadmap 2064: a uinput device that faults at write time is rebuilt and
+    /// the packet retried, instead of ending the session's input path for good.
+    ///
+    /// Both devices are created for real, so this needs `/dev/uinput` and
+    /// self-skips without it (the injector could not run on that host either).
+    #[test]
+    fn a_faulted_uinput_device_is_rebuilt_and_the_packet_retried() {
+        if !Path::new("/dev/uinput").exists() {
+            eprintln!("skipping uinput rebuild test: no /dev/uinput on this host");
+            return;
+        }
+        let mut state = UinputState {
+            main: build_main_device().expect("uinput is present but its device could not be built"),
+            abs: None,
+        };
+
+        // A bare SYN_REPORT: the kernel accepts it on any device, and the test
+        // runs against the live compositor, so it must not move a cursor or
+        // type into whatever the user is doing.
+        let syn = [InputEvent::new(EV_SYN, SYN_REPORT, 0)];
+
+        emit_uinput(&mut state, UinputDevice::Abs, &syn, "absolute move")
+            .expect("the absolute device should be built on first use");
+        assert!(
+            state.abs.is_some(),
+            "the abs device stays absent after an emit aimed at it"
+        );
+
+        for which in [UinputDevice::Main, UinputDevice::Abs] {
+            fault_device(&mut state, which, &syn);
+            emit_uinput(&mut state, which, &syn, "test emit").unwrap_or_else(|error| {
+                panic!(
+                    "{:?} device did not recover from a faulted write: {error:#}",
+                    which
+                )
+            });
+        }
+    }
+
+    /// Make the next write to one of the state's devices fail the way a
+    /// destroyed uinput device's does, by pointing its descriptor at a
+    /// read-only `/dev/null`, and prove that it did fail.
+    ///
+    /// `dup2` rather than a bare `close`, because the descriptor then stays
+    /// valid for this process until the device itself drops it: nothing can be
+    /// handed that number in between, so neither the rebuild nor the dropped
+    /// old device can end up closing somebody else's file.
+    fn fault_device(state: &mut UinputState, which: UinputDevice, events: &[InputEvent]) {
+        use std::os::fd::AsRawFd;
+        let device = match which {
+            UinputDevice::Main => &mut state.main,
+            UinputDevice::Abs => state.abs.as_mut().expect("abs device already built"),
+        };
+        let null = std::fs::File::open("/dev/null").expect("no readable /dev/null");
+        let redirected = unsafe { libc::dup2(null.as_raw_fd(), device.as_raw_fd()) };
+        assert_eq!(
+            redirected,
+            device.as_raw_fd(),
+            "could not retarget the device descriptor"
+        );
+        let error = device
+            .emit(events)
+            .expect_err("a device writing to a read-only descriptor should fail");
+        assert_eq!(
+            error.raw_os_error(),
+            Some(libc::EBADF),
+            "the injected fault was not the one the rebuild path handles"
+        );
     }
 }
