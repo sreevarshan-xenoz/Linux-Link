@@ -228,6 +228,14 @@ The ones that matter most, in order:
   other only by test, not by code (2663 PARTIAL); and shifted text on uinput is a separate live defect with
   its own id (2666). The other half of this bullet — "the DirectTouch path sends move+release with no
   press" — closed by the following commit (`60ae055`, items 2061/2062).
+- **2061-2064 — state-carrying input packets and a one-shot device layer.** A drag that never pressed, a
+  gamepad that never released, uinput devices that could not come back.
+  **Landed 2026-09-24** (`60ae055`, `bcbec8e`, `3db2f5d`): the direct-touch gesture loop warps, presses,
+  moves and releases (and lifts on a two-finger cancel); the gamepad handler edge-triggers its button mask,
+  with a test that every press has a matching release; and every emit goes through one helper that rebuilds
+  the faulted device and retries, tested by faulting a live device's descriptor with `dup2`. Two residuals
+  stay open and are what those ids become next: a release dropped mid-drag still leaves the button held,
+  because there is no release-all-on-teardown path (2272), and shifted text still arrives lowercase (2666).
 
 Exit gate: every U id is closed or converted into a named bug with a repro; no reported number in the UI is
 produced by anything other than a measurement; the dead-link watchdog's behaviour is asserted by an

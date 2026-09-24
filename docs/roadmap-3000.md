@@ -733,14 +733,15 @@ each item is a live defect with a known location, not a wish.
   never crossed touch slop) is exactly warp + press + release, which is what that function always did. It
   also had a doc comment claiming the server's absolute motion "puts the virtual finger down", which the
   injector contradicts line for line; the comment now says what is true.
-- 2063 **CLOSED**, gamepad press/release paired: the packet is a state snapshot, so the handler now diffs
-  its button mask against the previous one and presses on a rising edge, releases on a falling one.
+- 2063 **CLOSED** (`bcbec8e`), gamepad press/release paired: the packet is a state snapshot, so the handler
+  now diffs its button mask against the previous one and presses on a rising edge, releases on a falling
+  one.
   Previously every mapped bit re-pressed on each packet and nothing was ever released, so one DPad tap left
   an arrow key held for the rest of the session. The mapping moved from a seven-branch `if` chain to a
   table, and a test asserts the release set equals the press set for all seven bits and that unmapped bits
   reach nothing. Unit-verified only, and honestly so: the path still has no Android source (2695), so no
   control in the app can produce these packets today.
-- 2064 **CLOSED**, uinput devices rebuilt on fault: both emits now go through one helper that retries the
+- 2064 **CLOSED** (`3db2f5d`), uinput devices rebuilt on fault: both emits now go through one helper that retries the
   write against a freshly built device once, logs the fault with the device's name and the action that hit
   it, and reports the second failure if the rebuild did not help. Previously the two devices were built at
   startup and never revisited, so one `write(2)` fault (a destroyed uinput device, an ENODEV) failed every
