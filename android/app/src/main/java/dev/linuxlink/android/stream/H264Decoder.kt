@@ -38,6 +38,11 @@ import java.util.concurrent.atomic.AtomicBoolean
  * ladder degrades to software H.264 when a hardware encoder dies — so every
  * keyframe is re-sniffed; on a MIME change the MediaCodec instance is swapped
  * and the fresh keyframe re-seeds it, with [onCodec] notifying the UI.
+ *
+ * Roadmap Phase 1 (decode/render percentiles): this is the only place the
+ * phone's half of the latency chain is visible, so each feed↔output pair is
+ * measured here and handed to the bridge via [RustCore.recordSample]; the
+ * desktop folds them into the session record's `dec_*`/`rnd_*` tails.
  */
 class H264Decoder(
     private val surface: Surface,
@@ -62,6 +67,42 @@ class H264Decoder(
 
     /** Latest keyframe bytes, kept for reconfigure re-seeding. */
     private var lastKeyframe: ByteArray? = null
+
+    /**
+     * When each fed-but-not-yet-rendered access unit went in, and the moment the
+     * previous frame reached the panel. The desktop can measure capture, encode
+     * and the wire; these two are the phone's half of the chain, and the bridge
+     * ships them back for the session record.
+     */
+    private val fedAtUs = ArrayDeque<Long>()
+    private var lastRenderAtUs = 0L
+
+    /** Forget a run's timings: its feeds can no longer produce outputs. */
+    private fun resetTimings() {
+        fedAtUs.clear()
+        lastRenderAtUs = 0L
+    }
+
+    /**
+     * One frame reached the panel. Pair it with the feed that produced it
+     * (decode time) and with the frame before it (render cadence). Feeds and
+     * outputs line up because the stream is B-frame-free (R2#1); anything
+     * unmatched — the frame that straddles a reconfigure, say — goes
+     * unmeasured rather than being reported against the wrong feed.
+     */
+    private fun reportTimings() {
+        val now = nowMicros()
+        if (fedAtUs.isNotEmpty()) {
+            RustCore.recordSample(RustCore.SAMPLE_DECODE, now - fedAtUs.removeFirst())
+        }
+        val sinceRender = now - lastRenderAtUs
+        // A longer gap than this is the link sitting idle between frames, not
+        // the panel being slow to draw one.
+        if (lastRenderAtUs != 0L && sinceRender in 1 until RENDER_GAP_MAX_US) {
+            RustCore.recordSample(RustCore.SAMPLE_RENDER, sinceRender)
+        }
+        lastRenderAtUs = now
+    }
 
     /**
      * Configure MediaCodec for real-time, minimum-latency decode.
@@ -160,6 +201,7 @@ class H264Decoder(
         MediaCodec.createDecoderByType(mime).also {
             it.configure(buildFormat(mime, configW, configH), surface, null, 0)
             it.start()
+            resetTimings()
             codec = it
         }
 
@@ -185,6 +227,14 @@ class H264Decoder(
         var flags = 0
         if (isKeyframe) flags = flags or MediaCodec.BUFFER_FLAG_KEY_FRAME
         codec.queueInputBuffer(inIndex, 0, data.size, System.nanoTime() / 1000, flags)
+        // Only a frame that actually went into the codec can come out of it.
+        if (fedAtUs.size >= MAX_PENDING_FEEDS) {
+            // A real-time decoder never holds this many frames, so the queue has
+            // lost sync with the output run. Keep the recent feeds and drop the
+            // stale one instead of growing without bound.
+            fedAtUs.removeFirst()
+        }
+        fedAtUs.addLast(nowMicros())
 
         drain(codec, info)
     }
@@ -197,6 +247,7 @@ class H264Decoder(
         while (outIndex >= 0) {
             // Render to the surface as soon as a frame is available.
             codec.releaseOutputBuffer(outIndex, true)
+            reportTimings()
             outIndex = codec.dequeueOutputBuffer(info, 0)
         }
         if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED && maybeReconfigure(codec)) {
@@ -223,6 +274,8 @@ class H264Decoder(
         }
         configW = w
         configH = h
+        // Whatever is still queued belongs to the run that just ended.
+        resetTimings()
         runCatching {
             codec.stop()
             codec.configure(buildFormat(mime, w, h), surface, null, 0)
@@ -259,8 +312,21 @@ class H264Decoder(
         private const val POLL_TIMEOUT_MS = 50
         private const val INPUT_TIMEOUT_US = 10_000L
 
+        /**
+         * Monotonic microseconds, deep sleep included. `elapsedRealtimeNanos` is
+         * API 17 and present in the SDK jars we build against; the nicer
+         * `elapsedRealtimeMicros` is not, so the conversion happens here.
+         */
+        private fun nowMicros(): Long = SystemClock.elapsedRealtimeNanos() / 1000
+
         /** Frame gap that means the link is dead rather than the desktop idle. */
         private const val STALL_MS = 10_000L
+
+        /** Pending feeds before the feed↔output pairing is considered lost. */
+        private const val MAX_PENDING_FEEDS = 8
+
+        /** A longer gap between rendered frames is an idle desktop, not a slow panel. */
+        private const val RENDER_GAP_MAX_US = 1_000_000L
 
         /**
          * R4 C1: decide the codec from the first NAL header of an Annex-B

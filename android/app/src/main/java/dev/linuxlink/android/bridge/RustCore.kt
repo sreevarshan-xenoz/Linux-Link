@@ -34,6 +34,7 @@ object RustCore {
     private external fun nativeIsStreamingActive(): Boolean
     private external fun nativeGetStreamingRtt(): Int
     private external fun nativeGetStreamingStats(): String
+    private external fun nativeRecordSample(kind: Int, micros: Long)
     private external fun nativeListTrustedPeers(): String
     private external fun nativeForgetTrustedPeer(label: String): String
     private external fun nativeStopV2(): String
@@ -224,6 +225,26 @@ object RustCore {
     ) {
         val rttMs: Long get() = rttUs / 1000
     }
+
+    /**
+     * Hand the bridge one duration this device measured, in microseconds, for
+     * the kind in [SAMPLE_DECODE] / [SAMPLE_RENDER]. The streaming session
+     * reports what has accumulated to the desktop once a second and the desktop
+     * turns it into the session record's percentile tails — encode and RTT are
+     * measured there, decode and render only ever here.
+     *
+     * Unlike every other call here this one does not block on the Rust runtime:
+     * it pushes into a bounded batch, so the decode thread can call it per
+     * frame. A negative duration is dropped; a kind this device does not own
+     * (the e2e probe, taken in the Rust client) is ignored.
+     */
+    fun recordSample(kind: Int, micros: Long) {
+        if (micros >= 0) nativeRecordSample(kind, micros)
+    }
+
+    // Wire ids shared with SAMPLE_* in core's input_packet.rs.
+    const val SAMPLE_DECODE = 0
+    const val SAMPLE_RENDER = 1
 
     /** `monitorIndex = -1` selects the server default. */
     fun connectStreaming(address: String, port: Int, monitorIndex: Int = -1): Result<Unit> =
