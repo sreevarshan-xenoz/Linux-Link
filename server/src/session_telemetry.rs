@@ -152,6 +152,8 @@ mod tests {
             rtt_avg_ms: 30,
             goodput_kbps: 5000,
             device_id: Some("pixel-9".into()),
+            rtt_tail: None,
+            encode_tail: None,
         }
     }
 

@@ -13,7 +13,9 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use crate::metrics::{Samples, Summary};
 
 use super::connection::{SharedConnection, TransportFamily};
 
@@ -60,6 +62,11 @@ pub struct SessionReport {
     pub rtt_avg_ms: u64,
     pub goodput_kbps: u64,
     pub device_id: Option<String>,
+    /// Link RTT distribution, or `None` when the session never sampled the
+    /// transport (immediate teardown).
+    pub rtt_tail: Option<Summary>,
+    /// Per-frame encode time distribution, or `None` when no frame was encoded.
+    pub encode_tail: Option<Summary>,
 }
 
 impl SessionReport {
@@ -78,6 +85,12 @@ impl SessionReport {
             self.goodput_kbps,
         )
         .expect("writing to String cannot fail");
+        if let Some(tail) = &self.rtt_tail {
+            write!(line, "\t{}", tail.format_tail("rtt")).expect("infallible");
+        }
+        if let Some(tail) = &self.encode_tail {
+            write!(line, "\t{}", tail.format_tail("enc")).expect("infallible");
+        }
         if let Some(id) = &self.device_id {
             // Defensive: ids are UTF-8 device names from the pairing layer.
             let id = id.replace(['\t', '\n'], " ");
@@ -114,6 +127,8 @@ pub struct SessionRecorder {
     ever_relayed: AtomicU64,
     rtt_sum_us: AtomicU64,
     rtt_samples: AtomicU64,
+    rtt_tail: Samples,
+    encode_tail: Samples,
     family: TransportFamily,
     device_id: Option<String>,
 }
@@ -125,6 +140,8 @@ impl SessionRecorder {
             ever_relayed: AtomicU64::new(0),
             rtt_sum_us: AtomicU64::new(0),
             rtt_samples: AtomicU64::new(0),
+            rtt_tail: Samples::new(),
+            encode_tail: Samples::new(),
             family,
             device_id,
         }
@@ -141,6 +158,13 @@ impl SessionRecorder {
         self.rtt_sum_us
             .fetch_add(stats.rtt.as_micros() as u64, Ordering::Relaxed);
         self.rtt_samples.fetch_add(1, Ordering::Relaxed);
+        self.rtt_tail.push_micros(stats.rtt.as_micros() as u64);
+    }
+
+    /// Time one `encode_frame` call. Called per frame from the encode task, so
+    /// it must stay cheap: a mutex over a bounded array, no allocation.
+    pub fn record_encode(&self, elapsed: Duration) {
+        self.encode_tail.push_micros(elapsed.as_micros() as u64);
     }
 
     pub fn finish(&self, outcome: SessionOutcome, bytes_sent: u64) -> SessionReport {
@@ -163,6 +187,8 @@ impl SessionRecorder {
             rtt_avg_ms,
             goodput_kbps,
             device_id: self.device_id.clone(),
+            rtt_tail: self.rtt_tail.summary_ms(),
+            encode_tail: self.encode_tail.summary_ms(),
         }
     }
 
@@ -261,22 +287,75 @@ fn info_line(report: &SessionReport) {
 mod tests {
     use super::*;
 
-    #[test]
-    fn report_line_has_all_fields() {
-        let r = SessionReport {
+    fn report(outcome: SessionOutcome) -> SessionReport {
+        SessionReport {
             unix_secs: 123,
-            outcome: SessionOutcome::WanRelayed,
-            ever_relayed: true,
+            outcome,
+            ever_relayed: outcome == SessionOutcome::WanRelayed,
             duration_secs: 10,
             rtt_avg_ms: 42,
             goodput_kbps: 8_000,
             device_id: Some("phone-1".into()),
-        };
+            rtt_tail: None,
+            encode_tail: None,
+        }
+    }
+
+    #[test]
+    fn report_line_has_all_fields() {
+        let mut r = report(SessionOutcome::WanRelayed);
+        let tails = Samples::new();
+        for i in 1..=100u64 {
+            tails.push_micros(i * 1_000);
+        }
+        let tail = tails.summary_ms();
+        r.rtt_tail = tail;
+        r.encode_tail = tail;
         let line = r.format();
         assert!(line.contains("outcome=wan_relayed"));
         assert!(line.contains("ever_relayed=true"));
         assert!(line.contains("dev=phone-1"));
         assert!(line.contains("kbps=8000"));
+        // Both tails present, each under its own prefix, so a reader can tell a
+        // 99th-percentile encode hitch from a 99th-percentile link stall.
+        assert!(line.contains("rtt_p99=99\trtt_max=100"), "{line}");
+        assert!(line.contains("enc_p99=99\tenc_max=100"), "{line}");
+    }
+
+    #[test]
+    fn a_session_that_never_encoded_reports_no_encode_tail() {
+        let rec = SessionRecorder::new(TransportFamily::Quinn, None);
+        let report = rec.finish(SessionOutcome::Completed, 0);
+        assert!(report.encode_tail.is_none());
+        assert!(report.rtt_tail.is_none());
+        // The line stays parsable: no dangling `enc_p50=` with a zero in it.
+        let line = report.format();
+        assert!(!line.contains("enc_"), "{line}");
+        assert!(!line.contains("rtt_p"), "{line}");
+    }
+
+    #[test]
+    fn encode_samples_reach_the_report_as_a_distribution() {
+        // The exact failure the average hides: 10% of frames stall at 30x the
+        // typical encode time. Mean 15 ms still reads as "fine" in a log line.
+        let rec = SessionRecorder::new(TransportFamily::Quinn, None);
+        for _ in 0..90 {
+            rec.record_encode(Duration::from_millis(4));
+        }
+        for _ in 0..10 {
+            rec.record_encode(Duration::from_millis(120));
+        }
+        let report = rec.finish(SessionOutcome::Completed, 0);
+        let tail = report.encode_tail.expect("samples were taken");
+        assert_eq!(tail.count, 100);
+        assert_eq!(
+            tail.mean_ms, 15,
+            "the mean the old telemetry would have quoted"
+        );
+        assert_eq!(tail.p50_ms, 4);
+        assert_eq!(tail.p95_ms, 120, "a one-in-ten stall has to be visible");
+        assert_eq!(tail.p99_ms, 120);
+        assert_eq!(tail.max_ms, 120);
     }
 
     #[test]

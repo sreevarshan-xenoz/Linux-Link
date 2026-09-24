@@ -370,6 +370,7 @@ impl StreamingServer {
 
         // Spawn encoding task — reads frames, produces packets
         let encode_cancel = cancel.clone();
+        let encode_recorder = telemetry.as_ref().map(|t| t.0.clone());
         let encode_span = tracing::info_span!("video_encode");
         tasks.spawn(async move {
             info!("Encoding task started");
@@ -586,8 +587,14 @@ impl StreamingServer {
                             }};
                         }
 
+                        // Only successful encodes are sampled: a failed one tells
+                        // the C2 ladder's story, not the frame-pacing story.
+                        let encode_started = Instant::now();
                         match encoder.encode_frame(&frame) {
                             Ok(Some(packet)) => {
+                                if let Some(recorder) = &encode_recorder {
+                                    recorder.record_encode(encode_started.elapsed());
+                                }
                                 packets_encoded += 1;
                                 encode_errs = 0;
                                 frames_since_packet = 0;

@@ -231,7 +231,7 @@ lingering first: `sudo loginctl enable-linger $USER`.
 | `linux-link connect <peer>` | Connect to a specific peer |
 | `linux-link pair [pin] [--grant 15m]` | Print a 5-minute pairing PIN for the phone (generate or set); `--grant` time-boxes the trust pairing stores (`s/m/h/d`, e.g. `45s`, `15m`, `2h`, `1h30m`) for one-off support sessions |
 | `linux-link unpair [device-id]` | Remove a paired device from the trust store (all if omitted) |
-| `linux-link sessions [--count N]` | Show recorded streaming-session outcomes (LAN/WAN-punched/WAN-relayed tally + recent log tail) |
+| `linux-link sessions [--count N]` | Show recorded streaming-session outcomes (LAN/WAN-punched/WAN-relayed tally + recent log tail, each line carrying p50/p90/p95/p99/max for link RTT and per-frame encode time) |
 | `linux-link capabilities [--json\|--markdown]` | Show the negotiated protocol versions, transports, capture backends and codecs this build actually speaks, plus its KDE Connect capability sets |
 | `linux-link kick <id\|prefix\|peer-ip\|all>` | Drop a live streaming session (R4 D2) |
 

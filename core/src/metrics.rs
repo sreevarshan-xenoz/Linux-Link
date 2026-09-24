@@ -35,21 +35,17 @@ pub struct Summary {
 }
 
 impl Summary {
-    /// `key_p50=12\tkey_p90=…` — the tab-separated form the session log uses, so
-    /// a record stays parseable by `split('\t')` and greppable by prefix.
-    pub fn format(&self, key: &str) -> String {
+    /// `key_n=…\tkey_p50=…\t…` — the tab-separated tail the session log line
+    /// carries, so a record stays parseable by `split('\t')` and greppable by
+    /// prefix. The mean is deliberately absent: a line already has one place for
+    /// an average, and this one is for the tail.
+    pub fn format_tail(&self, key: &str) -> String {
         use std::fmt::Write as _;
         let mut s = String::new();
         let _ = write!(
             s,
-            "{key}_n={}\t{key}_mean={}\t{key}_p50={}\t{key}_p90={}\t{key}_p95={}\t{key}_p99={}\t{key}_max={}",
-            self.count,
-            self.mean_ms,
-            self.p50_ms,
-            self.p90_ms,
-            self.p95_ms,
-            self.p99_ms,
-            self.max_ms
+            "{key}_n={}\t{key}_p50={}\t{key}_p90={}\t{key}_p95={}\t{key}_p99={}\t{key}_max={}",
+            self.count, self.p50_ms, self.p90_ms, self.p95_ms, self.p99_ms, self.max_ms
         );
         s
     }
@@ -274,14 +270,18 @@ mod tests {
     }
 
     #[test]
-    fn format_emits_one_key_per_stat() {
+    fn format_tail_emits_one_key_per_stat_and_no_average() {
         let s = Samples::new();
         push_all(&s, (1..=100).map(|i| i * 1_000));
-        let line = s.summary_ms().unwrap().format("enc");
-        assert!(line.starts_with("enc_n=100\tenc_mean="));
+        let line = s.summary_ms().unwrap().format_tail("enc");
+        assert!(line.starts_with("enc_n=100\tenc_p50=50"));
         for key in ["enc_p50", "enc_p90", "enc_p95", "enc_p99", "enc_max"] {
             assert!(line.contains(key), "missing {key} in {line}");
         }
+        assert!(
+            !line.contains("mean"),
+            "the tail line must not carry a mean"
+        );
         assert!(!line.contains('\n'));
     }
 }
