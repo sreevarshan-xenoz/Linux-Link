@@ -227,7 +227,7 @@ The ones that matter most, in order:
   (checklist §3 now asks for the keyboard pass under both backends); one table is still generated from the
   other only by test, not by code (2663 PARTIAL); and shifted text on uinput is a separate live defect with
   its own id (2666). The other half of this bullet — "the DirectTouch path sends move+release with no
-  press" — is 2061, still open.
+  press" — closed by the following commit (`60ae055`, items 2061/2062).
 
 Exit gate: every U id is closed or converted into a named bug with a repro; no reported number in the UI is
 produced by anything other than a measurement; the dead-link watchdog's behaviour is asserted by an

@@ -716,9 +716,15 @@ each item is a live defect with a known location, not a wish.
 - **Everything above is unit-verified.** This box injects through uinput, so the completed table — the
   enigo rung — has not been exercised on a real X11/XWayland session; checklist §3 now asks for the
   keyboard list to be run once per backend.
-- 2061 make direct-touch send a button **press** — today it moves and releases only, so drag-heavy desktop
-  apps see a click that never happened.
-- 2062 delete `tapAbsolute` or route 2061 through it; it is dead either way.
+- 2061 **CLOSED (`60ae055`)**, device-unverified: direct-touch now presses. A one-finger drag warps to the
+  touched point, sends `BTN_LEFT 1`, moves while held and releases on lift; the release that used to be the
+  gesture's only button event no longer lands on a button that was never down. A pinch that began as a drag
+  gets its release too — a leaked press is a stuck drag. Not closed by this: the server has no release-all
+  for a release packet lost mid-drag (2272), so a session that dies while held leaves the button down.
+- 2062 **CLOSED (`60ae055`)** — routed through `tapAbsolute`, not deleted: the no-movement case (a tap that
+  never crossed touch slop) is exactly warp + press + release, which is what that function always did. It
+  also had a doc comment claiming the server's absolute motion "puts the virtual finger down", which the
+  injector contradicts line for line; the comment now says what is true.
 - 2063 give the gamepad path a release for every press (its DPad currently sticks).
 - 2064 recreate the uinput devices when they fail; they are built once at startup and never rebuilt.
 - 2065 reject or handle injection when the compositor's input layout is not the assumed QWERTY one.
