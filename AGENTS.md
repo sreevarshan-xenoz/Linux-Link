@@ -4,8 +4,9 @@ This file provides guidance to the AI agent when working with code in this repos
 
 ## Workflow rules
 
-- Commit each completed, verified logical change as you go — don't batch a whole task into one commit at the end, and don't wait to be asked. Conventional commits with scope: `feat(android): ...`, `fix(core): ...`, `docs: ...`. Never push unless explicitly asked.
-- Update the docs a change touches (README.md, CONTRIBUTING.md, docs/) in the same commit.
+- **One logical change = one commit, and commit it before starting the next one.** A "logical change" is something a reviewer can describe in one sentence (one fix, one feature, one doc truth-correction) — that is the commit unit. Never bundle two independent changes into one commit just because they are sitting in the working tree together, and never hold changes back to be "efficient": batch commits hide which change broke what, and the whole point of committing as you go is that each step is independently verified and independently revertable.
+- Gates before each commit, then commit immediately: the change must be fmt/clippy/test-clean on its own (see *Build / test / lint*), with its own conventional-commit message and scope: `feat(android): ...`, `fix(core): ...`, `docs: ...`. Stage files by name, so an unrelated dirty file can't ride along. Never push unless explicitly asked.
+- Update the docs a change touches (README.md, CONTRIBUTING.md, docs/, `man/`) in that change's commit — the doc fix travels with the code it describes, but a doc that describes a *different* change gets its own commit.
 - Keep the *Current Status* section at the bottom accurate whenever project state changes — this file is the dev-agent context anchor for Linux Link.
 
 ## Build / test / lint
