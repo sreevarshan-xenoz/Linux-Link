@@ -292,6 +292,35 @@ impl InputInjector {
         }
     }
 
+    /// Inject one Linux evdev keycode — what the wire actually carries.
+    ///
+    /// The uinput backend emits the code straight to the kernel. Routing it
+    /// through enigo's `Key` first (as this used to) made every key depend on a
+    /// table that exists for the X11 rung's benefit: an unmapped code became a
+    /// control character, that control character became `KEY_UNKNOWN`, and a
+    /// letter, a digit or Shift arriving from the phone was simply never seen by
+    /// the desktop. The virtual keyboard declares codes 0..255, so anything the
+    /// phone can name is already registrable here.
+    fn inject_keycode(&mut self, code: u16, pressed: bool) -> Result<()> {
+        match &mut self.backend {
+            InputBackend::Uinput(state) => {
+                let dev = &mut state.get_mut().unwrap().main;
+                let events = [
+                    InputEvent::new(EV_KEY, code, i32::from(pressed)),
+                    InputEvent::new(EV_SYN, SYN_REPORT, 0),
+                ];
+                dev.emit(&events).context("uinput keycode failed")
+            }
+            InputBackend::Enigo(_) => match keycode_to_enigo(code) {
+                Some(key) => self.key(key, pressed),
+                None => {
+                    debug!(code, "no enigo key for this evdev keycode, not injecting");
+                    Ok(())
+                }
+            },
+        }
+    }
+
     /// Press and release a single key
     pub fn key(&mut self, key: Key, pressed: bool) -> Result<()> {
         match &mut self.backend {
@@ -373,12 +402,7 @@ impl InputInjector {
                 self.mouse_button(mouse_key, *pressed)
             }
             InputPacket::MouseScroll { dx, dy } => self.scroll(*dx as i32, *dy as i32),
-            InputPacket::KeyEvent { key, pressed } => {
-                // Key events arrive as Linux evdev keycodes over the QUIC channel.
-                // Map to enigo Key and delegate to self.key() which handles both backends.
-                let enigo_key = keycode_to_enigo(*key);
-                self.key(enigo_key, *pressed)
-            }
+            InputPacket::KeyEvent { key, pressed } => self.inject_keycode(*key, *pressed),
             InputPacket::Text(text) => self.text(text),
             // Control-plane request, intercepted by the streaming server before
             // the input channel; nothing to inject.
@@ -554,12 +578,17 @@ pub fn button_id_to_mouse(button: i32) -> MouseKey {
 
 /// Map a Linux evdev keycode to an enigo Key.
 /// Uses KEYCODE_MAP as the single source of truth.
-fn keycode_to_enigo(code: u16) -> Key {
+///
+/// `None` means "this backend cannot express that key". It must stay `None`:
+/// inventing a `Key::Unicode` from the raw code number yields the control
+/// character that code happens to be (KEY_A = 30 is U+001E), which XTEST then
+/// injects as garbage, and the table's own reverse lookup turns it into
+/// `KEY_UNKNOWN` on the uinput path.
+fn keycode_to_enigo(code: u16) -> Option<Key> {
     KEYCODE_MAP
         .iter()
         .find(|&&(k, _)| k == code)
         .map(|&(_, key)| key)
-        .unwrap_or_else(|| Key::Unicode(std::char::from_u32(code as u32).unwrap_or('?')))
 }
 
 /// Map an enigo Key to an evdev KeyCode for uinput backend.
@@ -739,47 +768,62 @@ mod tests {
     #[test]
     fn test_keycode_to_enigo_function_keys() {
         // F1-F12 must map individually (previously all mapped to F1)
-        assert_eq!(keycode_to_enigo(59), Key::F1);
-        assert_eq!(keycode_to_enigo(60), Key::F2);
-        assert_eq!(keycode_to_enigo(61), Key::F3);
-        assert_eq!(keycode_to_enigo(62), Key::F4);
-        assert_eq!(keycode_to_enigo(63), Key::F5);
-        assert_eq!(keycode_to_enigo(64), Key::F6);
-        assert_eq!(keycode_to_enigo(65), Key::F7);
-        assert_eq!(keycode_to_enigo(66), Key::F8);
-        assert_eq!(keycode_to_enigo(67), Key::F9);
-        assert_eq!(keycode_to_enigo(68), Key::F10);
-        assert_eq!(keycode_to_enigo(87), Key::F11);
-        assert_eq!(keycode_to_enigo(88), Key::F12);
+        let function_keys: [(u16, Key); 12] = [
+            (59, Key::F1),
+            (60, Key::F2),
+            (61, Key::F3),
+            (62, Key::F4),
+            (63, Key::F5),
+            (64, Key::F6),
+            (65, Key::F7),
+            (66, Key::F8),
+            (67, Key::F9),
+            (68, Key::F10),
+            (87, Key::F11),
+            (88, Key::F12),
+        ];
+        for (code, key) in function_keys {
+            assert_eq!(keycode_to_enigo(code), Some(key), "evdev {code}");
+        }
     }
 
     #[test]
     fn test_keycode_to_enigo_common() {
-        assert_eq!(keycode_to_enigo(28), Key::Return); // KEY_ENTER
-        assert_eq!(keycode_to_enigo(14), Key::Backspace); // KEY_BACKSPACE
-        assert_eq!(keycode_to_enigo(57), Key::Space); // KEY_SPACE
-        assert_eq!(keycode_to_enigo(15), Key::Tab); // KEY_TAB
-        assert_eq!(keycode_to_enigo(1), Key::Escape); // KEY_ESC
+        assert_eq!(keycode_to_enigo(28), Some(Key::Return)); // KEY_ENTER
+        assert_eq!(keycode_to_enigo(14), Some(Key::Backspace)); // KEY_BACKSPACE
+        assert_eq!(keycode_to_enigo(57), Some(Key::Space)); // KEY_SPACE
+        assert_eq!(keycode_to_enigo(15), Some(Key::Tab)); // KEY_TAB
+        assert_eq!(keycode_to_enigo(1), Some(Key::Escape)); // KEY_ESC
     }
 
     #[test]
     fn test_keycode_to_enigo_navigation() {
-        assert_eq!(keycode_to_enigo(102), Key::Home); // KEY_HOME
-        assert_eq!(keycode_to_enigo(103), Key::UpArrow); // KEY_UP
-        assert_eq!(keycode_to_enigo(104), Key::PageUp); // KEY_PAGEUP
-        assert_eq!(keycode_to_enigo(105), Key::LeftArrow); // KEY_LEFT
-        assert_eq!(keycode_to_enigo(106), Key::RightArrow); // KEY_RIGHT
-        assert_eq!(keycode_to_enigo(107), Key::End); // KEY_END
-        assert_eq!(keycode_to_enigo(108), Key::DownArrow); // KEY_DOWN
-        assert_eq!(keycode_to_enigo(109), Key::PageDown); // KEY_PAGEDOWN
-        assert_eq!(keycode_to_enigo(110), Key::Insert); // KEY_INSERT
-        assert_eq!(keycode_to_enigo(111), Key::Delete); // KEY_DELETE
+        let navigation: [(u16, Key); 10] = [
+            (102, Key::Home),       // KEY_HOME
+            (103, Key::UpArrow),    // KEY_UP
+            (104, Key::PageUp),     // KEY_PAGEUP
+            (105, Key::LeftArrow),  // KEY_LEFT
+            (106, Key::RightArrow), // KEY_RIGHT
+            (107, Key::End),        // KEY_END
+            (108, Key::DownArrow),  // KEY_DOWN
+            (109, Key::PageDown),   // KEY_PAGEDOWN
+            (110, Key::Insert),     // KEY_INSERT
+            (111, Key::Delete),     // KEY_DELETE
+        ];
+        for (code, key) in navigation {
+            assert_eq!(keycode_to_enigo(code), Some(key), "evdev {code}");
+        }
     }
 
     #[test]
-    fn test_keycode_to_enigo_fallback() {
-        // Unknown keycodes fall back to Unicode char mapping
-        assert!(matches!(keycode_to_enigo(999), Key::Unicode(_)));
+    fn an_unmapped_keycode_is_not_injected_as_a_control_character() {
+        // KEY_A and KEY_LEFTSHIFT used to become U+001E and U+002A: an
+        // untypeable control character on the uinput path, and a stray '*' on
+        // the X11 one. Refusing the key is the honest outcome until the table
+        // names it (roadmap 2057/2058).
+        assert_eq!(keycode_to_enigo(30), None, "KEY_A");
+        assert_eq!(keycode_to_enigo(42), None, "KEY_LEFTSHIFT");
+        assert_eq!(keycode_to_enigo(999), None, "beyond the evdev range");
     }
 
     #[test]
@@ -822,7 +866,7 @@ mod tests {
         for &(evdev_code, enigo_key) in KEYCODE_MAP {
             assert_eq!(
                 keycode_to_enigo(evdev_code),
-                enigo_key,
+                Some(enigo_key),
                 "keycode_to_enigo({}) should be {:?}",
                 evdev_code,
                 enigo_key
