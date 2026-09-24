@@ -130,6 +130,55 @@ jobs:
         working-directory: android
         run: ./gradlew lintDebug --no-daemon
 
+  # Phase 1 step 4: the pinned encoder clip measured against a committed
+  # baseline. A hosted runner's CPU is not the machine the baselines in
+  # bench/baselines were recorded on, so the expected outcome today is SKIP
+  # (exit 3) naming the host it did find — which is the honest answer, not a
+  # pass. The job turns red only on a tail regression past the threshold. To
+  # make it gate on a new machine class, run the same command there with
+  # `--record bench/baselines` and commit the file it writes (the artifact
+  # below is exactly that file, for this runner class).
+  bench:
+    runs-on: ubuntu-latest
+    needs: rust
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libpipewire-0.3-dev libwayland-dev libegl1-mesa-dev libgbm-dev pkg-config libavcodec-dev libavdevice-dev libavfilter-dev libavformat-dev libavutil-dev libswresample-dev libswscale-dev
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build the CLI
+        run: cargo build --release -p linux-link-server --bin linux-link
+
+      - name: Encoder benchmark against the committed baseline
+        shell: bash
+        run: |
+          set +e
+          ./target/release/linux-link bench \
+            --target software --repeat 3 --tolerance-pct 50 \
+            --baseline bench/baselines --record "$RUNNER_TEMP/bench"
+          code=$?
+          case $code in
+            0) echo "bench: pass"; exit 0 ;;
+            3) echo "bench: skipped — no baseline for this runner (see the log above)"; exit 0 ;;
+            1) echo "bench: REGRESSION past the 50% threshold"; exit 1 ;;
+            *) echo "bench: could not run (exit $code)"; exit 1 ;;
+          esac
+
+      - name: Upload the measured record
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: encoder-baseline-software
+          path: '${{ runner.temp }}/bench/*.json'
+          if-no-files-found: ignore
+
   audit:
     runs-on: ubuntu-latest
     steps:
