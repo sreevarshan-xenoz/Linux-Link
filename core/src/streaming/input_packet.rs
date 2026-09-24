@@ -69,6 +69,14 @@ pub struct SampleBatch {
 }
 
 impl SampleBatch {
+    /// An empty batch. `const` so a client can hold one in a `static` instead
+    /// of behind a lazy-initialisation wrapper.
+    pub const fn new() -> Self {
+        Self {
+            values: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
     /// Record one duration. Returns `false` when the batch was full and the
     /// oldest sample had to be dropped to keep this one.
     pub fn push(&self, value_us: u64) -> bool {
@@ -98,6 +106,16 @@ impl SampleBatch {
     /// open a stream at all.
     pub fn len(&self) -> usize {
         self.values.lock().unwrap_or_else(|p| p.into_inner()).len()
+    }
+
+    /// Forget everything pending, without reporting it. A new session must not
+    /// inherit the last one's measurements, and a leftover batch would otherwise
+    /// be shipped to whoever happens to be listening next.
+    pub fn clear(&self) {
+        self.values
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clear();
     }
 
     pub fn is_empty(&self) -> bool {
@@ -1007,6 +1025,13 @@ mod tests {
             tight.take_chunk().unwrap().last().copied(),
             Some(MAX_SAMPLE_MICROS)
         );
+
+        // A batch is per-session: what it did not get to report is forgotten
+        // rather than handed to the next one.
+        tight.push(5_000);
+        tight.clear();
+        assert!(tight.is_empty());
+        assert!(tight.take_chunk().is_none());
     }
 
     #[test]

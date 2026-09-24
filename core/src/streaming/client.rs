@@ -455,23 +455,6 @@ impl StreamingClient {
         debug!("Sent input packet: {} bytes over QUIC", data.len());
         Ok(())
     }
-
-    /// Report one frame's worth of the durations a [`SampleBatch`] holds, as
-    /// samples of type `kind` (a `SAMPLE_*` id), and say whether anything was
-    /// sent.
-    ///
-    /// The batch keeps whatever did not fit the frame, so a caller flushing on
-    /// a timer cannot lose samples to a busy period — it just reports them on
-    /// the next tick. This is how the phone hands its decode and render timings
-    /// to the server, which is where the session's percentiles are computed.
-    pub async fn flush_samples(&self, kind: u8, batch: &SampleBatch) -> Result<bool> {
-        let Some(values) = batch.take_chunk() else {
-            return Ok(false);
-        };
-        self.send_input(&InputPacket::ClientSamples { kind, values })
-            .await?;
-        Ok(true)
-    }
 }
 
 /// Receive packets with cancellation support — demuxes video and audio streams.
@@ -649,6 +632,23 @@ async fn send_frame(connection: &SharedConnection, packet: &InputPacket) {
             debug!("Failed to open feedback stream: {e}");
         }
     }
+}
+
+/// Report one frame's worth of a client-measured duration batch over an
+/// existing streaming connection.
+///
+/// For a measurement source that lives outside [`StreamingClient`] — the Android
+/// decoder is a separate object holding only the connection handle — so its
+/// samples join the same server-side reservoir the client's own e2e probes
+/// already feed. Best effort like the stats loop: a frame that cannot be sent
+/// costs nothing, because the batch keeps the samples until the next tick.
+/// Returns whether a frame went out.
+pub async fn report_samples(connection: &SharedConnection, kind: u8, batch: &SampleBatch) -> bool {
+    let Some(values) = batch.take_chunk() else {
+        return false;
+    };
+    send_frame(connection, &InputPacket::ClientSamples { kind, values }).await;
+    true
 }
 
 /// Periodically report the client's own account of the session: the link as its

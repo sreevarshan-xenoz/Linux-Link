@@ -51,6 +51,10 @@ pub use capture::{CaptureBackend, start_capture_auto};
 pub use capture_x11::{check_x11_availability, start_x11_capture};
 pub use client::DEFAULT_STREAMING_PORT;
 pub use client::StreamingClient;
+/// Entry point for a client-side measurement source that is not the
+/// [`StreamingClient`] itself (the Android decoder): see
+/// [`client::report_samples`].
+pub use client::report_samples;
 pub use connection::{
     Connection, ConnectionError, ConnectionStats, InStream, OutStream, QuinnConnection,
     SharedConnection, TransportFamily,
