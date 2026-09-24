@@ -191,7 +191,7 @@ object RustCore {
     val isStreamingActive: Boolean
         get() = nativeIsStreamingActive()
 
-    /** Last streaming RTT in microseconds. */
+    /** This session's streaming RTT in microseconds: a median of recent polls, see [StreamingStats.rttUs]. */
     val streamingRttUs: Int
         get() = nativeGetStreamingRtt()
 
@@ -201,6 +201,8 @@ object RustCore {
         return StreamingStats(
             fps = obj.optDouble("fps", 0.0),
             bitrateKbps = obj.optLong("bitrate_kbps", 0L),
+            rateWindowMs = obj.optLong("rate_window_ms", 0L),
+            rttSamples = obj.optInt("rtt_samples", 0),
             e2eLatencyMs = obj.optLong("e2e_latency_ms", 0L),
             frameDrops = obj.optLong("frame_drops", 0L),
             linkState = obj.optString("link_state", "none"),
@@ -209,8 +211,23 @@ object RustCore {
     }
 
     data class StreamingStats(
+        /** Received-video rate over [rateWindowMs], not over the session. */
         val fps: Double,
         val bitrateKbps: Long,
+        /**
+         * How much of a link [fps] and [bitrateKbps] are divided by, in ms.
+         * The bridge measures over a 3 s window, so this is short right after a
+         * connect — and a figure measured over 0.6 s looks exactly like one
+         * measured over 3 s unless the display says otherwise (roadmap 2056).
+         * 0 when there is nothing to measure yet.
+         */
+        val rateWindowMs: Long,
+        /**
+         * How many one-second RTT polls [rttUs] is the median of. The transport
+         * reports no variance, so this count is the whole of the link figure's
+         * confidence: 0 after a reconnect, 8 once the history is full.
+         */
+        val rttSamples: Int,
         /**
          * R4 E3 compositor-true end-to-end estimate, ms: capture→send age
          * measured on the desktop clock (carried in every video packet
@@ -221,9 +238,17 @@ object RustCore {
         val frameDrops: Long,
         /** "lan" | "wan_direct" | "wan_relayed" | "wan" | "none" (R4 A1). */
         val linkState: String,
+        /** Median of this session's last [rttSamples] transport polls, µs. */
         val rttUs: Long,
     ) {
         val rttMs: Long get() = rttUs / 1000
+        /**
+         * Whether the rates cover the bridge's whole 3 s window. The threshold is
+         * deliberately below it: the span is the distance between two polls on the
+         * display's own ~500 ms cadence, so a jittered pair lands at 2.7 s and a
+         * figure that flickers between settled and not teaches nobody anything.
+         */
+        val ratesSettled: Boolean get() = rateWindowMs >= 2_500
     }
 
     /**

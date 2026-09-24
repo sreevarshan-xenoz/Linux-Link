@@ -3,6 +3,7 @@ package dev.linuxlink.android.stream
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.padding
@@ -30,8 +31,9 @@ import org.json.JSONObject
 /**
  * Streaming telemetry HUD overlay (Tier 1 #1): fps / bitrate / RTT /
  * end-to-end latency / frame drops, refreshed on a fixed interval from the
- * Rust core. When an [address]/[controlPort] are given, the desktop's battery
- * is polled slowly alongside (Tier-2 #11). Place on top of [RemoteDesktopView]
+ * Rust core, over a caption naming the sample basis of the rate and link
+ * figures. When an [address]/[controlPort] are given, the desktop's battery is
+ * polled slowly alongside (Tier-2 #11). Place on top of [RemoteDesktopView]
  * inside a Box.
  *
  * A [FlowRow], not a plain Row: on a narrow phone in landscape the six items
@@ -82,34 +84,64 @@ fun StatsHud(
     }
 
     val s = stats ?: return
-    FlowRow(
+    Column(
         modifier = modifier
             .clip(RoundedCornerShape(8.dp))
             .background(Color.Black.copy(alpha = 0.55f))
             .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(8.dp))
             .padding(horizontal = 10.dp, vertical = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
-        maxItemsInEachRow = 6,
     ) {
-        HudItem("fps", "%.0f".format(s.fps))
-        HudItem("kbps", "%,d".format(s.bitrateKbps))
-        HudItem("rtt", "${s.rttMs}ms")
-        HudItem("e2e", "${s.e2eLatencyMs}ms")
-        HudItem("drops", "${s.frameDrops}")
-        battery?.let { HudItem("desk", it) }
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+            maxItemsInEachRow = 6,
+        ) {
+            // A number measured over half a second reads exactly like one
+            // measured over three, so the ones still filling their window are
+            // dimmed until they are not (roadmap 2056).
+            val settled = s.ratesSettled
+            HudItem("fps", "%.0f".format(s.fps), settled)
+            HudItem("kbps", "%,d".format(s.bitrateKbps), settled)
+            HudItem("rtt", "${s.rttMs}ms", s.rttSamples > 0)
+            HudItem("e2e", "${s.e2eLatencyMs}ms")
+            HudItem("drops", "${s.frameDrops}")
+            battery?.let { HudItem("desk", it) }
+        }
+        Text(
+            text = basis(s),
+            maxLines = 1,
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp,
+                color = Color.White.copy(alpha = 0.55f),
+            ),
+        )
     }
 }
 
+/**
+ * What the numbers above were measured on. A rate is a division by some span of
+ * received video and the link figure is a median of some number of polls;
+ * quoting either without saying how much of a sample stood behind it is how a
+ * HUD ends up presenting a guess as a reading.
+ */
+private fun basis(s: RustCore.StreamingStats): String {
+    val rates = if (s.rateWindowMs == 0L) "no video yet"
+    else "rates over %.1fs".format(s.rateWindowMs / 1000.0)
+    val rtt = if (s.rttSamples == 0) "rtt unsampled" else "rtt median of %d".format(s.rttSamples)
+    return "$rates · $rtt"
+}
+
 @Composable
-private fun HudItem(label: String, value: String) {
+private fun HudItem(label: String, value: String, confident: Boolean = true) {
     Text(
         text = "$label $value",
         maxLines = 1,
         style = MaterialTheme.typography.labelSmall.copy(
             fontFamily = FontFamily.Monospace,
             fontSize = 11.sp,
-            color = Color.White,
+            color = if (confident) Color.White else Color.White.copy(alpha = 0.45f),
         ),
     )
 }
