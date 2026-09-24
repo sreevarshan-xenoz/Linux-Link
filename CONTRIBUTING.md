@@ -36,8 +36,9 @@ cd android
 # Start the server
 cargo run --bin linux-link -- start
 
-# Or with a specific config
-cargo run --bin linux-link -- --config /path/to/config.toml start
+# There is no --config flag: the server reads $XDG_CONFIG_HOME/linux-link/config.toml,
+# so point XDG_CONFIG_HOME at a scratch directory for a throwaway run.
+XDG_CONFIG_HOME=$PWD/devconfig cargo run --bin linux-link -- start
 ```
 
 ## Code Style
