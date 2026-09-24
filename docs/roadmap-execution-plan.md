@@ -1,0 +1,327 @@
+# Linux Link — roadmap execution plan
+
+This is the order, the exit criteria and the gates for the 3000 items in
+[roadmap-3000.md](roadmap-3000.md). It contains no feature list — if you want the *what*, read that file.
+If you want to know *what to build next, in what order, and what proves it is finished*, read this one.
+
+The organising idea is the one the audit forced: **this project cannot tell whether it is getting better.**
+There are 282 Rust tests and zero Kotlin tests, zero percentile/histogram code anywhere in the tree, no
+benchmark harness, and `main` has been red at `cargo fmt --check` on every push of the last six. Every
+phase below exists to make a claim verifiable before it makes the claim louder.
+
+## 0. Ground rules (these do not lapse)
+
+- Never push. One conventional commit per verified logical change, scope included:
+  `fix(core): …`, `feat(android): …`, `docs: …`.
+- Docs a change touches (README.md, CONTRIBUTING.md, `docs/`) are updated **in the same commit**.
+- AGENTS.md *Current Status* stays accurate and stays at milestone granularity, not function granularity.
+- Any new visible string ships in all three locales at once: 161/161/161 en/es/ta, identical key sets.
+- Rust gates, both profiles, because the bridge builds `core` with a different feature set:
+  - `cargo clippy --workspace --all-targets -- -D warnings`
+  - `cargo clippy -p linux-link-core --no-default-features --features client -- -D warnings`
+  - `cargo test --workspace`; `cargo test -p linux-link-core --features wan` for anything behind `wan`;
+    `cargo test -p linux-link-core --features encode` for capture/encode work.
+- Kotlin gates: `cd android && ./gradlew assembleDebug lintDebug --offline` at the 18-finding baseline, plus
+  `cd android/bridge && cargo ndk -t arm64-v8a -o ../app/src/main/jniLibs build` when the bridge changed.
+- Format only files your change touches. `main` carries pre-existing fmt/clippy debt; a wholesale reformat
+  buries the diff and seizes the user's parallel edits.
+- The working tree routinely carries the user's in-progress edits across `core`/`server`/`bridge`. Never
+  revert, stash or reformat work that is not yours; stage files **by name**.
+- A ticket from roadmap-3000 is done when its observable is observable: a named test, a number in the
+  session record (2167), or a line in `docs/device-verification-checklist.md` that a human can pass or fail.
+  "Compiles" is not a done-condition.
+- Device-gated UI work is still built and linted on the host and shipped labelled *device-unverified*. Only
+  genuinely absent host capability parks a ticket (§14).
+
+## 1. Phase 0 — State truth
+
+The first phase is the synchronisation itself, because a roadmap written against a wrong description of
+the tree produces another wrong roadmap. Ids: docs only.
+
+Exit criteria — all five. Items 1-3 landed with this document (2026-09-24); **4 and 5 are still open**, and
+Phase 1 may not start until they close:
+
+1. ✅ `README.md` matches the binary: exactly ten `linux-link` verbs
+   (`start|stop|status|sessions|list|watch|capabilities|connect|pair|unpair|kick`), install/update/rollback/
+   uninstall belong to `scripts/install.sh`, and there is **no** `--config` flag — the server reads
+   `$XDG_CONFIG_HOME/linux-link/config.toml`.
+2. ✅ `docs/roadmap-2000.md` deleted (superseded docs get deleted, not archived), `docs/roadmap-3000.md` and
+   this file committed, and no document links to a file that does not exist.
+3. ✅ AGENTS.md *Current Status* states what the tree disagrees about today: CI red at HEAD on
+   `cargo fmt --all -- --check`, and the release badge's "feature complete" was aspirational.
+4. ⬜ A single source of truth for negotiated protocol version, supported transports, supported capture
+   backends and supported codecs, generated from `linux-link capabilities` output rather than prose. Today
+   those four things are described in README, `docs/`, and three constants in `core`.
+5. ⬜ The owed device verifications from `90d92df` (shared control connection) and the §21 checklist items
+   recorded as *owed* in `docs/device-verification-checklist.md`, not silently dropped.
+
+## 2. Phase 1 — Green main, then measurement
+
+**Ids: 2231-2235, 2131-2230, the scaffolding in 2251-2350.** No feature work happens in this phase, and no
+later phase may start before it exits — every subsequent exit criterion is phrased as a number, and there
+is currently nowhere to put a number.
+
+Work in this order:
+
+1. **2231 — green `main`.** fmt clean at HEAD (measured 2026-09-24: 96 diff hunks over 22 files, 12 in
+   `core` and 10 in `server`, plus a working tree where rustfmt aborts on an internal error at
+   `server/src/v2_multiplexer.rs:102` — fix that construct first, since it hides every other diff), the
+   7-error clippy baseline (`capture.rs`, `capture_x11.rs`, `streamer.rs`) paid down file by file, and
+   tests passing on a clean checkout.
+2. **CI matrix, not one job.** Today: one `ubuntu-latest` job running fmt → clippy → release build → test.
+   Add: the `client` clippy profile, `--features wan` tests, `--features encode` tests, and the Android job
+   (`assembleDebug` + `lintDebug` + bridge clippy on host target). Make `cargo audit` able to fail the
+   release job — `|| echo` is why the dependency audit has never once been actionable.
+3. **Percentiles.** `p50/p90/p99/max` for e2e latency, encode time, decode time, render time, and input
+   round-trip (2141-2146), emitted into a per-session record (2167) and retained for comparison (2168).
+   This is the highest-leverage hundred ids in the document: without a p99 there is no way to see a
+   regression that hurts 5 % of frames, which is exactly the class of bug this project keeps shipping.
+4. **A pinned benchmark workload plus a committed baseline.** One clip, one desktop state, one link
+   condition, run in CI where the hardware allows and skipped-with-reason where it does not; a regression
+   is a p95 delta beyond a stated threshold failing the job (2195-2200, with the CI half in 2231-2250).
+5. **Transport exposure, not transport implementation.** Surface what quinn and iroh already know
+   (2151-2170) instead of the old roadmap's plan to "implement" congestion control and path-MTU, which are
+   library internals with no application surface.
+
+Exit gate:
+
+- `cargo fmt --all -- --check` and both clippy profiles green on a fresh clone of `main`.
+- CI green across the matrix, `cargo audit` able to fail.
+- One command that produces a session record containing at least p50/p95/p99 for latency, encode, decode.
+- A committed baseline record, and a CI check that fails if a re-run regresses past the stated threshold.
+- `grep -rn "percentile\|p95\|histogram" core/src server/src` returns real code, not nothing.
+
+## 3. Phase 2 — Kill the live defects (U 2051-2130)
+
+Each item here is a wrong behaviour with a known location, which makes this the cheapest quality the
+project can buy.
+
+The four that matter most, in order:
+
+- **2051/2052 — the HUD lies.** `frame_drops` is a literal `0` in `android/bridge/src/api.rs`, so the
+  session screen asserts a healthy link it never measured. Make it real, or delete the field. Never keep a
+  fabricated metric while a real one is pending.
+- **2053 — the ABR controller has no input.** `update_loss(_lost_packets)` in
+  `core/src/streaming/bitrate.rs` ignores its argument, so packet loss never moves the bitrate and every
+  "adaptive" claim in the README is about a no-op.
+- **2054 — advertised audio that cannot play.** `receiveAudio` has no caller: the phone has no Opus
+  playout path, so the desktop audio feature is a UI toggle over a dead wire. Either build 2791 or stop
+  advertising the capability.
+- **2057/2058 — input that degrades silently.** `KEYCODE_MAP` in `server/src/input_injector.rs:27` covers
+  ~26 keys and unmapped codes fall through to `Key::Unicode`; modifiers are absent; the DirectTouch path
+  sends move+release with no press. These are the reason "it feels wrong" reports exist at all.
+
+Exit gate: every U id is closed or converted into a named bug with a repro; no reported number in the UI is
+produced by anything other than a measurement; the dead-link watchdog's behaviour is asserted by an
+automated test rather than a manual kick; the `90d92df` no-churn journal observation is recorded.
+
+## 4. Phase 3 — One control plane, real message classes (Y 2431-2530)
+
+The project currently runs two control planes: a KDE-Connect-style TCP v1 for plugin traffic and QUIC v2
+for media. The bridge fix in `90d92df` stopped the reconnect storm by *sharing* a TCP connection — which is
+a correct patch for the wrong architecture. Phase 3 retires the wrong architecture.
+
+The normative rule, stated once and enforced in code: **reliability is a property of the message class, not
+of the connection.** 2431 declares these classes as an enum; 2432-2450 give each one a policy, a send
+budget, and a test.
+
+| Class | Reliability | Ordering | Deadline | Today | Target |
+| --- | --- | --- | --- | --- | --- |
+| CONTROL | reliable | strict per connection | none — must never be dropped | TCP v1 stream | QUIC reliable stream, one per session |
+| INPUT | reliable-ish, latency prioritised | per device, collapse intermediate moves | short: drop stale, never queue | TCP v1, no sequence numbers | reliable stream with seq + release-all on teardown (AA) |
+| AUDIO | loss-tolerant | strict within a stream | hard (~100 ms) | QUIC, unmeasured | datagram or `use_datagrams` path with an age-out policy |
+| VIDEO | freshness first | none across frames | hard: droppable | one unistream per frame, `use_datagrams` dead config | same, plus explicit partial-frame reset |
+| FILES | reliable, resumable | within a file | none, must not starve others | TCP back-connection, 64 KB loop | chunked manifest over QUIC (AC 2851-2863) |
+| TELEMETRY | lossy, aggregated | none | yes, discard | log lines + JSON mirror | aggregated in-process, batched out (V) |
+| EVENTS | reliable but cancellable | per event | soft | in-memory queue, lost on restart | durable spool with cancel (AC 2920/2921) |
+
+Work order: 2431-2450 (classes as code, budgets, starvation detector) → 2451 (a test that a bulk transfer
+cannot add input latency) → 2496 (the written v1 → v2 migration plan, with an explicit "both planes live"
+window and the D4 versioning discipline) → then, and only then, freeze or delete the TCP v1 plane.
+
+Exit gate: one connection carries all seven classes with per-class policy visible in the session record;
+`use_datagrams` is either used or deleted; the TCP plane is a documented compatibility shim with a stated
+end-of-support version, not a second source of truth; a chaos test proves a saturated file transfer leaves
+input p95 within a stated budget.
+
+## 5. Phase 4 — Security, consent and auditability (X 2351-2430)
+
+Not polish, and not a sweep: this phase has one dangerous thing to fix and then a shape to build.
+
+- **2351 first.** `server/src/plugins/exec.rs:52-56` runs an arbitrary `sh -c` string. It is gated behind
+  pairing (`service.rs:770`), so it is not a remote hole for a stranger — it is a *post-pairing scope
+  problem*: any paired phone, or any stolen trust record, gets a shell. Remove `ExecPlugin` from the
+  default registry or require per-request desktop confirmation, and gate it behind config. The old
+  roadmap's 277-283 describe automation built on this path and **must not be built as written** until this
+  lands.
+- Then the shape: scoped pairing presets (2369-2370: view-only / control / files / exec-off), a versioned
+  trust store (2360), a security event taxonomy and audit log (2401-2402), consent for every privileged
+  capability (2351-2360), and the fingerprint surfaced on both ends (2932, which needs 2931's screen to exist
+  before it can be honest).
+
+Exit gate: no arbitrary command reachable without an explicit operator opt-in plus a per-request consent;
+every privileged action produces an audit record; the trust store can be exported, inspected and revoked
+from either end, tested by 2938.
+
+## 6. Phase 5 — Media pipeline completeness (AB 2741-2850)
+
+Ordered by what the user can hear and see, not by what is interesting to build:
+
+1. **2791-2800, the client Opus player.** Nothing in the old G range, and nothing in echo cancellation
+   (2806), is definable until the phone can play sound.
+2. **ABR that reacts** (2821-2830) — using the loss input wired in Phase 2, with measured thresholds
+   replacing the constants, a bandwidth reserve for audio and input (2827, needs 2448), and presets that
+   actually change fps and resolution rather than only bitrate, which is what the shipped presets promise
+   and do not deliver (2829).
+3. **Live reconfiguration** (2746-2750): framerate and resolution as mid-session policy, plus content
+   presets (2753) as the honest replacement for the fabricated 437-440.
+4. **Quality explanation** (2831, from 2211) so the user knows the link changed instead of blaming the app.
+
+Exit gate: audio audible end to end on a device; a loss-injection chaos run (2304-2306) shows the bitrate
+moving within a bounded time-to-recover; the HUD's "why did quality drop" line names the cause; encode
+quality benchmark (2756) runs in CI where VAAPI is present and skips with a reason where not.
+
+## 7. Phase 6 — Input fidelity (AA 2651-2740)
+
+Correctness before capability: sequence numbers, an ACK-or-fire-and-forget decision per class, release-all
+on disconnect and error, a stuck-key watchdog, and **one shared keymap table** instead of a Kotlin map, a
+~26-key server map, and a `KEYCODE_MAP` that silently degrades.
+
+Depends on Phase 3's INPUT class and Phase 2's keycode fix. Exit gate: no input path can leave a key held
+after a teardown (test), touch and pointer gestures coexist per 2485's arbitration, desktop control actions
+(2584-2600) report whether the desktop actually did the thing rather than whether a key was typed into
+nothing, and the per-compositor action matrix (2600) is generated by measurement.
+
+## 8. Phase 7 — Capture, compositor and displays (Z 2531-2650)
+
+`ext-image-copy-capture-v1` is a **capability-detected backend**, not the foundation: the tree already
+ships `zwlr_screencopy` (output) and `hyprland_toplevel_export` (window) from R4 B1/B2/B3, and compositor
+support for the newer protocol is uneven. Capability detection at runtime, fallback observable and logged,
+never a hard dependency.
+
+Order: per-compositor capability table generated at runtime (2531) → image-copy-capture behind it →
+window/output policy fixes → **then** virtual displays (2601-2626), last in this phase and explicitly gated
+on Phases 1-7 being stable, because a virtual output touches capture, input targeting, monitor selection,
+hotplug recovery and power policy at once. On this box the only prototype path is
+`hyprctl output create headless`, with known upstream problems (hyprwm/Hyprland#5415 resolution/refresh
+control, #12690 black outputs), so the feature ships on a compositor allowlist with a documented
+"compositor refused" fallback (2622) and an opt-in flag (2626). Nothing about it may be automatic.
+
+Exit gate: 2531's table is code; a session on each supported compositor reports which backend it got and
+why; a virtual output, where created, survives a service restart and a compositor restart, and its absence
+is an explained refusal rather than a silent degrade.
+
+## 9. Phase 8 — Files, clipboard and notifications (AC 2851-2930)
+
+Starts with the protocol, because the old I range assumed one that does not exist: manifest, chunking,
+offset resume, integrity, cancel, quota, filename policy, tree walk (2851-2863). Everything in the rest of
+the block — browser UI, previews, image clipboard, per-app channels — is blocked on those thirteen.
+
+Exit gate: a transfer resumed across a server restart reaches byte-exact completion and proves it in a
+test; `listRemoteFiles` (currently dead code with zero call sites) has a working screen; the clipboard has
+negotiated types with a conflict rule that is written down; notifications have per-app channels, grouping,
+and a delivery receipt; and 2929's soak — 1000 mixed events over a lossy link — passes with nothing
+silently dropped.
+
+## 10. Phase 9 — Product surface (AD 2931-2980)
+
+This phase is mostly *exposing* mechanisms that already exist: `list_trusted_peers`,
+`forget_trusted_peer` and the computed certificate fingerprint have **no caller**, so device list, revoke
+and "verify this host" are one missing screen (2931-2934), not five missing features. Same for the CLI: the
+server already performs uinput-first selection, `renderD*` enumeration and a throwaway NVENC encode at
+runtime, and no command surfaces any of it (2959 `doctor`).
+
+Exit gate: a user can answer, from either end, "who is trusted, what can they do, when were they last
+here, and how do I revoke them"; `linux-link --json` is parseable by scripts; `doctor` reports the real
+state of every runtime check the server already makes; and the strings/locale/a11y gates (2980) run in CI
+rather than living in discipline.
+
+## 11. Phase 10 — Ecosystem (AE 2981-3000)
+
+Packaging truth and stated deferrals: verifiable AUR checksums instead of `SKIP`, signed release artifacts
+with a documented verification step, a supported-distribution matrix written from test results, a threat
+model and a privacy data statement. The deferrals (2995-3000) are recorded as ids precisely so they stop
+being backlog that looks ready.
+
+## 12. The measurement loop (normative, not a slogan)
+
+`benchmark → telemetry → regression detection → chaos → recovery → release gate`
+
+| Step | Artifact | How it runs | Ids |
+| --- | --- | --- | --- |
+| Benchmark | pinned clip + desktop state, committed baseline record | `linux-link benchmark` (2963), CI job | 2195-2200, 2963 |
+| Telemetry | per-session record with percentiles | emitted at session end, mirrored to `live_sessions.json` | 2141-2170, 2167 |
+| Regression detection | p95/p99 delta beyond threshold fails CI | compare against the committed baseline | 2168, 2196, 2221 |
+| Chaos | bandwidth cliff, 40 % loss + 200 ms jitter, compositor death, PipeWire restart, Android lifecycle kill | named presets, bounded time-to-recover asserted | 2304-2312 |
+| Recovery | reconnect → picture metric, first-frame time, no orphaned state | each chaos preset ends in a recovery assertion | 2835, 2836, 1801-1900 |
+| Release gate | `scripts/release-gate.sh`, the same list for CI and humans | blocks `release.yml` | 2341-2350 |
+
+The rule that makes the loop real: **a claim in README or AGENTS.md must name the artifact that measures
+it.** If there is no artifact, the claim moves to "unverified" or goes away. That is how `frame_drops: 0`,
+"adaptive bitrate" and "desktop audio" all survived review for as long as they did.
+
+## 13. Do-not-build register
+
+Deferred **with an unlock condition**, so deferral is a decision and not a vibe:
+
+| Item | Blocked until | Ids |
+| --- | --- | --- |
+| AV1 | a target device with AV1 **decode** exists | 2995, 2838-2850 |
+| Virtual display / phone-as-monitor | Phases 1-7 exit | 2601-2650, K |
+| Plugin marketplace | a stable public ABI + capability negotiation | 2997 |
+| Web client | message classes exist as code (Phase 3) | 2998 |
+| AI features | fundamentals; no measured need | 2999 |
+| Macro/automation epic | session records (2939) + input delivery semantics (AA) | 3000, L |
+| Anything extending the "transfer protocol" | 2851-2863 actually designed | old 801-816 |
+| Exec-based automation | 2351 landed | old 277-283 |
+| Per-section "tests/soak/release gate" trios | deleted as dups of T | 898-900, 998-1000, 1095-1100 |
+
+## 14. Hardware- and device-gated register
+
+These are parked because the capability is physically absent here, not because the work is hard:
+
+- **In-process NVENC** — driver 580.178.04 predates FFmpeg 9's NVENC API-13 requirement. NVENC stays on
+  the verified sidecar; any NVENC-specific work is untestable on this box.
+- **E6 foldable/tablet dual-pane** — code shipped compile/lint-clean, no foldable attached.
+- **AV1 decode** — no target device.
+- **iroh cellular WAN** — the phone's cellular was OUT_OF_SERVICE; the tailnet path is device-verified.
+- **120 Hz+ pacing and multi-monitor high-DPI mixes** — this desktop is a single 1920x1080 panel @1.25.
+
+Everything else that is merely *unverified on a device* ships: build and lint it on the host, label it
+device-unverified, and add the checklist line. Do not park UI work because a phone is not plugged in.
+
+## 15. Device obligations owed right now
+
+1. `90d92df` — confirm in the server journal that the phone holds **one** control connection with no
+   per-query churn, and record the baseline reconnect rate.
+2. §21 of `docs/device-verification-checklist.md`: Material You on/off, edge-to-edge, the pairing sheet,
+   Home empty state, the siren silence dialog, clipboard Clear confirm, the haptics matrix.
+3. Task #2: iroh WAN over real cellular.
+4. Phase 5's audio player cannot be declared done without a human saying "I heard it".
+
+## 16. Picking the next ticket
+
+Take the lowest-numbered **unblocked** ticket in the current phase. Blocked means a dependency id in the
+ticket's own text is not done. When a phase's exit gate is met, commit the docs update that says so *in
+the same commit as the last ticket*, then move to the next phase — do not start Phase N+1 while Phase N's
+gate is unmet, and do not interleave: the reason this project grew two control planes, a fabricated HUD
+metric, and a dead `listRemoteFiles` is that each was started while an earlier one was unfinished.
+
+Cross-phase hard edges worth respecting:
+
+- Phase 1 gates everything after it: no measurement, no exit criteria.
+- Phase 3's INPUT class gates Phase 6's delivery semantics.
+- Phase 2's `update_loss` fix gates Phase 5's ABR work.
+- Phase 4's exec scoping gates any automation or productivity item.
+- Phase 8's 2851-2863 gates every file-transfer item in the old I range and Phase 3's FILES class.
+- Phase 9's 2931-2934 gates Phase 4's fingerprint UX being testable end to end.
+
+## 17. Where the old roadmap's build order went
+
+The previous file's Stages 0-7 and its "current high-leverage priorities" survive here, re-sorted by the
+audit's findings: Stage 0 (state truth) → Phase 0; Stage 1 (transport correctness) → Phases 1 and 3;
+Stage 2 (media pipeline, including "avoid premature AV1") → Phase 5; Stage 3 (input + desktop) → Phases 6
+and 7; Stage 4 (virtual display) → end of Phase 7, gated; Stage 5 (productivity platform) → deferred, 3000;
+Stage 6 (ecosystem) → Phases 9 and 10; Stage 7 (hardening) → not a stage, the loop in §12 plus the chaos
+ids in 2304-2312. Its architectural principles are adopted unchanged, and the one that mattered most is
+the first line of Phase 3.
