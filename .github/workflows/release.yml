@@ -20,6 +20,14 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
+      # A tag should not be able to ship a known-vulnerable dependency: this runs
+      # before the build so an audit finding stops the release rather than being
+      # echoed into a log line nobody reads (the old `|| echo` in ci.yml).
+      - name: Security audit
+        run: |
+          cargo install cargo-audit
+          cargo audit
+
       # The server binary links PipeWire/Wayland and, under the `encode` feature,
       # libav* — without the dev packages this job fails at the link step, so no
       # tag has ever produced a release artifact from CI.

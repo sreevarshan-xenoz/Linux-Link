@@ -86,10 +86,16 @@ Work in this order:
    real, quinn stream priority gives 2.2-3.8 s average input latency (max 6.3 s) at 10% loss and
    delivers every packet — recorded against 146-149 / 2449, with the contract kept as an `#[ignore]`d
    test so the gap stays measurable.
-2. **CI matrix, not one job.** Today: one `ubuntu-latest` job running fmt → clippy → release build → test.
-   Add: the `client` clippy profile, `--features wan` tests, `--features encode` tests, and the Android job
-   (`assembleDebug` + `lintDebug` + bridge clippy on host target). Make `cargo audit` able to fail the
-   release job — `|| echo` is why the dependency audit has never once been actionable.
+2. **CI matrix, not one job.** Was: one `ubuntu-latest` job running fmt → clippy → release build → test.
+   **Landed 2026-09-24** as four jobs — `rust` (fmt, workspace clippy, release build, tests), `profiles`
+   (matrix over `client`, `client,wan`, `wan`, `encode`: each clippy profile, with the `wan`/`encode`
+   test runs), `android` (bridge clippy on host, the arm64 `.so` via cargo-ndk, then `assembleDebug` +
+   `lintDebug`), and `audit` with the `|| echo` removed so a dependency finding can fail the run.
+   `release.yml` gained the same audit step *and* the apt dev packages it was missing — without them the
+   release job could not link, which is why `v0.1.0` has no CI-built artifact. **Honest status: no job in
+   this matrix has executed.** CI can only be green after a push (the user's call), and the Android job in
+   particular is written against runner behaviour that has not been observed here, so expect the first run
+   to need tuning. It is not "done" until it is green on a push.
 3. **Percentiles.** `p50/p90/p99/max` for e2e latency, encode time, decode time, render time, and input
    round-trip (2141-2146), emitted into a per-session record (2167) and retained for comparison (2168).
    This is the highest-leverage hundred ids in the document: without a p99 there is no way to see a

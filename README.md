@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT%2FApache--2.0-blue)](LICENSE)
 [![CI](https://github.com/sreevarshan-xenoz/Linux-Link/actions/workflows/ci.yml/badge.svg)](https://github.com/sreevarshan-xenoz/Linux-Link/actions)
 [![Issues](https://img.shields.io/github/issues/sreevarshan-xenoz/Linux-Link)](https://github.com/sreevarshan-xenoz/Linux-Link/issues)
-[![Status](https://img.shields.io/badge/status-beta%20-%20feature%20complete%2C%20gates%20not%20green-orange)](#roadmap)
+[![Status](https://img.shields.io/badge/status-beta%20-%20feature%20complete%2C%20gates%20green-orange)](#roadmap)
 
 > **Target:** Sub-100ms latency screen streaming + KDE Connect integration + zero-config Tailscale connectivity
 
@@ -384,7 +384,10 @@ are in `main`, and `v0.1.0` is tagged and pushed.
 
 What is *not* done is verification and hardening, so treat this as beta rather than a release:
 
-- [ ] Green CI on `main` (`cargo fmt --all -- --check` currently fails at the first gate)
+- [x] `cargo fmt --all -- --check`, `clippy -D warnings` across every `core` feature profile and
+      `cargo test --workspace` all pass from a clean checkout of `main` (verified 2026-09-24).
+      [CI](.github/workflows/ci.yml) now runs that matrix plus the Android build, and `cargo audit`
+      can fail a run — but no workflow has executed yet, because the branch has to be pushed first.
 - [ ] On-device verification for the large majority of shipped Android features (see
       [docs/device-verification-checklist.md](docs/device-verification-checklist.md))
 - [ ] Cross-network (cellular ↔ LAN) WAN test over iroh; the Tailscale path is device-verified

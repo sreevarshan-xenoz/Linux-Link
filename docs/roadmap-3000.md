@@ -69,11 +69,18 @@ Headline numbers, all verified first-hand on 2026-09-24:
   files (12 in `core`, 10 in `server`). The in-flight protocol work in the working tree was not
   cleaner — `cargo fmt` there aborted before reporting anything, on an internal rustfmt error
   ("left behind trailing whitespace") at `server/src/v2_multiplexer.rs:102`.
-  **Status moved since that measurement (2026-09-24):** 2102 and 2103 are landed — fmt and
-  `clippy -D warnings` pass on the local `main`, as does the whole test suite. CI is still red on
-  the pushed `main`, because the fixes are unpushed; the pushes and the matrix work (2231) remain
-  open.
-- The Android matrix (`assembleDebug`, `lintDebug`, any bridge cross-compile) is not in CI at all.
+  **Status moved since that measurement (2026-09-24):** 2102, 2103 and the matrix half of 2231 are
+  landed — fmt, workspace `clippy -D warnings` and `cargo test --workspace` (285 passed / 0 failed /
+  13 ignored) all pass **from a fresh clone**, and `ci.yml` is now four jobs (`rust`, a `profiles`
+  matrix over the `client` / `client,wan` / `wan` / `encode` feature sets, `android`, `audit`) with the
+  `|| echo` stripped so an audit finding can fail a run. `release.yml` was missing the apt dev packages
+  its own build links against, so no tag has ever produced a CI-built artifact.
+  What is still open: nothing in that matrix has *executed* — the pushed `main` stays red at
+  `cargo fmt --check` until these commits are pushed, which is the user's call.
+- The Android matrix (`assembleDebug`, `lintDebug`, any bridge cross-compile) *was* not in CI at all; the
+  `android` job added 2026-09-24 builds the arm64 bridge `.so` with cargo-ndk first, because the `.so` is
+  gitignored and `assembleDebug` alone would silently package whatever stale binary was copied in. Its
+  first real run is still ahead of it.
 
 ## Structural corrections to the old roadmap
 

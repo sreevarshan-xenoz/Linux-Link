@@ -9,8 +9,13 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+# The gates are the ones AGENTS.md runs by hand (roadmap Phase 1 step 2): every
+# `core` feature profile the Android bridge and the server actually build with,
+# and the Kotlin app. They used to live only in discipline, which is how `main`
+# sat red at `cargo fmt --check` for six pushes. `audit` is deliberately able to
+# fail the run — the old `|| echo` made a dependency finding unactionable.
 jobs:
-  rust-build-and-test:
+  rust:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,7 +24,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install system dependencies
-        run: sudo apt-get install -y libpipewire-0.3-dev libwayland-dev libegl1-mesa-dev libgbm-dev libavcodec-dev libavdevice-dev libavfilter-dev libavformat-dev libavutil-dev libswresample-dev libswscale-dev
+        run: sudo apt-get update && sudo apt-get install -y libpipewire-0.3-dev libwayland-dev libegl1-mesa-dev libgbm-dev pkg-config libavcodec-dev libavdevice-dev libavfilter-dev libavformat-dev libavutil-dev libswresample-dev libswscale-dev
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -27,7 +32,7 @@ jobs:
       - name: Format check
         run: cargo fmt --all -- --check
 
-      - name: Clippy
+      - name: Clippy (workspace, all targets)
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Build
@@ -35,6 +40,95 @@ jobs:
 
       - name: Test
         run: cargo test --workspace
+
+  # `core` is compiled under four different feature sets — the server default,
+  # and three the bridge/WAN/encode paths use — and a cfg mistake in one is
+  # invisible to the others, so each profile gets its own job.
+  profiles:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: client (Android bridge core)
+            features: client
+          - name: client + wan (Android bridge, WAN enabled)
+            features: client,wan
+          - name: wan (iroh paths)
+            features: wan
+          - name: encode (capture + encoder paths)
+            features: encode
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libpipewire-0.3-dev libwayland-dev libegl1-mesa-dev libgbm-dev pkg-config libavcodec-dev libavdevice-dev libavfilter-dev libavformat-dev libavutil-dev libswresample-dev libswscale-dev
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Clippy (${{ matrix.features }})
+        run: cargo clippy -p linux-link-core --no-default-features --features ${{ matrix.features }} --all-targets -- -D warnings
+
+      - name: Tests (${{ matrix.features }})
+        if: matrix.features == 'wan' || matrix.features == 'encode'
+        run: cargo test -p linux-link-core --features ${{ matrix.features }}
+
+  # The bridge .so is gitignored, so the app build has to produce it first —
+  # assembleDebug alone would link whatever stale binary was last copied in,
+  # which is exactly the artifact that hid a broken video link on device.
+  android:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (with the Android target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libpipewire-0.3-dev libwayland-dev libegl1-mesa-dev libgbm-dev pkg-config libavcodec-dev libavdevice-dev libavfilter-dev libavformat-dev libavutil-dev libswresample-dev libswscale-dev
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install platform, build-tools and NDK
+        run: |
+          sdkmanager --install "platforms;android-37" "build-tools;37.0.0" >/dev/null
+          # NDK package names carry the full revision, so discover the r29 one
+          # instead of pinning a string that silently rots.
+          NDK=$(sdkmanager --list 2>/dev/null | awk '/ndk;29\./ { print $1; exit }')
+          test -n "$NDK" || { echo "no NDK r29 in sdkmanager --list" >&2; exit 1; }
+          yes | sdkmanager --install "$NDK" >/dev/null
+          echo "installed $NDK"
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
+      - name: Bridge clippy (host target)
+        run: cargo clippy -p linux-link-android-bridge --all-targets -- -D warnings
+
+      - name: Build the arm64 bridge
+        working-directory: android/bridge
+        run: cargo ndk -t arm64-v8a -o ../app/src/main/jniLibs build --release
+
+      - name: Assemble debug APK
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Android Lint
+        working-directory: android
+        run: ./gradlew lintDebug --no-daemon
 
   audit:
     runs-on: ubuntu-latest
@@ -47,5 +141,7 @@ jobs:
       - name: Install cargo-audit
         run: cargo install cargo-audit
 
+      # No `|| echo`: a known-vulnerable dependency has to be able to stop a
+      # release, which is the only way this step has ever been informative.
       - name: Run security audit
-        run: cargo audit || echo "Security audit found vulnerabilities (see output above)"
+        run: cargo audit
