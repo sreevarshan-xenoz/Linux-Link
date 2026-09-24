@@ -768,8 +768,23 @@ each item is a live defect with a known location, not a wish.
   list, and the `localectl` parser against that tool's real output.
 
 **State that goes stale or is dropped at a boundary**
-- 2066 stop filtering `monitorremoved` — Hyprland monitor events are discarded (`hypr_events.rs:28`), so
-  the phone keeps a monitor list that no longer exists.
+- 2066 **CLOSED (this commit; the reaction itself is hardware-unverified)** — output add/remove no longer
+  fall on the floor. The audit's wording was overstated and is corrected here: the phone never *kept* a
+  monitor list that no longer exists, because `kdeconnect.linuxlink.monitors` is answered from a live
+  `enumerate_monitors()` on every query (so the picker refetches current state on open) and `service.rs`
+  already re-pushed a full `hyprland.state` snapshot on a 4 s tick. What was actually true is that **no
+  compositor output event drove anything**: `monitoradded`/`monitorremoved` were emitted, read, discarded,
+  and the HUD's screen box plus every window's crop geometry could sit wrong for up to a tick after a
+  display vanished. Now those events trigger an immediate snapshot re-push to all clients, logged with the
+  event name and data. They deliberately stay out of the forwarded *event* stream — the refresh rides the
+  state packet, and the client's `applyEvent` has no handler for an output delta (a real monitor-list push
+  is 2575). The two names were confirmed against this Hyprland's own binary (`strings`); `monitorchanged`,
+  which the KDE-Connect-era mental model expects, is not emitted on 0.56.2, and an earlier draft of this
+  fix nearly handled a `defaultkb` key that `hyprctl devices -j` does not have. Unit-tested for the
+  classification and for "an output event produces no HUD delta". Residual, with the reason: no physical
+  unplug has ever been observed — this box has a single built-in output and Hyprland's socket1 write
+  dispatchers are broken upstream (AGENTS gotcha), so there is no fake hotplug; checklist §6 carries the
+  watch-the-log check, and the capture-side restart on hotplug is 2567.
 - 2067 carry window `pid` through the client parse (serialized server-side, thrown away).
 - 2068 apply the notification urgency the server computes instead of `IMPORTANCE_DEFAULT`.
 - 2069 group desktop notifications per app instead of one channel for everything.
@@ -1420,8 +1435,11 @@ per-class semantics, then the v1 plane shrinks to compatibility-only.
   black.
 - 2564 per-region priority (the window under the cursor) behind an explicit experiment, not a promise.
 - 2565 scroll-aware ROI, only if 2564 shows the mechanism works.
-- 2566 output hotplug: add, remove, rename, mode change, scale change, orientation change — today none of
-  them are handled and removal is filtered out (2066).
+- 2566 output hotplug: add, remove, rename, mode change, scale change, orientation change — add and remove
+  now drive a compositor re-snapshot (2066), but a rename, mode, scale or orientation change still surfaces
+  only on the next 4 s tick, and this Hyprland emits no event for it at all (`strings` on the binary shows
+  exactly `monitoradded` and `monitorremoved`), so that half needs a poll or a different signal, not a
+  broader match arm. None of it has been seen with a real cable.
 - 2567 capture source restart on hotplug without dropping the session.
 - 2568 a capture test-pattern source (replacing zeros from the cfg(test) helper) usable on device.
 - 2569 golden-frame tests for the conversion path.

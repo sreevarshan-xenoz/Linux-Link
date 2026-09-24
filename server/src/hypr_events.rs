@@ -22,7 +22,8 @@ pub const EVENT_PACKET: &str = "kdeconnect.linuxlink.hyprland.event";
 pub const STATE_PACKET: &str = "kdeconnect.linuxlink.hyprland.state";
 
 /// Compositor events the HUD consumes. Everything socket2 emits
-/// (`render`, `monitorremoved`, …) is filtered out.
+/// (`render`, `monitorremoved`, …) that is not listed here is filtered out.
+/// Output changes are not HUD deltas — see [`is_monitor_event`].
 pub fn is_hud_event(name: &str) -> bool {
     matches!(
         name,
@@ -36,6 +37,17 @@ pub fn is_hud_event(name: &str) -> bool {
             | "destroyworkspace"
             | "renameworkspace"
     )
+}
+
+/// Compositor events that mean the layout of outputs changed.
+///
+/// These are *not* HUD events: a monitor going away changes the geometry of
+/// every window and the screen box, which is the snapshot's job, so they trigger
+/// a re-snapshot rather than being forwarded as a delta (roadmap 2066). The
+/// names are the ones this Hyprland's socket2 emits — both strings exist in the
+/// compositor's own binary.
+pub fn is_monitor_event(name: &str) -> bool {
+    matches!(name, "monitoradded" | "monitorremoved")
 }
 
 /// Wrap a compositor event into a push packet, or `None` if irrelevant.
@@ -83,6 +95,26 @@ pub async fn push_state_to(sender: &Arc<dyn DeviceSender>, ipc: &HyprlandIpc) {
     }
 }
 
+/// Snapshot the compositor and hand the new state to every connected client.
+///
+/// Both callers are about staleness: the periodic tick exists because a
+/// register-time push can fall into the client's packet-poll gap, and the
+/// output-change branch because a monitor being added or removed invalidates
+/// every geometry the snapshot carries, which must not wait up to a tick to
+/// become visible (roadmap 2066).
+pub async fn push_state_to_clients(ipc: &HyprlandIpc) {
+    let clients = crate::state::clone_clients().await;
+    if clients.is_empty() {
+        return;
+    }
+    let Some(packet) = state_packet(ipc).await else {
+        return;
+    };
+    for sender in clients.iter() {
+        let _ = sender.send_packet(&packet).await;
+    }
+}
+
 /// Spawn the socket2 reader with reconnect and fan events out on a
 /// broadcast channel. The loop is cheap when Hyprland goes away (a failed
 /// unix-socket connect per retry) so it self-heals on compositor restart
@@ -125,6 +157,19 @@ mod tests {
         assert!(is_hud_event("renameworkspace"));
         assert!(!is_hud_event("render"));
         assert!(!is_hud_event("monitorremoved"));
+    }
+
+    #[test]
+    fn monitor_events_drive_a_snapshot_rather_than_a_delta() {
+        assert!(is_monitor_event("monitoradded"));
+        assert!(is_monitor_event("monitorremoved"));
+        assert!(!is_monitor_event("activewindow"));
+        assert!(!is_monitor_event("render"));
+        // The refresh rides the state packet, so an output event must NOT also
+        // reach the phone as a HUD delta it has no handler for.
+        let ev = HyprEvent::parse("monitorremoved>>1").expect("monitorremoved parses");
+        assert!(!is_hud_event(&ev.name));
+        assert!(event_packet(&ev).is_none());
     }
 
     #[test]

@@ -229,6 +229,7 @@ is still filling in is dimmed. What to confirm on a real phone:
 - [ ] Tap a chip ≤9 → Super+N injected → workspace switches.
 - [ ] R4 E1: a row of window chips (title/class) shows under the workspace chips on a Hyprland session; tap one → video re-encodes cropped to that window (same as the picker), the tapped chip goes solid/highlighted.
 - [ ] R4 E1: re-tap the highlighted window chip → crop clears back to whole-desktop (monitor) view; a *different* window chip tap switches the crop directly.
+- [ ] Roadmap 2066 (needs a second output or a hotplug-capable desktop): with the HUD open, unplug/replug a monitor → server log shows `Hyprland output changed, refreshing compositor state` within a second of the event (not up to 4 s) → HUD chips and window-crop geometry re-layout immediately. Never observed here: this box has one built-in output and Hyprland's socket1 write dispatchers are broken upstream, so no fake hotplug exists.
 - [ ] Battery chip shows desktop percentage + charging state; matches `upower`.
 
 ## 7. Clipboard + files (Tier 1 #4)

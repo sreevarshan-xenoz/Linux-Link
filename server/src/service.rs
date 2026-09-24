@@ -202,25 +202,28 @@ pub async fn run(config: Config) -> Result<()> {
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 tick.tick().await;
-                let clients = state::clone_clients().await;
-                if clients.is_empty() {
-                    continue;
-                }
-                let Some(packet) = hypr_events::state_packet(&ipc_snap).await else {
-                    continue;
-                };
-                for sender in clients.iter() {
-                    let _ = sender.send_packet(&packet).await;
-                }
+                hypr_events::push_state_to_clients(&ipc_snap).await;
             }
         });
 
+        let ipc_events = ipc.clone();
         let mut ev_rx = hypr_events::start_hypr_event_monitor((**ipc).clone()).subscribe();
         tokio::spawn(async move {
             tracing::info!("Hyprland event broadcast task started");
             loop {
                 match ev_rx.recv().await {
                     Ok(ev) => {
+                        if hypr_events::is_monitor_event(&ev.name) {
+                            // The output layout changed, so every geometry the
+                            // HUD has is now wrong: re-snapshot now instead of
+                            // waiting for the next tick (roadmap 2066).
+                            tracing::info!(
+                                event = %ev.name,
+                                data = %ev.data,
+                                "Hyprland output changed, refreshing compositor state"
+                            );
+                            hypr_events::push_state_to_clients(&ipc_events).await;
+                        }
                         let Some(packet) = hypr_events::event_packet(&ev) else {
                             continue;
                         };
