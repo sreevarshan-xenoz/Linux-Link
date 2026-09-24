@@ -20,7 +20,8 @@ use crate::metrics::{Samples, Summary};
 use super::connection::{SharedConnection, TransportFamily};
 
 /// Terminal classification of one streaming session.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SessionOutcome {
     /// Normal end of a pipeline run — graded against transport family and
     /// observed paths by [`SessionRecorder::finish`] (never logged as-is).
@@ -51,7 +52,11 @@ impl SessionOutcome {
 }
 
 /// One log line, already classified. Built by [`SessionRecorder::finish`].
-#[derive(Debug, Clone)]
+///
+/// Also the retained record: the server writes each report as one JSON line in
+/// `streaming_sessions.jsonl` so a later run can be compared against an earlier
+/// one (`linux-link sessions --json`).
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct SessionReport {
     pub unix_secs: u64,
     pub outcome: SessionOutcome,
@@ -356,6 +361,39 @@ mod tests {
         assert_eq!(tail.p95_ms, 120, "a one-in-ten stall has to be visible");
         assert_eq!(tail.p99_ms, 120);
         assert_eq!(tail.max_ms, 120);
+    }
+
+    #[test]
+    fn json_and_text_agree_on_the_outcome_vocabulary() {
+        // The record is kept for comparison, so a `wan_punched` in the log line
+        // must not become "WanPunched" in the JSON — two vocabularies is how a
+        // grep stops being a query.
+        for outcome in [
+            SessionOutcome::LanDirect,
+            SessionOutcome::WanPunched,
+            SessionOutcome::WanRelayed,
+            SessionOutcome::Rejected,
+            SessionOutcome::Failed,
+        ] {
+            let json = serde_json::to_string(&outcome).unwrap();
+            assert_eq!(json, format!("\"{}\"", outcome.as_str()));
+        }
+    }
+
+    #[test]
+    fn a_record_carries_every_stat_a_regression_check_needs() {
+        let rec = SessionRecorder::new(TransportFamily::Quinn, Some("phone-1".into()));
+        for i in 0..200u64 {
+            rec.record_encode(Duration::from_micros(4_000 + i * 1_000));
+        }
+        let report = rec.finish(SessionOutcome::Completed, 0);
+        let json = serde_json::to_string(&report).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["outcome"], "lan_direct");
+        assert_eq!(parsed["device_id"], "phone-1");
+        assert_eq!(parsed["encode_tail"]["count"], 200);
+        assert_eq!(parsed["encode_tail"]["max_ms"], 203);
+        assert!(parsed["rtt_tail"].is_null(), "rtt was never sampled");
     }
 
     #[test]

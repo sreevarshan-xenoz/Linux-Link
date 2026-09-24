@@ -24,6 +24,10 @@ pub enum Commands {
         /// Number of recent sessions to list
         #[arg(short, long, default_value_t = 10)]
         count: usize,
+        /// Emit the retained per-session records as JSON lines (one object per
+        /// session, including the p50/p90/p95/p99/max tails)
+        #[arg(long)]
+        json: bool,
     },
     /// List peers currently visible on the tailnet
     List,

@@ -12,11 +12,24 @@ use crate::state;
 use anyhow::Result;
 use std::path::PathBuf;
 
-/// Rotation threshold: keep the newest half when the log doubles past it.
+/// Rotation threshold for the human-readable log: keep the newest half when it
+/// doubles past this.
 const MAX_LOG_BYTES: u64 = 1024 * 1024;
+
+/// Rotation threshold for the machine-readable record file. Roomier per line,
+/// so it is capped separately — a baseline comparison needs history, not
+/// tonight's tail.
+const MAX_RECORD_BYTES: u64 = 4 * 1024 * 1024;
 
 pub fn session_log_path() -> Result<PathBuf> {
     Ok(state::state_dir()?.join("streaming_sessions.log"))
+}
+
+/// JSON-lines counterpart of [`session_log_path`]: one object per session with
+/// every field typed, for tooling and for the benchmark regression check
+/// (roadmap 2167/2168). `linux-link sessions --json` prints it.
+pub fn session_record_path() -> Result<PathBuf> {
+    Ok(state::state_dir()?.join("streaming_sessions.jsonl"))
 }
 
 /// Install the core telemetry sink → [`record`]. Called once at server
@@ -29,21 +42,33 @@ pub fn init() {
     });
 }
 
-/// Append one formatted report line, rotating when the log grows past
-/// [`MAX_LOG_BYTES`] (newest half kept).
+/// Append one report to both stores: the tab-separated line for humans and the
+/// JSON record for comparison. Each rotates independently.
 pub fn record(report: &linux_link_core::streaming::SessionReport) -> Result<()> {
+    append(session_log_path()?, report.format(), MAX_LOG_BYTES)?;
+    let json = serde_json::to_string(report)?;
+    append(session_record_path()?, json, MAX_RECORD_BYTES)
+}
+
+/// Append `line`, then keep the newest half of the file if it grew past
+/// `max_bytes`.
+fn append(path: PathBuf, line: String, max_bytes: u64) -> Result<()> {
     use std::io::{Read, Seek, SeekFrom, Write};
-    let path = session_log_path()?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
+        // Rotation reads back from the same handle, which needs the fd opened
+        // for reading too: O_WRONLY|O_APPEND made the first rotation on this
+        // path die with EBADF (os error 9). It had never run in production
+        // because the log never reached the cap.
+        .read(true)
         .open(&path)?;
-    writeln!(file, "{}", report.format())?;
+    writeln!(file, "{line}")?;
     let size = file.metadata()?.len();
-    if size > MAX_LOG_BYTES {
+    if size > max_bytes {
         let mut buf = vec![0u8; (size / 2) as usize];
         file.seek(SeekFrom::End(-(buf.len() as i64)))?;
         file.read_exact(&mut buf)?;
@@ -84,9 +109,48 @@ pub fn read_recent_from(path: &PathBuf) -> Result<Vec<String>> {
     Ok(lines)
 }
 
+/// The last `count` retained JSON records, oldest first, as parsed objects.
+/// Unparseable lines are skipped rather than fatal: one corrupt line in a
+/// rotated log must not hide the rest of the history.
+pub fn read_records(count: usize) -> Result<Vec<serde_json::Value>> {
+    read_records_from(&session_record_path()?, count)
+}
+
+/// [`read_records`] against a specific file (exposed for tests).
+pub fn read_records_from(path: &PathBuf, count: usize) -> Result<Vec<serde_json::Value>> {
+    let lines = read_recent_from(path)?;
+    let start = lines.len().saturating_sub(count.max(1));
+    Ok(lines[start..]
+        .iter()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect())
+}
+
+/// Newest retained record, if any — the input a benchmark regression check
+/// compares against its committed baseline.
+pub fn latest_record() -> Result<Option<serde_json::Value>> {
+    Ok(read_records(1)?.pop())
+}
+
 /// Human summary: outcome tally + the recent tail. Printed by
-/// `linux-link sessions`.
-pub fn print_sessions(count: usize) -> Result<()> {
+/// `linux-link sessions`. With `json`, emit the retained records instead — one
+/// object per line, pipeable into `jq` or the benchmark comparison.
+pub fn print_sessions(count: usize, json: bool) -> Result<()> {
+    if json {
+        let records = read_records(count)?;
+        if records.is_empty() {
+            // stdout is the data stream: the hint about an empty store goes to
+            // stderr so `sessions --json | jq` never sees a non-JSON line.
+            eprintln!(
+                "No streaming sessions recorded yet (records: {}).",
+                session_record_path()?.display()
+            );
+        }
+        for record in records {
+            println!("{record}");
+        }
+        return Ok(());
+    }
     let lines = read_recent(count.max(1))?;
     if lines.is_empty() {
         println!("No streaming sessions recorded yet.");
@@ -193,6 +257,71 @@ mod tests {
         assert!(tail[0].contains("wan_punched"));
         assert!(tail[1].contains("rejected"));
         assert!(tail[2].contains("failed"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_report_survives_the_round_trip_as_a_comparable_record() {
+        let dir = std::env::temp_dir().join(format!("ll-records-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("streaming_sessions.jsonl");
+
+        let tails = linux_link_core::metrics::Samples::new();
+        for i in 0..300u64 {
+            tails.push_micros(4_000 + i * 1_000);
+        }
+        let mut report = report("lan_direct");
+        report.encode_tail = tails.summary_ms();
+        report.rtt_tail = tails.summary_ms();
+        append(
+            path.clone(),
+            serde_json::to_string(&report).unwrap(),
+            MAX_RECORD_BYTES,
+        )
+        .unwrap();
+
+        let records = read_records_from(&path, 10).unwrap();
+        assert_eq!(records.len(), 1);
+        let r = &records[0];
+        // The fields a regression check compares must be typed, not strings:
+        // `p99` has to be numerically greater than `p50`.
+        assert_eq!(r["outcome"], "lan_direct");
+        assert_eq!(r["encode_tail"]["count"], 300);
+        assert!(
+            r["encode_tail"]["p99_ms"].as_u64().unwrap()
+                > r["encode_tail"]["p50_ms"].as_u64().unwrap()
+        );
+        assert_eq!(r["encode_tail"]["max_ms"].as_u64().unwrap(), 303);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn record_rotation_keeps_the_newest_complete_lines() {
+        let dir = std::env::temp_dir().join(format!("ll-rotate-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("rotated.jsonl");
+        // Tiny cap so rotation is exercised without writing a megabyte.
+        for i in 0..200u64 {
+            append(path.clone(), format!("{{\"i\":{i}}}"), 512).unwrap();
+        }
+        let records = read_records_from(&path, 10_000).unwrap();
+        assert!(!records.is_empty());
+        // Every surviving line parses: a partial first line would be dropped,
+        // not silently counted as history.
+        assert!(records.iter().all(|r| r["i"].is_number()));
+        let newest = records.last().unwrap()["i"].as_u64().unwrap();
+        assert_eq!(newest, 199, "rotation must keep the tail, not the head");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn corrupt_lines_are_skipped_not_fatal() {
+        let dir = std::env::temp_dir().join(format!("ll-corrupt-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("broken.jsonl");
+        std::fs::write(&path, "{\"i\":1}\nnot json at all\n{\"i\":2}\n").unwrap();
+        let records = read_records_from(&path, 10).unwrap();
+        assert_eq!(records.len(), 2);
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -20,8 +20,11 @@ Stop a running daemon started with
 .B status
 Print local tailscale status
 .TP
-.B sessions [\-\-count \fIN\fR]
-Show recorded streaming\-session outcomes (default: last 10)
+.B sessions [\-\-count \fIN\fR] [\-\-json]
+Show recorded streaming\-session outcomes (default: last 10); with
+.BR \-\-json ,
+emit the retained per\-session records as JSON lines (one object per session,
+including the p50/p90/p95/p99/max tails) instead of the human tally
 .TP
 .B list
 List peers currently visible on the tailnet
@@ -74,6 +77,16 @@ flags are listed with each command above.
 .TP
 .I ~/.config/linux-link/config.toml
 Configuration file
+.TP
+.I ~/.local/state/linux-link/streaming_sessions.log
+Session outcome log, tab\-separated Ikey=valueR lines, rotated at 1 MiB
+.TP
+.I ~/.local/state/linux-link/streaming_sessions.jsonl
+The same reports as one JSON object per session \- the record a benchmark
+baseline is compared against \- rotated at 4 MiB
+.TP
+.I ~/.local/state/linux-link/certs/
+Streaming TLS/QUIC identity (private key); never copy this into a repository
 .SH ENVIRONMENT
 .TP
 .B RUST_LOG

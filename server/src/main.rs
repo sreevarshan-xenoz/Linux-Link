@@ -39,7 +39,7 @@ async fn main() -> Result<()> {
         }
         cli::Commands::Stop => service::stop().await,
         cli::Commands::Status => service::print_status().await,
-        cli::Commands::Sessions { count } => session_telemetry::print_sessions(count),
+        cli::Commands::Sessions { count, json } => session_telemetry::print_sessions(count, json),
         cli::Commands::List => service::list_peers().await,
         cli::Commands::Watch { interval } => service::watch_peers(interval).await,
         cli::Commands::Capabilities { json, markdown } => {
