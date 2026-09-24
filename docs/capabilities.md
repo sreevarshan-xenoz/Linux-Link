@@ -42,7 +42,9 @@
 | H.264 | yes | assumed for every client | `video/avc` | `h264` |
 | H.265 (HEVC) | yes | `FD 00` caps stream, bit `0b00000001` | `video/hevc` | `hevc` |
 
-| Audio direction | Codec | This build encodes | Rate | Channels | Bitrate | Frame |
-| --- | --- | --- | --- | --- | --- | --- |
-| desktop -> phone | Opus | yes | 48000 Hz | 2 | 64000 bit/s | 20 ms |
-| phone -> desktop | Opus | yes | 48000 Hz | 1 | set by the sender | 20 ms |
+| Audio direction | Codec | This build encodes | Rate | Channels | Bitrate | Frame | Receiving end plays it |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| desktop -> phone | Opus | yes | 48000 Hz | 2 | 64000 bit/s | 20 ms | **no** |
+| phone -> desktop | Opus | yes | 48000 Hz | 1 | set by the sender | 20 ms | yes |
+
+The `desktop -> phone` direction is on the wire but not in the air: the receiving end has no playout path for it, so read that row as what the sender does, not as a feature you can hear (roadmap 2054 / 2791-2800).

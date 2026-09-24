@@ -58,6 +58,14 @@ pub struct AudioFormat {
     pub frame_duration_ms: u32,
     /// `false` only in a build without the `opus` feature.
     pub this_build_encodes: bool,
+    /// Whether the device on the *receiving* end turns this stream into sound.
+    ///
+    /// Encoding and sending is half a feature. The desktop's mic sink plays what
+    /// the phone sends (`mic_relay.rs` → `pw-loopback`); the phone has no Opus
+    /// playout path at all (`receiveAudio` has no caller), so `desktop -> phone`
+    /// is a stream the wire delivers and nobody listens to — roadmap 2054, with
+    /// the playout path itself as 2791-2800.
+    pub played_on_the_receiving_end: bool,
 }
 
 /// A capture backend and where `Auto` would place it.
@@ -202,6 +210,9 @@ impl Capabilities {
                         bitrate_bps: Some(out.bitrate_bps),
                         frame_duration_ms: out.frame_duration_ms,
                         this_build_encodes: cfg!(feature = "opus"),
+                        // No caller of `receiveAudio`, no MediaCodec Opus decoder
+                        // instance, no speaker. Roadmap 2054.
+                        played_on_the_receiving_end: false,
                     },
                     AudioFormat {
                         direction: "phone -> desktop",
@@ -211,6 +222,9 @@ impl Capabilities {
                         bitrate_bps: None,
                         frame_duration_ms: out.frame_duration_ms,
                         this_build_encodes: cfg!(feature = "opus"),
+                        // The desktop plays it: `mic_relay.rs` decodes and feeds a
+                        // virtual `pw-loopback` source named "Linux Link Mic".
+                        played_on_the_receiving_end: true,
                     },
                 ]
             },
@@ -361,7 +375,7 @@ impl Capabilities {
         out.push_str("\nAudio\n");
         for format in &self.audio {
             out.push_str(&format!(
-                "  {:<18} {} {}/{} @{}ms{}\n",
+                "  {:<18} {} {}/{} @{}ms{}  receiver plays it: {}\n",
                 format.direction,
                 format.codec,
                 format.sample_rate,
@@ -370,7 +384,12 @@ impl Capabilities {
                 format
                     .bitrate_bps
                     .map(|b| format!(", {b} bit/s"))
-                    .unwrap_or_else(|| ", sender-set bitrate".to_string())
+                    .unwrap_or_else(|| ", sender-set bitrate".to_string()),
+                if format.played_on_the_receiving_end {
+                    "yes"
+                } else {
+                    "no"
+                }
             ));
         }
         out.push('\n');
@@ -497,10 +516,10 @@ impl Capabilities {
                 codec.ffmpeg_encoder
             ));
         }
-        out.push_str("\n| Audio direction | Codec | This build encodes | Rate | Channels | Bitrate | Frame |\n| --- | --- | --- | --- | --- | --- | --- |\n");
+        out.push_str("\n| Audio direction | Codec | This build encodes | Rate | Channels | Bitrate | Frame | Receiving end plays it |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n");
         for format in &self.audio {
             out.push_str(&format!(
-                "| {} | {} | {} | {} Hz | {} | {} | {} ms |\n",
+                "| {} | {} | {} | {} Hz | {} | {} | {} ms | {} |\n",
                 format.direction,
                 format.codec,
                 if format.this_build_encodes {
@@ -514,7 +533,26 @@ impl Capabilities {
                     .bitrate_bps
                     .map(|b| format!("{b} bit/s"))
                     .unwrap_or_else(|| "set by the sender".to_string()),
-                format.frame_duration_ms
+                format.frame_duration_ms,
+                if format.played_on_the_receiving_end {
+                    "yes"
+                } else {
+                    "**no**"
+                }
+            ));
+        }
+        let unplayed: Vec<&str> = self
+            .audio
+            .iter()
+            .filter(|format| !format.played_on_the_receiving_end)
+            .map(|format| format.direction)
+            .collect();
+        if !unplayed.is_empty() {
+            out.push_str(&format!(
+                "\nThe `{}` direction is on the wire but not in the air: the receiving end has \
+                 no playout path for it, so read that row as what the sender does, not as a \
+                 feature you can hear (roadmap 2054 / 2791-2800).\n",
+                unplayed.join("`, `")
             ));
         }
         out
@@ -570,6 +608,28 @@ mod tests {
         assert_eq!(parsed["protocol"]["v2_max_version"], V2_MAX_VERSION);
         assert!(caps.render_text().contains("Transports"));
         assert!(caps.render_markdown().contains("## Capture backends"));
+    }
+
+    #[test]
+    fn audio_rows_say_which_end_can_hear_them() {
+        // Roadmap 2054: an audio direction is only a feature if the device at
+        // the far end turns it into sound. The phone cannot, so the report must
+        // not imply that it does.
+        let caps = Capabilities::collect();
+        let played = |direction: &str| {
+            caps.audio
+                .iter()
+                .find(|format| format.direction == direction)
+                .map(|format| format.played_on_the_receiving_end)
+                .unwrap_or_else(|| panic!("no `{direction}` row in the audio table"))
+        };
+        assert!(!played("desktop -> phone"));
+        assert!(played("phone -> desktop"));
+        // The generated doc says it out loud, not just in the JSON.
+        assert!(
+            caps.render_markdown().contains("no playout path for it"),
+            "the table must explain its own `**no**`"
+        );
     }
 
     #[cfg(feature = "capture")]

@@ -194,6 +194,11 @@ The four that matter most, in order:
 - **2054 — advertised audio that cannot play.** `receiveAudio` has no caller: the phone has no Opus
   playout path, so the desktop audio feature is a UI toggle over a dead wire. Either build 2791 or stop
   advertising the capability.
+  **Landed 2026-09-24** (the advertising half; 2791-2800 stay open): the capability report now carries a
+  `played_on_the_receiving_end` column and says out loud that `desktop -> phone` reaches no speaker, and the
+  desktop stopped emitting synthesized silence when it cannot capture. Checking this item is what surfaced a
+  live defect behind the dead wire — the client's one demux loop `await`ed on the never-drained 8-slot audio
+  queue and so stalled *video* behind it, and an audio-only teardown `break`s that loop and ends the session.
 - **2057/2058 — input that degrades silently.** `KEYCODE_MAP` in `server/src/input_injector.rs:27` covers
   ~26 keys and unmapped codes fall through to `Key::Unicode`; modifiers are absent; the DirectTouch path
   sends move+release with no press. These are the reason "it feels wrong" reports exist at all.

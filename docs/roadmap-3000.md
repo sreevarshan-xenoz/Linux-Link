@@ -298,7 +298,10 @@ Headline numbers, all verified first-hand on 2026-09-24:
   audio sheet, 630-633 the complete phone-mic share path (capture → bridge → server → `pw-loopback`
   source with respawn and cleanup), 639 mic toggle, 642 the named virtual source.
 - **PARTIAL** 601 desktop audio is captured, encoded, streamed and *then dropped*: `receiveAudio` has no
-  caller, so there is no player and nothing to sync against; 606 mono exists in config and the mic path
+  caller, so there is no player and nothing to sync against (since 2054 the drop is deliberate and stated —
+  the capability report's `played_on_the_receiving_end` column says `no` for this direction, and the desktop
+  sends nothing at all when it cannot capture rather than streaming silence); 606 mono exists in config and
+  the mic path
   while the desktop stream hardcodes two channels; 611 bitrate is set once with no profile switch; 613 FEC
   is permanently on rather than negotiated; 620 the timestamp header is written and never consumed; 643-645
   one fixed node name and a `MEDIA_ROLE` on capture; 689 the mic node respawns on a PipeWire write failure
@@ -645,19 +648,23 @@ each item is a live defect with a known location, not a wish.
   the README's "RTT-based congestion control" described dead code on top of a no-op. Deleted rather than
   revived: a second owner would fight the arbiter that exists. 2821 (loss + RTT together, à la RustDesk)
   stays open as the refinement, and it should be done *in* this arbiter.
-- 2054 stop presenting desktop audio as available: the phone has no player (`receiveAudio` has no caller),
-  so either build the playout path (2791-2800) or drop it from the advertised capability set.
-  **Hazard found while verifying this, fixed 2026-09-24:** the unconsumed audio queue was not merely idle.
+- 2054 **LANDED 2026-09-24** stop presenting desktop audio as available: the phone has no player
+  (`receiveAudio` has no caller), so either build the playout path (2791-2800) or drop it from the
+  advertised capability set. The second half, in three steps — the first one was not a doc fix.
+  **Hazard found while verifying this:** the unconsumed audio queue was not merely idle.
   The client's one demux loop handed every audio packet to an 8-slot channel with `send().await`, so a
   consumer that never polls (the Android app today) fills it 160 ms in and then **stalls video behind it** —
-  and because the desktop-side audio task falls back to streaming synthesized silence when PipeWire capture
-  is unavailable, that was not a rare interleaving but the normal shape of a session on such a machine. A
-  closed audio receiver also `break`s the loop, tearing the whole session down for an audio-only teardown.
+  and because the desktop-side audio task fell back to streaming synthesized silence whenever PipeWire
+  capture was unavailable, that was not a rare interleaving but the normal shape of a session on such a
+  machine. A closed audio receiver also `break`s the loop, tearing the whole session down for an
+  audio-only teardown.
   Audio is now offered, never insisted on (`try_deliver_audio`: skip when full, log once when the consumer
-  is gone, video unaffected), proven by two unit tests; and the silence stream itself is gone — with no
-  PipeWire capture the audio task logs the reason and ends, so a session carries audio only when there is
-  audio to speak of. Still open in this item: the capability row that presents `desktop -> phone` as a
-  live direction, and the playout path (2791-2800) that would make it one.
+  is gone, video unaffected), proven by two unit tests; the silence stream is gone — with no PipeWire
+  capture the audio task logs the reason and ends, so a session carries audio only when there is audio to
+  speak of; and `capabilities.rs` gained `AudioFormat::played_on_the_receiving_end`, so the generated
+  report and `docs/capabilities.md` state that `desktop -> phone` reaches the wire and no speaker, while
+  `phone -> desktop` does reach one (`mic_relay.rs` → `pw-loopback`). The stale half of this item is now
+  2791-2800: the playout path that would turn that row's `**no**` into a `yes`.
 - 2055 report e2e latency as a distribution sample stream rather than one EWMA scalar so a p95 regression
   is visible at all (pairs with 2141-2146).
 - 2056 expose goodput/RTT with their confidence and sample count, not as bare numbers the HUD cannot
