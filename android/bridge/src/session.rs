@@ -69,6 +69,16 @@ pub(crate) static STREAMING_RTT_US: std::sync::atomic::AtomicU64 =
 /// Atomic flag indicating whether streaming is active (avoids try_lock race).
 pub(crate) static STREAMING_ACTIVE: AtomicBool = AtomicBool::new(false);
 
+/// Durations the decoder measures, waiting to be reported to the desktop, which
+/// is where a session's percentile tails are computed. `DECODE_SAMPLES` is
+/// feed→drained-frame time, `RENDER_SAMPLES` the gap between frames reaching the
+/// panel. Both are bounded, so a session that reports on its 1 s poller cannot
+/// grow them; a new session clears them (see `install_streaming`).
+pub(crate) static DECODE_SAMPLES: linux_link_core::streaming::SampleBatch =
+    linux_link_core::streaming::SampleBatch::new();
+pub(crate) static RENDER_SAMPLES: linux_link_core::streaming::SampleBatch =
+    linux_link_core::streaming::SampleBatch::new();
+
 /// True when the live streaming session rode a relay path (iroh WAN without a
 /// punched direct path). Updated by the RTT poller; LAN sessions are always
 /// direct, so the flag also doubles as the relay-transition latch for the

@@ -531,6 +531,23 @@ pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeSendQual
     to_jstring(&mut env, json)
 }
 
+/// Hand the bridge one duration the app measured, in microseconds: kind 0 is
+/// decode (buffer fed → frame drained), kind 1 is render (gap between frames
+/// reaching the panel). The streaming poller reports what has accumulated to the
+/// desktop once a second, which is where a session's percentile tails are built.
+/// Fire-and-forget from a decoder thread: no runtime, no envelope, no error.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_linuxlink_android_bridge_RustCore_nativeRecordSample(
+    _env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    kind: jint,
+    micros: jlong,
+) {
+    if micros >= 0 {
+        api::record_sample(kind as u8, micros as u64);
+    }
+}
+
 /// Open the R4 E2 phone→desktop mic (start frame; the server creates its
 /// "Linux Link Mic" PipeWire source). Opus encoding happens in Kotlin.
 #[unsafe(no_mangle)]

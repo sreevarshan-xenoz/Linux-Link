@@ -16,11 +16,13 @@ use tokio::sync::Mutex;
 use tokio::sync::broadcast;
 
 use linux_link_core::streaming::InputPacket;
+use linux_link_core::streaming::{SAMPLE_DECODE, SAMPLE_RENDER, report_samples};
 
 use crate::{
-    CONNECTION_STATE, CONTROL_PEER, CONTROL_WRITER, MAX_AUDIO_PACKETS_PER_RECEIVE,
-    MAX_FRAMES_PER_RECEIVE, STREAMING_ACTIVE, STREAMING_BYTE_COUNT, STREAMING_FRAME_COUNT,
-    STREAMING_HANDLE, STREAMING_RTT_US, StreamingHandle, update_streaming_rtt,
+    CONNECTION_STATE, CONTROL_PEER, CONTROL_WRITER, DECODE_SAMPLES, MAX_AUDIO_PACKETS_PER_RECEIVE,
+    MAX_FRAMES_PER_RECEIVE, RENDER_SAMPLES, STREAMING_ACTIVE, STREAMING_BYTE_COUNT,
+    STREAMING_FRAME_COUNT, STREAMING_HANDLE, STREAMING_RTT_US, StreamingHandle,
+    update_streaming_rtt,
 };
 
 /// Initialize the Linux Link backend
@@ -1245,6 +1247,11 @@ async fn install_streaming(
         .ok_or_else(|| "Connection not available after connect".to_string())?
         .clone();
 
+    // Samples the last session's decoder measured must not join this one's
+    // record, and nothing is going to report them now that its server is gone.
+    DECODE_SAMPLES.clear();
+    RENDER_SAMPLES.clear();
+
     let cancel = client.cancel_token();
     let client_cancel = cancel.clone();
     let task = tokio::spawn(async move {
@@ -1267,6 +1274,13 @@ async fn install_streaming(
                     let stats = rtt_connection.stats();
                     let rtt_us = stats.rtt.as_micros() as u64;
                     update_streaming_rtt(rtt_us);
+
+                    // Hand the decoder's measurements to the desktop, which is
+                    // where every percentile tail in the session record is
+                    // built. The client's own e2e probes ride core's stats
+                    // loop; these two batches are what only the phone knows.
+                    report_samples(&rtt_connection, SAMPLE_DECODE, &DECODE_SAMPLES).await;
+                    report_samples(&rtt_connection, SAMPLE_RENDER, &RENDER_SAMPLES).await;
 
                     // Link-path telemetry (R4 A1): quinn LAN is always
                     // direct; an iroh WAN session rides a relay until hole
@@ -1324,6 +1338,24 @@ async fn install_streaming(
 
     tracing::info!("Streaming session connected to {address}:{port}");
     Ok(())
+}
+
+/// Record one duration the app measured, in microseconds, into the batch the
+/// streaming poller reports to the desktop. `kind` is a `SAMPLE_*` id.
+///
+/// This is the whole cost of measuring on a decoder thread: a push into a
+/// bounded batch, no allocation, no runtime, no error to handle. A kind the
+/// phone does not own (`SAMPLE_E2E` is measured in core's receive loop) is
+/// ignored, because the desktop would refuse it too.
+pub fn record_sample(kind: u8, value_us: u64) {
+    let batch = match kind {
+        SAMPLE_DECODE => &DECODE_SAMPLES,
+        SAMPLE_RENDER => &RENDER_SAMPLES,
+        _ => return,
+    };
+    if !batch.push(value_us) {
+        tracing::debug!("Sample batch full: reporting late, oldest dropped");
+    }
 }
 
 /// Connect to a peer using the v2 multiplexed protocol (QUIC).
