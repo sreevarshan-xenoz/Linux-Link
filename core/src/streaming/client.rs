@@ -4,6 +4,7 @@
 //! QUIC streams, and demuxes them into video and audio channels.
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -12,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use super::connection::{ConnectionError, QuinnConnection, SharedConnection};
-use super::input_packet::InputPacket;
+use super::input_packet::{InputPacket, SAMPLE_E2E, SampleBatch};
 use super::transport::{self, CertManager, StreamTransportConfig};
 use super::{AudioPacket, EncodedPacket};
 
@@ -49,9 +50,18 @@ pub const CODEC_CAP_HEVC: u8 = 0b0000_0001;
 /// software) and any queueing after the client's packet read.
 static E2E_EWMA_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// One probe sample in microseconds (see [`E2E_EWMA_MS`] docs for
+/// semantics/limits): the capture→send age the header carried, plus one
+/// network leg. Microseconds are the primary unit because that is what the
+/// session record's distribution needs; the millisecond form below is the same
+/// number divided down for the HUD.
+pub fn e2e_sample_us(capture_age_us: u64, rtt: Duration) -> u64 {
+    capture_age_us + (rtt.as_micros() as u64) / 2
+}
+
 /// One probe sample in ms (see [`E2E_EWMA_MS`] docs for semantics/limits).
 pub fn e2e_sample_ms(capture_age_us: u64, rtt: Duration) -> u64 {
-    capture_age_us / 1_000 + (rtt.as_millis() as u64) / 2
+    e2e_sample_us(capture_age_us, rtt) / 1_000
 }
 
 /// EWMA (¾ old, ¼ new) so the HUD doesn't jitter per frame. First sample
@@ -339,8 +349,13 @@ impl StreamingClient {
         async move {
             info!("Starting frame receiver tasks");
 
+            // Samples taken between flushes, shared by the receiver (which
+            // measures) and the feedback loop (which reports).
+            let e2e_samples = Arc::<SampleBatch>::default();
+
             // Clone connection for the stats task before it gets moved into recv task
             let stats_connection = connection.clone();
+            let stats_samples = e2e_samples.clone();
 
             // Spawn the receive loop using our cancel-aware receiver
             let recv_cancel = cancel.clone();
@@ -348,7 +363,8 @@ impl StreamingClient {
             let recv_handle = tokio::spawn(
                 async move {
                     let result =
-                        recv_with_cancel(&connection, frame_tx, audio_tx, recv_cancel).await;
+                        recv_with_cancel(&connection, frame_tx, audio_tx, recv_cancel, e2e_samples)
+                            .await;
                     match result {
                         Ok(()) => debug!("Frame receiver finished normally"),
                         Err(e) => warn!(error = %e, "Frame receiver error"),
@@ -357,12 +373,13 @@ impl StreamingClient {
                 .instrument(recv_span),
             );
 
-            // Spawn a stats feedback loop that periodically sends RTT data
+            // Spawn a stats feedback loop that periodically reports the client's
+            // own view of the link, plus whatever it measured since the last tick
             let stats_cancel = cancel.clone();
             let stats_span = tracing::info_span!("stats_feedback");
             let _stats_handle = tokio::spawn(
                 async move {
-                    send_stats_loop(&stats_connection, stats_cancel).await;
+                    send_stats_loop(&stats_connection, stats_cancel, &stats_samples).await;
                 }
                 .instrument(stats_span),
             );
@@ -438,6 +455,23 @@ impl StreamingClient {
         debug!("Sent input packet: {} bytes over QUIC", data.len());
         Ok(())
     }
+
+    /// Report one frame's worth of the durations a [`SampleBatch`] holds, as
+    /// samples of type `kind` (a `SAMPLE_*` id), and say whether anything was
+    /// sent.
+    ///
+    /// The batch keeps whatever did not fit the frame, so a caller flushing on
+    /// a timer cannot lose samples to a busy period — it just reports them on
+    /// the next tick. This is how the phone hands its decode and render timings
+    /// to the server, which is where the session's percentiles are computed.
+    pub async fn flush_samples(&self, kind: u8, batch: &SampleBatch) -> Result<bool> {
+        let Some(values) = batch.take_chunk() else {
+            return Ok(false);
+        };
+        self.send_input(&InputPacket::ClientSamples { kind, values })
+            .await?;
+        Ok(true)
+    }
 }
 
 /// Receive packets with cancellation support — demuxes video and audio streams.
@@ -450,6 +484,7 @@ async fn recv_with_cancel(
     frame_tx: mpsc::Sender<EncodedPacket>,
     audio_tx: mpsc::Sender<AudioPacket>,
     cancel: CancellationToken,
+    e2e_samples: Arc<SampleBatch>,
 ) -> Result<()> {
     info!("Starting packet receiver (video + audio)");
     reset_e2e_probe();
@@ -543,11 +578,12 @@ async fn recv_with_cancel(
                             // R4 E3: compositor-true latency sample — the
                             // header's age is capture→send on the desktop
                             // clock, plus half the transport RTT for the
-                            // wire leg.
-                            record_e2e_sample(e2e_sample_ms(
-                                header.timestamp_us,
-                                connection.stats().rtt,
-                            ));
+                            // wire leg. The EWMA feeds the HUD; the raw
+                            // sample joins the batch the server turns into
+                            // the session's e2e tail.
+                            let rtt = connection.stats().rtt;
+                            record_e2e_sample(e2e_sample_ms(header.timestamp_us, rtt));
+                            e2e_samples.push(e2e_sample_us(header.timestamp_us, rtt));
 
                             // Route to video channel
                             let packet = EncodedPacket {
@@ -596,10 +632,36 @@ async fn send_keyframe_request(connection: &SharedConnection) {
     }
 }
 
-/// Periodically send connection stats (RTT) back to the server on a feedback stream.
+/// Send one frame to the server on its own unidirectional stream. Best effort:
+/// a feedback frame that cannot be sent is not worth an error path, since the
+/// next tick reports again.
+async fn send_frame(connection: &SharedConnection, packet: &InputPacket) {
+    let data = packet.encode();
+    match connection.open_uni().await {
+        Ok(mut stream) => {
+            if let Err(e) = stream.write_all(&data).await {
+                debug!("Failed to send feedback to server: {e}");
+            } else {
+                let _ = stream.finish();
+            }
+        }
+        Err(e) => {
+            debug!("Failed to open feedback stream: {e}");
+        }
+    }
+}
+
+/// Periodically report the client's own account of the session: the link as its
+/// transport sees it, and every latency sample it took since the last tick.
 ///
-/// The server can use this information for adaptive bitrate control.
-async fn send_stats_loop(connection: &SharedConnection, cancel: CancellationToken) {
+/// The two travel as ordinary [`InputPacket`] frames so the server dispatches
+/// them by tag like any other client control. This loop used to write a bare
+/// 16-byte buffer that the server matched on length and discarded.
+async fn send_stats_loop(
+    connection: &SharedConnection,
+    cancel: CancellationToken,
+    e2e_samples: &SampleBatch,
+) {
     let mut interval = tokio::time::interval(Duration::from_secs(1));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -612,27 +674,26 @@ async fn send_stats_loop(connection: &SharedConnection, cancel: CancellationToke
 
             _ = interval.tick() => {
                 let stats = connection.stats();
-                let rtt_us = stats.rtt.as_micros() as u64;
-                let lost = stats.lost_packets;
+                send_frame(
+                    connection,
+                    &InputPacket::LinkFeedback {
+                        rtt: stats.rtt,
+                        lost_packets: stats.lost_packets,
+                    },
+                )
+                .await;
 
-                // Simple binary feedback message:
-                // [0..8]  RTT in microseconds (u64 LE)
-                // [8..16] Lost packets (u64 LE)
-                let mut buf = [0u8; 16];
-                buf[0..8].copy_from_slice(&rtt_us.to_le_bytes());
-                buf[8..16].copy_from_slice(&lost.to_le_bytes());
-
-                match connection.open_uni().await {
-                    Ok(mut stream) => {
-                        if let Err(e) = stream.write_all(&buf).await {
-                            debug!("Failed to send stats to server: {e}");
-                        } else {
-                            let _ = stream.finish();
-                        }
-                    }
-                    Err(e) => {
-                        debug!("Failed to open stats stream: {e}");
-                    }
+                // Drain in frame-sized chunks: a stalled flush loop must not
+                // lose the samples it already holds, only delay them.
+                while let Some(values) = e2e_samples.take_chunk() {
+                    send_frame(
+                        connection,
+                        &InputPacket::ClientSamples {
+                            kind: SAMPLE_E2E,
+                            values,
+                        },
+                    )
+                    .await;
                 }
             }
         }
@@ -677,19 +738,49 @@ mod tests {
     }
 
     #[test]
-    fn test_stats_buffer_format() {
-        let rtt = Duration::from_millis(50);
-        let lost: u64 = 3;
+    fn feedback_frames_are_what_the_stats_loop_puts_on_the_wire() {
+        // The loop's two exports, checked as shapes the server dispatches by
+        // tag: a link reading and one batch of e2e samples. This is the frame
+        // format that replaced an untagged 16-byte buffer the server discarded.
+        let feedback = InputPacket::LinkFeedback {
+            rtt: Duration::from_millis(28),
+            lost_packets: 4,
+        };
+        let decoded = InputPacket::decode(&feedback.encode()).expect("feedback decodes");
+        assert!(
+            matches!(
+                decoded,
+                InputPacket::LinkFeedback {
+                    lost_packets: 4,
+                    ..
+                }
+            ),
+            "{decoded:?}"
+        );
 
-        let rtt_us = rtt.as_micros() as u64;
-        let mut buf = [0u8; 16];
-        buf[0..8].copy_from_slice(&rtt_us.to_le_bytes());
-        buf[8..16].copy_from_slice(&lost.to_le_bytes());
-
-        let recovered_rtt = u64::from_le_bytes(buf[0..8].try_into().unwrap());
-        let recovered_lost = u64::from_le_bytes(buf[8..16].try_into().unwrap());
-
-        assert_eq!(recovered_rtt, 50_000); // 50 ms in microseconds
-        assert_eq!(recovered_lost, 3);
+        let batch = SampleBatch::default();
+        batch.push(e2e_sample_us(12_340, Duration::from_millis(51)));
+        batch.push(e2e_sample_us(9_000, Duration::from_millis(30)));
+        let values = batch.take_chunk().expect("two samples pending");
+        assert_eq!(values, vec![37_840, 24_000]);
+        let samples = InputPacket::ClientSamples {
+            kind: SAMPLE_E2E,
+            values,
+        };
+        match InputPacket::decode(&samples.encode()).unwrap() {
+            InputPacket::ClientSamples { kind, values } => {
+                assert_eq!(kind, SAMPLE_E2E);
+                assert_eq!(
+                    values.iter().map(|&v| v as u64 / 1_000).collect::<Vec<_>>(),
+                    vec![
+                        e2e_sample_ms(12_340, Duration::from_millis(51)),
+                        e2e_sample_ms(9_000, Duration::from_millis(30))
+                    ],
+                    "the tail and the HUD must be the same number, divided"
+                );
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+        assert!(batch.take_chunk().is_none());
     }
 }

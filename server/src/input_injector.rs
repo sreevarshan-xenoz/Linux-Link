@@ -398,6 +398,10 @@ impl InputInjector {
             // Mic audio is consumed by the streaming server's mic relay task
             // (R4 E2) before the input channel; never injected.
             InputPacket::Mic { .. } => Ok(()),
+            // The client's own link reading and latency samples are consumed by
+            // the streaming server's connection monitor and folded into the
+            // session record; never injected.
+            InputPacket::LinkFeedback { .. } | InputPacket::ClientSamples { .. } => Ok(()),
             InputPacket::Gamepad { axes, buttons } => {
                 // Map gamepad axes/buttons to keyboard/mouse for broad compatibility.
                 // Left stick -> mouse movement

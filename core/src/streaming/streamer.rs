@@ -808,6 +808,9 @@ impl StreamingServer {
         let monitor_full_quality = self.full_quality.clone();
         let monitor_preset = self.preset.clone();
         let monitor_mic_tx = self.mic_tx.clone();
+        // The client's own measurements land in the session record, so the
+        // monitor needs the recorder the encode task shares.
+        let monitor_recorder = telemetry.as_ref().map(|t| t.0.clone());
         let monitor_span = tracing::info_span!("connection_monitor");
         tasks.spawn(async move {
             info!("Connection monitor started");
@@ -830,15 +833,20 @@ impl StreamingServer {
                                     Ok(data) if !data.is_empty() => {
                                         debug!(size = data.len(), "Received client data");
 
-                                        // Skip 16-byte packets: these are stats feedback
-                                        if data.len() == 16 {
-                                            debug!("Handled stats packet via low-level loop");
-                                            continue;
-                                        }
-
                                         // Parse as binary InputPacket
                                         match InputPacket::decode(&data) {
                                             Ok(packet) => {
+                                                // The client's measurements are
+                                                // control-plane: they never reach
+                                                // the injector and are not blocked
+                                                // by view-only, so a watched-only
+                                                // session still reports.
+                                                if record_client_measurement(
+                                                    monitor_recorder.as_deref(),
+                                                    &packet,
+                                                ) {
+                                                    continue;
+                                                }
                                                 // IDR requests are control-plane:
                                                 // signal the encoder, don't inject input.
                                                 if matches!(packet, InputPacket::RequestKeyframe) {
@@ -1082,6 +1090,31 @@ impl StreamingServer {
     /// Check if the server is still running
     pub fn is_running(&self) -> bool {
         !self.cancel.is_cancelled()
+    }
+}
+
+/// Fold the client's own measurements into the session record, and report
+/// whether `packet` was one of them. These frames are reporting rather than
+/// injection, so the monitor consumes them before the input relay and before
+/// the view-only filter: a watched-only session still has to produce a record.
+fn record_client_measurement(recorder: Option<&SessionRecorder>, packet: &InputPacket) -> bool {
+    match packet {
+        InputPacket::LinkFeedback { rtt, lost_packets } => {
+            match recorder {
+                Some(recorder) => recorder.record_client_link(*rtt, *lost_packets),
+                None => debug!("Telemetry off: dropping client link feedback"),
+            }
+            true
+        }
+        InputPacket::ClientSamples { kind, values } => {
+            match recorder {
+                Some(recorder) if recorder.record_client_samples(*kind, values) => {}
+                Some(_) => debug!(kind = *kind, "Unknown client sample kind"),
+                None => debug!(kind = *kind, "Telemetry off: dropping client samples"),
+            }
+            true
+        }
+        _ => false,
     }
 }
 
@@ -1391,6 +1424,58 @@ mod tests {
         let server = StreamingServer::new(config, transport_config, cert_manager);
 
         assert!(server.is_running());
+    }
+
+    /// The monitor used to recognise the client's stats frame by its length,
+    /// which silently swallowed every 16-byte control frame. Dispatch is by tag
+    /// again, and what it dispatches must land in the record rather than the
+    /// input channel.
+    #[test]
+    fn client_measurements_are_recorded_and_never_treated_as_input() {
+        use crate::streaming::TransportFamily;
+        use crate::streaming::input_packet::{SAMPLE_DECODE, SAMPLE_E2E};
+        use std::time::Duration;
+
+        let recorder = SessionRecorder::new(TransportFamily::Quinn, None);
+        assert!(record_client_measurement(
+            Some(&recorder),
+            &InputPacket::LinkFeedback {
+                rtt: Duration::from_millis(28),
+                lost_packets: 4,
+            }
+        ));
+        assert!(record_client_measurement(
+            Some(&recorder),
+            &InputPacket::ClientSamples {
+                kind: SAMPLE_DECODE,
+                values: vec![3_000, 9_000],
+            }
+        ));
+        assert!(record_client_measurement(
+            Some(&recorder),
+            &InputPacket::ClientSamples {
+                kind: SAMPLE_E2E,
+                values: vec![40_000],
+            }
+        ));
+        assert!(
+            !record_client_measurement(
+                Some(&recorder),
+                &InputPacket::MouseClick {
+                    button: 0,
+                    pressed: true,
+                }
+            ),
+            "an input event is not a measurement; the relay must keep filtering it"
+        );
+
+        let report = recorder.finish(SessionOutcome::Completed, 0);
+        assert_eq!(report.decode_tail.map(|s| s.count), Some(2));
+        assert_eq!(report.render_tail.map(|s| s.count), None);
+        assert_eq!(report.e2e_tail.map(|s| s.count), Some(1));
+        // A recorder that was never handed a connection says so, rather than
+        // reporting a link built out of the client's numbers alone.
+        assert!(report.link.is_none());
     }
 
     #[test]

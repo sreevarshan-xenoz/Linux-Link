@@ -17,6 +17,12 @@
 //! actionable once it can be blamed on a layer. Those are the library's numbers,
 //! and where iroh does not expose one it is absent from the line rather than
 //! reported as zero.
+//!
+//! The last stretch of the chain — decode, render, and the client's own view of
+//! the link — happens on the other end of the wire and is invisible from here,
+//! so the client ships those measurements back over the streaming connection and
+//! this recorder turns them into the same kind of distribution as the encode
+//! tail. A record whose client never reported is missing those keys entirely.
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -80,6 +86,24 @@ pub struct SessionReport {
     pub rtt_tail: Option<Summary>,
     /// Per-frame encode time distribution, or `None` when no frame was encoded.
     pub encode_tail: Option<Summary>,
+    /// Client-side distributions, reported back over the streaming connection
+    /// by the device doing the decoding. All three are `None` for a session
+    /// whose client never sent a sample — which includes every desktop-to-desktop
+    /// client today, so `None` here is "nobody measured", never "instant".
+    ///
+    /// They live on the server's record because the *server* holds the
+    /// reservoir that computes the percentiles: the client only ships batches
+    /// of durations, so a phone's decode tail is built by the same code that
+    /// built the encode tail and is comparable with it.
+    ///
+    /// - `decode_tail`: MediaCodec feed → drained-frame time per frame.
+    /// - `render_tail`: gap between successive frames reaching the panel.
+    /// - `e2e_tail`: the R4 E3 compositor-true probe sample (capture → arrival,
+    ///   desktop clock plus one network leg), which is the number the HUD shows
+    ///   smoothed. Decode and render sit *after* this and are not in it.
+    pub decode_tail: Option<Summary>,
+    pub render_tail: Option<Summary>,
+    pub e2e_tail: Option<Summary>,
     /// What the transport itself said about the link, or `None` for a session
     /// that never got far enough to sample one.
     pub link: Option<LinkReport>,
@@ -122,6 +146,24 @@ pub struct LinkReport {
     /// Largest UDP payload the path was found to carry.
     pub path_mtu: Option<u16>,
     pub black_holes_detected: Option<u64>,
+    /// RTT as the *client* measured it on the last feedback frame, ms. The
+    /// server samples its own end every few seconds; this is the far end's
+    /// reading of the same path. `None` means no feedback arrived — and like
+    /// every other field here, it is absent whenever the session never sampled
+    /// the transport, since that drops the whole block.
+    pub client_rtt_ms: Option<u64>,
+    /// Packets the client saw lost on *receive*, cumulative. Loss the sender's
+    /// statistics cannot see at all — the reason this number is worth a frame.
+    pub client_lost_packets: Option<u64>,
+}
+
+/// The client's own view of the link, from a [`InputPacket::LinkFeedback`] frame.
+///
+/// [`InputPacket::LinkFeedback`]: super::input_packet::InputPacket::LinkFeedback
+#[derive(Debug, Clone, Copy)]
+struct ClientLink {
+    rtt_ms: u64,
+    lost_packets: u64,
 }
 
 impl LinkReport {
@@ -130,6 +172,7 @@ impl LinkReport {
         peak_cwnd_bytes: Option<u64>,
         relayed_secs: u64,
         path_changes: u32,
+        client: Option<ClientLink>,
     ) -> Self {
         Self {
             lost_packets: stats.lost_packets,
@@ -142,6 +185,8 @@ impl LinkReport {
             peak_cwnd_bytes,
             path_mtu: stats.path_mtu,
             black_holes_detected: stats.black_holes_detected,
+            client_rtt_ms: client.map(|c| c.rtt_ms),
+            client_lost_packets: client.map(|c| c.lost_packets),
         }
     }
 
@@ -166,6 +211,11 @@ impl LinkReport {
             ("cwnd_pk", self.peak_cwnd_bytes.map(|v| v.to_string())),
             ("mtu", self.path_mtu.map(|v| v.to_string())),
             ("black", self.black_holes_detected.map(|v| v.to_string())),
+            ("phone_rtt", self.client_rtt_ms.map(|v| v.to_string())),
+            (
+                "phone_lost",
+                self.client_lost_packets.map(|v| v.to_string()),
+            ),
         ] {
             if let Some(value) = value {
                 write!(tail, "\t{key}={value}").expect("infallible");
@@ -196,6 +246,15 @@ impl SessionReport {
         }
         if let Some(tail) = &self.encode_tail {
             write!(line, "\t{}", tail.format_tail("enc")).expect("infallible");
+        }
+        for (tail, key) in [
+            (self.decode_tail.as_ref(), "dec"),
+            (self.render_tail.as_ref(), "rnd"),
+            (self.e2e_tail.as_ref(), "e2e"),
+        ] {
+            if let Some(tail) = tail {
+                write!(line, "\t{}", tail.format_tail(key)).expect("infallible");
+            }
         }
         if let Some(link) = &self.link {
             write!(line, "{}", link.format()).expect("infallible");
@@ -292,6 +351,14 @@ pub struct SessionRecorder {
     rtt_samples: AtomicU64,
     rtt_tail: Samples,
     encode_tail: Samples,
+    /// Client-reported distributions, filled from `ClientSamples` frames by the
+    /// connection monitor. A `Samples` is already internally locked, so these
+    /// need no wrapper and the recorder stays `&self` on every path.
+    decode_tail: Samples,
+    render_tail: Samples,
+    e2e_tail: Samples,
+    /// The client's last link-feedback frame, if one ever arrived.
+    client_link: Mutex<Option<ClientLink>>,
     observed: Mutex<PathObserver>,
     family: TransportFamily,
     device_id: Option<String>,
@@ -306,6 +373,10 @@ impl SessionRecorder {
             rtt_samples: AtomicU64::new(0),
             rtt_tail: Samples::new(),
             encode_tail: Samples::new(),
+            decode_tail: Samples::new(),
+            render_tail: Samples::new(),
+            e2e_tail: Samples::new(),
+            client_link: Mutex::new(None),
             observed: Mutex::new(PathObserver::default()),
             family,
             device_id,
@@ -340,6 +411,33 @@ impl SessionRecorder {
         self.encode_tail.push_micros(elapsed.as_micros() as u64);
     }
 
+    /// Fold one batch of client-measured durations into the distribution named
+    /// by `kind` (a `SAMPLE_*` id). Returns `false` for a kind this record has
+    /// no place for — a newer client than server — so the caller can say so
+    /// rather than dropping the batch silently.
+    pub fn record_client_samples(&self, kind: u8, values: &[u32]) -> bool {
+        let tail = match kind {
+            super::input_packet::SAMPLE_DECODE => &self.decode_tail,
+            super::input_packet::SAMPLE_RENDER => &self.render_tail,
+            super::input_packet::SAMPLE_E2E => &self.e2e_tail,
+            _ => return false,
+        };
+        for &micros in values {
+            tail.push_micros(u64::from(micros));
+        }
+        true
+    }
+
+    /// Take the client's own reading of the link: the far end's measurement of
+    /// the same path, plus a received-loss count that is not observable from
+    /// here at all.
+    pub fn record_client_link(&self, rtt: Duration, lost_packets: u64) {
+        *self.client_link.lock().unwrap_or_else(|p| p.into_inner()) = Some(ClientLink {
+            rtt_ms: rtt.as_millis() as u64,
+            lost_packets,
+        });
+    }
+
     /// The transport's account of the link, or `None` if it was never sampled.
     ///
     /// A session's last seconds are where a stall lives, and the pipeline only
@@ -357,6 +455,7 @@ impl SessionRecorder {
         let stats = connection.stats();
         let address = connection.remote_address();
         let now = Instant::now();
+        let client = *self.client_link.lock().unwrap_or_else(|p| p.into_inner());
         let mut observed = self.observed.lock().unwrap_or_else(|p| p.into_inner());
         observed.observe(&stats, address, now);
         let relayed_secs = observed.relayed_secs(now);
@@ -366,6 +465,7 @@ impl SessionRecorder {
             observed.peak_cwnd_bytes,
             relayed_secs,
             observed.path_changes,
+            client,
         ))
     }
 
@@ -391,6 +491,9 @@ impl SessionRecorder {
             device_id: self.device_id.clone(),
             rtt_tail: self.rtt_tail.summary_ms(),
             encode_tail: self.encode_tail.summary_ms(),
+            decode_tail: self.decode_tail.summary_ms(),
+            render_tail: self.render_tail.summary_ms(),
+            e2e_tail: self.e2e_tail.summary_ms(),
             link: self.link_report(),
         }
     }
@@ -490,6 +593,7 @@ fn info_line(report: &SessionReport) {
 mod tests {
     use super::*;
     use crate::streaming::connection::{Connection, ConnectionError, InStream, OutStream};
+    use crate::streaming::input_packet::{SAMPLE_DECODE, SAMPLE_E2E, SAMPLE_RENDER};
     use async_trait::async_trait;
     use std::net::{IpAddr, Ipv4Addr};
 
@@ -549,6 +653,9 @@ mod tests {
             device_id: Some("phone-1".into()),
             rtt_tail: None,
             encode_tail: None,
+            decode_tail: None,
+            render_tail: None,
+            e2e_tail: None,
             link: None,
         }
     }
@@ -608,6 +715,101 @@ mod tests {
         assert_eq!(tail.p95_ms, 120, "a one-in-ten stall has to be visible");
         assert_eq!(tail.p99_ms, 120);
         assert_eq!(tail.max_ms, 120);
+    }
+
+    #[test]
+    fn the_client_measures_join_the_servers_distributions() {
+        // A phone that decodes in 4 ms usually and 200 ms on one frame in fifty
+        // is the same invisible failure class the encode tail exists for, and
+        // the server cannot see it at all — it has to be reported in.
+        let rec = SessionRecorder::new(TransportFamily::Iroh, None);
+        for _ in 0..90 {
+            assert!(rec.record_client_samples(SAMPLE_DECODE, &[4_000]));
+        }
+        assert!(rec.record_client_samples(SAMPLE_DECODE, &[200_000; 10]));
+        assert!(rec.record_client_samples(SAMPLE_RENDER, &[16_000; 60]));
+        assert!(rec.record_client_samples(SAMPLE_E2E, &[55_000; 60]));
+        let report = rec.finish(SessionOutcome::Completed, 0);
+        let decode = report.decode_tail.expect("decode samples");
+        assert_eq!(decode.count, 100);
+        assert_eq!(decode.p50_ms, 4);
+        assert_eq!(decode.p95_ms, 200);
+        assert_eq!(report.render_tail.expect("render samples").p50_ms, 16);
+        assert_eq!(report.e2e_tail.expect("e2e samples").p50_ms, 55);
+        let line = report.format();
+        for key in ["dec_p99=", "rnd_p50=", "e2e_p50="] {
+            assert!(line.contains(key), "missing {key} in {line}");
+        }
+    }
+
+    #[test]
+    fn a_batch_that_arrives_in_pieces_still_makes_one_distribution() {
+        // The client flushes in frame-sized chunks, so the record must be built
+        // from many batches rather than assuming one call holds the session.
+        let rec = SessionRecorder::new(TransportFamily::Iroh, None);
+        for value in [1_000u32, 2_000, 3_000] {
+            rec.record_client_samples(SAMPLE_DECODE, &[value]);
+        }
+        let tail = rec
+            .finish(SessionOutcome::Completed, 0)
+            .decode_tail
+            .unwrap();
+        assert_eq!((tail.count, tail.p50_ms, tail.max_ms), (3, 2, 3));
+    }
+
+    #[test]
+    fn a_sample_kind_with_no_distribution_is_refused_not_swallowed() {
+        // A newer client can invent a kind this server has no place for. The
+        // caller has to be told, because `true` is what "recorded" means here.
+        let rec = SessionRecorder::new(TransportFamily::Iroh, None);
+        assert!(!rec.record_client_samples(9, &[4_000]));
+        let report = rec.finish(SessionOutcome::Completed, 0);
+        assert!(report.decode_tail.is_none() && report.render_tail.is_none());
+    }
+
+    #[test]
+    fn the_clients_link_reading_lands_in_the_link_block() {
+        let (_link, connection) = fake(
+            ConnectionStats {
+                lost_packets: 2,
+                ..Default::default()
+            },
+            addr(11),
+        );
+        let rec = SessionRecorder::new(TransportFamily::Iroh, None);
+        // Before any feedback frame: the server's own numbers are there, the
+        // phone's are absent rather than zero.
+        rec.sample(&connection);
+        let before = rec.finish(SessionOutcome::Completed, 0);
+        let link = before.link.expect("sampled");
+        assert_eq!(link.lost_packets, 2);
+        assert!(link.client_rtt_ms.is_none() && link.client_lost_packets.is_none());
+        assert!(
+            !before.format().contains("phone_rtt="),
+            "{}",
+            before.format()
+        );
+
+        let rec = SessionRecorder::new(TransportFamily::Iroh, None);
+        rec.sample(&connection);
+        rec.record_client_link(Duration::from_millis(31), 7);
+        let after = rec.finish(SessionOutcome::Completed, 0);
+        let link = after.link.expect("sampled");
+        assert_eq!(
+            (link.client_rtt_ms, link.client_lost_packets),
+            (Some(31), Some(7)),
+            "receive-side loss is only ever knowable by the receiver"
+        );
+        assert!(
+            after.format().contains("phone_rtt=31"),
+            "{}",
+            after.format()
+        );
+        assert!(
+            after.format().contains("phone_lost=7"),
+            "{}",
+            after.format()
+        );
     }
 
     #[test]

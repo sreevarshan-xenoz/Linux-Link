@@ -3,6 +3,10 @@
 //! Provides a compact binary encoding for mouse, keyboard, and scroll events,
 //! replacing the JSON-over-TCP KDE Connect protocol with a much more efficient
 //! format (~3-5 bytes per event vs ~80 bytes JSON).
+//!
+//! The same tag space also carries the client's own measurements back the other
+//! way (`LinkFeedback`, `ClientSamples`): one stream of frames the server can
+//! dispatch by tag, so nothing on this connection is ever untagged.
 
 use anyhow::{Context, Result};
 
@@ -20,6 +24,86 @@ const TAG_VIEW_ONLY: u8 = 9;
 const TAG_FULL_QUALITY: u8 = 10;
 const TAG_MIC: u8 = 11;
 const TAG_QUALITY_PRESET: u8 = 12;
+const TAG_LINK_FEEDBACK: u8 = 13;
+const TAG_CLIENT_SAMPLES: u8 = 14;
+
+/// Which client-side distribution a [`InputPacket::ClientSamples`] batch
+/// belongs to. Shared client↔server like the preset ids, so these must never
+/// be renumbered.
+pub const SAMPLE_DECODE: u8 = 0;
+pub const SAMPLE_RENDER: u8 = 1;
+pub const SAMPLE_E2E: u8 = 2;
+
+/// Longest sample batch one frame can carry: the count is a `u8`, so a client
+/// producing more than this flushes in chunks.
+pub const MAX_SAMPLES_PER_FRAME: usize = 255;
+
+/// Largest sample expressible on the wire, in microseconds. Durations travel
+/// as `u32` micros, so a frame that took longer than this to decode or render
+/// is reported at the ceiling — a stall that extreme is already obvious in the
+/// frame gap, and the ceiling keeps it from being reported as a tiny number.
+pub const MAX_SAMPLE_MICROS: u32 = u32::MAX;
+
+/// Clamp one duration in microseconds into the wire range (see
+/// [`MAX_SAMPLE_MICROS`]). Pure, so the truncation rule has one definition.
+pub fn clamp_sample_micros(value_us: u64) -> u32 {
+    value_us.try_into().unwrap_or(MAX_SAMPLE_MICROS)
+}
+
+/// How many samples [`SampleBatch`] holds before it starts discarding. Eight
+/// flushes' worth at 255 per frame: a client whose reporting loop is starved
+/// keeps its recent history rather than its oldest, which is where a stall that
+/// is still happening lives.
+pub const SAMPLE_BATCH_CAPACITY: usize = MAX_SAMPLES_PER_FRAME * 8;
+
+/// Durations waiting to be reported to the server, in microseconds.
+///
+/// The client cannot know how long a session will run or how fast it is
+/// sampling, so it holds a bounded batch and hands it to the server in
+/// [`MAX_SAMPLES_PER_FRAME`]-sized chunks; the server's reservoir is what
+/// computes percentiles. Shared behind an `Arc` by whoever measures and whoever
+/// flushes — both sides only ever need `&self`.
+#[derive(Default)]
+pub struct SampleBatch {
+    values: std::sync::Mutex<Vec<u32>>,
+}
+
+impl SampleBatch {
+    /// Record one duration. Returns `false` when the batch was full and the
+    /// oldest sample had to be dropped to keep this one.
+    pub fn push(&self, value_us: u64) -> bool {
+        let mut values = self.values.lock().unwrap_or_else(|p| p.into_inner());
+        if values.len() >= SAMPLE_BATCH_CAPACITY {
+            values.remove(0);
+            values.push(clamp_sample_micros(value_us));
+            return false;
+        }
+        values.push(clamp_sample_micros(value_us));
+        true
+    }
+
+    /// Take the next chunk to send, oldest sample first, or `None` when nothing
+    /// is pending. A batch longer than one frame's worth is drained over
+    /// several calls.
+    pub fn take_chunk(&self) -> Option<Vec<u32>> {
+        let mut values = self.values.lock().unwrap_or_else(|p| p.into_inner());
+        if values.is_empty() {
+            return None;
+        }
+        let take = values.len().min(MAX_SAMPLES_PER_FRAME);
+        Some(values.drain(..take).collect())
+    }
+
+    /// Samples currently held. For tests and for a caller deciding whether to
+    /// open a stream at all.
+    pub fn len(&self) -> usize {
+        self.values.lock().unwrap_or_else(|p| p.into_inner()).len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
 
 /// R4 E5: named link-profile presets, switchable from the phone HUD. A
 /// preset is a *ceiling* the user asks for; the server folds it together
@@ -114,6 +198,30 @@ pub enum InputPacket {
     /// server folds it with the A3 relay floor and steers the live encoder
     /// bitrate. `preset` carries the id directly.
     QualityPreset { preset: u8 },
+    /// The client's own view of the link, sent periodically on a feedback
+    /// stream. `rtt` is what the client's transport measured (the same path the
+    /// server samples, from the other end), and `lost_packets` is
+    /// **receive-side** loss, which the sender's statistics cannot see at all —
+    /// asymmetric loss is normal on a WAN and is the one number here that is
+    /// only knowable by the receiver.
+    ///
+    /// This variant exists because the same two numbers used to go out as an
+    /// untagged 16-byte blob that the server matched on length and threw away,
+    /// which also meant any future 16-byte packet was silently swallowed.
+    LinkFeedback {
+        rtt: std::time::Duration,
+        lost_packets: u64,
+    },
+    /// One batch of client-measured durations in microseconds, for the metric
+    /// named by `kind` (see [`SAMPLE_DECODE`]..[`SAMPLE_E2E`]). The client keeps
+    /// the samples it takes between flushes and hands them over in bulk so the
+    /// **server's** reservoir computes the percentiles: one distribution per
+    /// session ends up in one record, the same way the encode tail does.
+    ///
+    /// Control-plane like the preset rows — never injected, survives view-only.
+    /// Values are clamped to [`MAX_SAMPLE_MICROS`] on the way in; use
+    /// [`clamp_sample_micros`] so the rule has one definition.
+    ClientSamples { kind: u8, values: Vec<u32> },
     /// Gamepad state: 6 analog axes + 16-bit button bitmask.
     Gamepad {
         /// Left stick X, Left stick Y, Right stick X, Right stick Y, L2, R2.
@@ -192,6 +300,28 @@ impl InputPacket {
                 buf
             }
             InputPacket::QualityPreset { preset } => vec![TAG_QUALITY_PRESET, *preset],
+            InputPacket::LinkFeedback { rtt, lost_packets } => {
+                let mut buf = Vec::with_capacity(17);
+                buf.push(TAG_LINK_FEEDBACK);
+                buf.extend_from_slice(&(rtt.as_micros() as u64).to_le_bytes());
+                buf.extend_from_slice(&lost_packets.to_le_bytes());
+                buf
+            }
+            InputPacket::ClientSamples { kind, values } => {
+                // A caller that overruns the 255-sample frame loses the
+                // remainder rather than putting a lying count on the wire;
+                // SampleBatch::take_chunk is the chunking path that cannot
+                // overflow in the first place.
+                let values = &values[..values.len().min(MAX_SAMPLES_PER_FRAME)];
+                let mut buf = Vec::with_capacity(3 + values.len() * 4);
+                buf.push(TAG_CLIENT_SAMPLES);
+                buf.push(*kind);
+                buf.push(values.len() as u8);
+                for &value in values {
+                    buf.extend_from_slice(&value.to_le_bytes());
+                }
+                buf
+            }
             InputPacket::WindowCrop {
                 x,
                 y,
@@ -351,6 +481,40 @@ impl InputPacket {
                 );
                 Ok(InputPacket::QualityPreset { preset: data[1] })
             }
+            TAG_LINK_FEEDBACK => {
+                anyhow::ensure!(
+                    data.len() == 17,
+                    "LinkFeedback packet must be 17 bytes, got {}",
+                    data.len()
+                );
+                Ok(InputPacket::LinkFeedback {
+                    rtt: std::time::Duration::from_micros(u64::from_le_bytes(
+                        data[1..9].try_into().unwrap(),
+                    )),
+                    lost_packets: u64::from_le_bytes(data[9..17].try_into().unwrap()),
+                })
+            }
+            TAG_CLIENT_SAMPLES => {
+                anyhow::ensure!(
+                    data.len() >= 3,
+                    "ClientSamples packet needs a 3-byte header"
+                );
+                let count = data[2] as usize;
+                anyhow::ensure!(
+                    data.len() == 3 + count * 4,
+                    "ClientSamples payload must match its count, got {} bytes for {count} samples",
+                    data.len()
+                );
+                Ok(InputPacket::ClientSamples {
+                    kind: data[1],
+                    values: data[3..]
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|chunk| u32::from_le_bytes(*chunk))
+                        .collect(),
+                })
+            }
             _ => {
                 anyhow::bail!("Unknown input packet tag: {}", tag);
             }
@@ -367,6 +531,7 @@ impl From<InputPacket> for Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn test_mouse_move_roundtrip() {
@@ -698,6 +863,150 @@ mod tests {
         assert!(InputPacket::decode(&[11, 1, 0, 0]).is_err());
         assert!(InputPacket::decode(&[11, 1, 5, 0, 0, 0, 1, 2]).is_err());
         assert!(InputPacket::decode(&[11, 1, 0, 0, 0, 0, 9]).is_err());
+    }
+
+    #[test]
+    fn test_link_feedback_roundtrip_and_framing() {
+        let data = InputPacket::LinkFeedback {
+            rtt: Duration::from_micros(28_400),
+            lost_packets: 12,
+        }
+        .encode();
+        assert_eq!(data.len(), 17);
+        assert_eq!(data[0], 13);
+        match InputPacket::decode(&data).unwrap() {
+            InputPacket::LinkFeedback { rtt, lost_packets } => {
+                assert_eq!(rtt, Duration::from_micros(28_400));
+                assert_eq!(lost_packets, 12);
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+        // Strict length: the old untagged 16-byte blob is no longer a shape
+        // anything on this connection can send by accident.
+        assert!(InputPacket::decode(&data[..16]).is_err());
+        assert!(InputPacket::decode(&[&data[..], &[0u8]].concat()).is_err());
+    }
+
+    #[test]
+    fn test_client_samples_roundtrip_and_framing() {
+        for kind in [SAMPLE_DECODE, SAMPLE_RENDER, SAMPLE_E2E] {
+            let values = vec![4_000u32, 8_200, 120_000];
+            let data = InputPacket::ClientSamples {
+                kind,
+                values: values.clone(),
+            }
+            .encode();
+            assert_eq!(data.len(), 3 + 12);
+            assert_eq!(&data[..3], &[14, kind, 3]);
+            match InputPacket::decode(&data).unwrap() {
+                InputPacket::ClientSamples {
+                    kind: got_kind,
+                    values: got,
+                } => {
+                    assert_eq!(got_kind, kind);
+                    assert_eq!(got, values);
+                }
+                other => panic!("wrong variant: {other:?}"),
+            }
+        }
+        // An empty batch is legal on the wire and decodes as such; the recorder
+        // is what decides it says nothing.
+        let empty = InputPacket::ClientSamples {
+            kind: SAMPLE_DECODE,
+            values: Vec::new(),
+        }
+        .encode();
+        assert_eq!(empty, vec![14, 0, 0]);
+        assert!(matches!(
+            InputPacket::decode(&empty).unwrap(),
+            InputPacket::ClientSamples { ref values, .. } if values.is_empty()
+        ));
+    }
+
+    #[test]
+    fn test_client_samples_length_must_match_count() {
+        assert!(InputPacket::decode(&[14, 0, 1]).is_err());
+        assert!(InputPacket::decode(&[14, 0, 1, 0, 0, 0]).is_err());
+        assert!(InputPacket::decode(&[14, 0, 1, 0, 0, 0, 0, 0]).is_err());
+        let mut oversized = vec![14u8, 0, 255];
+        oversized.extend((0..255 * 4).map(|i| i as u8));
+        assert!(InputPacket::decode(&oversized).is_ok());
+        oversized.push(0);
+        assert!(InputPacket::decode(&oversized).is_err());
+    }
+
+    #[test]
+    fn sample_batch_and_clamp_bound_what_the_wire_can_carry() {
+        assert_eq!(
+            3 + MAX_SAMPLES_PER_FRAME * 4,
+            InputPacket::ClientSamples {
+                kind: SAMPLE_RENDER,
+                values: vec![0u32; MAX_SAMPLES_PER_FRAME],
+            }
+            .encode()
+            .len()
+        );
+        // A caller that overruns gets a valid, shorter frame — never a count
+        // that disagrees with the payload.
+        let over = InputPacket::ClientSamples {
+            kind: SAMPLE_RENDER,
+            values: vec![7u32; MAX_SAMPLES_PER_FRAME + 10],
+        }
+        .encode();
+        assert_eq!(over[2] as usize, MAX_SAMPLES_PER_FRAME);
+        assert_eq!(over.len(), 3 + MAX_SAMPLES_PER_FRAME * 4);
+        assert_eq!(clamp_sample_micros(4_000), 4_000);
+        assert_eq!(
+            clamp_sample_micros(u64::from(MAX_SAMPLE_MICROS)),
+            MAX_SAMPLE_MICROS
+        );
+        assert_eq!(
+            clamp_sample_micros(u64::from(MAX_SAMPLE_MICROS) + 1),
+            MAX_SAMPLE_MICROS
+        );
+    }
+
+    #[test]
+    fn sample_batch_drains_in_order_and_bounds_itself() {
+        let batch = SampleBatch::default();
+        assert!(batch.is_empty());
+        assert!(batch.take_chunk().is_none());
+        for i in 0..(MAX_SAMPLES_PER_FRAME + 5) {
+            assert!(batch.push(i as u64 * 1_000), "kept growing to {i}");
+        }
+        // First chunk is a full frame's worth, oldest first; the remainder
+        // waits for the next flush.
+        let first = batch.take_chunk().unwrap();
+        assert_eq!(first.len(), MAX_SAMPLES_PER_FRAME);
+        assert_eq!(first.first().copied(), Some(0));
+        let second = batch.take_chunk().unwrap();
+        assert_eq!(second.len(), 5);
+        assert_eq!(second[0], 255 * 1_000);
+        assert!(batch.take_chunk().is_none());
+
+        // A starved flush loop cannot grow the batch without limit, and what it
+        // drops is the oldest sample rather than the stall it just measured.
+        let tight = SampleBatch::default();
+        for i in 0..(SAMPLE_BATCH_CAPACITY + 100) {
+            tight.push(i as u64);
+        }
+        assert_eq!(tight.len(), SAMPLE_BATCH_CAPACITY);
+        let mut last = None;
+        while let Some(chunk) = tight.take_chunk() {
+            assert!(chunk.len() <= MAX_SAMPLES_PER_FRAME);
+            last = chunk.last().copied();
+        }
+        assert_eq!(
+            last,
+            Some(SAMPLE_BATCH_CAPACITY as u32 + 99),
+            "the newest sample must survive a saturated batch"
+        );
+        // Anything over the wire range arrives clamped, not wrapped.
+        assert!(tight.push(u64::from(MAX_SAMPLE_MICROS) + 10_000));
+        assert_eq!(
+            tight.take_chunk().unwrap().last().copied(),
+            Some(MAX_SAMPLE_MICROS)
+        );
     }
 
     #[test]

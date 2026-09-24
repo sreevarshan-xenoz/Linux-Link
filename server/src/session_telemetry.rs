@@ -4,7 +4,10 @@
 //! pipeline run appends one outcome line (LAN / WAN punched / WAN relayed /
 //! rejected / failed, with duration, mean RTT, wire goodput and the transport's
 //! own account of loss, congestion window, path MTU and path changes) to a
-//! size-capped log under the state dir. The production counterpart of the
+//! size-capped log under the state dir. Percentile tails ride the same line:
+//! `rtt_*`/`enc_*` measured here, `dec_*`/`rnd_*`/`e2e_*` reported back by the
+//! device doing the decoding, plus its own reading of the path as `phone_*`.
+//! The production counterpart of the
 //! research finding that hole punching succeeds ~70% of the time even after
 //! prerequisites — the relayed share is a number we must measure, not
 //! assume. `linux-link sessions` renders the log for humans.
@@ -233,6 +236,9 @@ mod tests {
             device_id: Some("pixel-9".into()),
             rtt_tail: None,
             encode_tail: None,
+            decode_tail: None,
+            render_tail: None,
+            e2e_tail: None,
             link: None,
         }
     }
@@ -350,6 +356,10 @@ mod tests {
             peak_cwnd_bytes: None,
             path_mtu: None,
             black_holes_detected: None,
+            // The phone's own reading does arrive over iroh, unlike the four
+            // above: it is measured by the client, not by the transport API.
+            client_rtt_ms: Some(28),
+            client_lost_packets: Some(3),
         });
         append(
             path.clone(),
@@ -362,12 +372,15 @@ mod tests {
         assert!(line.contains("path_chg=1"), "{line}");
         assert!(line.contains("relayed_s=4"), "{line}");
         assert!(line.contains("lost_pk=12"), "{line}");
+        assert!(line.contains("phone_rtt=28"), "{line}");
+        assert!(line.contains("phone_lost=3"), "{line}");
         assert!(!line.contains("mtu="), "{line}");
 
         let records = read_records_from(&path, 10).unwrap();
         let link = &records[0]["link"];
         assert_eq!(link["path_changes"], 1);
         assert_eq!(link["relayed_secs"], 4);
+        assert_eq!(link["client_rtt_ms"], 28);
         assert!(link["path_mtu"].is_null(), "{link}");
         std::fs::remove_dir_all(&dir).ok();
     }

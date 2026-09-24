@@ -56,7 +56,9 @@ pub use connection::{
     SharedConnection, TransportFamily,
 };
 pub use encoder_detect::{AvailableEncoders, HardwareEncoder, probe_encoders, resolve_encoder};
-pub use input_packet::InputPacket;
+pub use input_packet::{
+    InputPacket, MAX_SAMPLES_PER_FRAME, SAMPLE_DECODE, SAMPLE_E2E, SAMPLE_RENDER, SampleBatch,
+};
 #[cfg(feature = "wan")]
 pub use iroh_connection::{IrohConnection, IrohDial};
 pub use session::{SessionType, detect_session_type};
