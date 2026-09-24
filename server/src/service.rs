@@ -884,11 +884,11 @@ pub async fn pair(pin: Option<String>, grant: Option<u64>) -> Result<()> {
 
 /// Compact rendering of a grant duration for CLI output.
 fn humantime(secs: u64) -> String {
-    if secs % 86400 == 0 {
+    if secs.is_multiple_of(86400) {
         format!("{}d", secs / 86400)
-    } else if secs % 3600 == 0 {
+    } else if secs.is_multiple_of(3600) {
         format!("{}h", secs / 3600)
-    } else if secs % 60 == 0 {
+    } else if secs.is_multiple_of(60) {
         format!("{}m", secs / 60)
     } else {
         format!("{}s", secs)

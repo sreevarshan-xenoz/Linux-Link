@@ -1,7 +1,5 @@
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::time::timeout;
-use uuid::Uuid;
 
 use linux_link_core::protocol::kdeconnect::PluginRegistry;
 use linux_link_core::protocol::v2::{ALPN_V2, IdentityPacketV2, perform_v2_handshake};
@@ -20,9 +18,11 @@ async fn test_reconnect_storm_kills_stale_sessions() -> anyhow::Result<()> {
     let registry = Arc::new(PluginRegistry::new());
 
     // Server
-    let mut server_config = StreamTransportConfig::default();
-    server_config.address = "127.0.0.1:0".parse()?;
-    server_config.alpn = ALPN_V2.to_vec();
+    let server_config = StreamTransportConfig {
+        address: "127.0.0.1:0".parse()?,
+        alpn: ALPN_V2.to_vec(),
+        ..Default::default()
+    };
     let server = StreamServer::new(server_config, &cert_manager).await?;
     let server_addr = server.local_addr()?;
 
@@ -58,27 +58,29 @@ async fn test_reconnect_storm_kills_stale_sessions() -> anyhow::Result<()> {
         let cert_mgr = cert_manager.clone();
 
         let handle = tokio::spawn(async move {
-            let mut client_config = StreamTransportConfig::default();
-            client_config.alpn = ALPN_V2.to_vec();
+            let client_config = StreamTransportConfig {
+                alpn: ALPN_V2.to_vec(),
+                ..Default::default()
+            };
             let client = StreamClient::new(client_config, &cert_mgr).unwrap();
 
-            if let Ok(conn) = client.connect(server_addr, "127.0.0.1").await {
-                if let Ok((mut send0, mut recv0)) = conn.open_bi().await {
-                    let local_id = IdentityPacketV2 {
-                        device_id: "storm-client-id".to_string(), // SAME ID for all
-                        device_name: "Storm Client".to_string(),
-                        min_version: 1,
-                        max_version: 1,
-                        capabilities: vec![],
-                    };
+            if let Ok(conn) = client.connect(server_addr, "127.0.0.1").await
+                && let Ok((mut send0, mut recv0)) = conn.open_bi().await
+            {
+                let local_id = IdentityPacketV2 {
+                    device_id: "storm-client-id".to_string(), // SAME ID for all
+                    device_name: "Storm Client".to_string(),
+                    min_version: 1,
+                    max_version: 1,
+                    capabilities: vec![],
+                };
 
-                    if perform_v2_handshake(&mut send0, &mut recv0, &local_id)
-                        .await
-                        .is_ok()
-                    {
-                        // Keep connection alive for a while so they overlap
-                        tokio::time::sleep(Duration::from_millis(1000)).await;
-                    }
+                if perform_v2_handshake(&mut send0, &mut recv0, &local_id)
+                    .await
+                    .is_ok()
+                {
+                    // Keep connection alive for a while so they overlap
+                    tokio::time::sleep(Duration::from_millis(1000)).await;
                 }
             }
         });

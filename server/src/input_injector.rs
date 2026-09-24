@@ -224,13 +224,13 @@ impl InputInjector {
                 Ok(())
             }
             InputBackend::Uinput(state) => {
-                let mut state = state.get_mut().unwrap();
+                let state = state.get_mut().unwrap();
                 let events = [
                     InputEvent::new(EV_ABS, AbsoluteAxisCode::ABS_X.0, x_norm as i32),
                     InputEvent::new(EV_ABS, AbsoluteAxisCode::ABS_Y.0, y_norm as i32),
                     InputEvent::new(EV_SYN, SYN_REPORT, 0),
                 ];
-                emit_abs(&mut state, &events)?;
+                emit_abs(state, &events)?;
                 Ok(())
             }
         }

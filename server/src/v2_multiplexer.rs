@@ -265,7 +265,7 @@ impl DeviceSender for QuicDeviceSender {
 
     async fn send_packet(&self, packet: &NetworkPacket) -> std::result::Result<(), LinuxLinkError> {
         let mut guard = self.send.lock().await;
-        write_framed_json(&mut *guard, packet).await?;
+        write_framed_json(&mut guard, packet).await?;
         Ok(())
     }
 }

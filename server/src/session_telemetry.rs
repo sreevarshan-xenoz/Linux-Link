@@ -12,9 +12,6 @@ use crate::state;
 use anyhow::Result;
 use std::path::PathBuf;
 
-/// Core caps each line's device id at 255 bytes (u8 length prefix), so a
-/// 512-byte buffer always holds a full line.
-const MAX_LINE_BYTES: usize = 512;
 /// Rotation threshold: keep the newest half when the log doubles past it.
 const MAX_LOG_BYTES: u64 = 1024 * 1024;
 

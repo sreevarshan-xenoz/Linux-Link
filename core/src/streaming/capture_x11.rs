@@ -13,7 +13,7 @@ use super::{StreamingConfig, VideoFrame};
 
 /// Convert RGBA to BGRA in-place.
 fn rgba_to_bgra(data: &mut [u8]) {
-    for chunk in data.chunks_exact_mut(4) {
+    for chunk in data.as_chunks_mut::<4>().0 {
         chunk.swap(0, 2);
     }
 }

@@ -1,10 +1,8 @@
 use anyhow::Result;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use linux_link_core::protocol::v2::{ALPN_V2, IdentityPacketV2, perform_v2_handshake};
-use linux_link_core::streaming::chaos::proxy::{ChaosConfig, ChaosProxy};
 use linux_link_core::streaming::transport::{
     CertManager, StreamClient, StreamServer, StreamTransportConfig,
 };
@@ -15,9 +13,11 @@ async fn test_reconnect_storm_single_session_survives() -> Result<()> {
     let cert_manager = Arc::new(CertManager::new()?);
 
     // Server
-    let mut server_config = StreamTransportConfig::default();
-    server_config.address = "127.0.0.1:0".parse()?; // Random port
-    server_config.alpn = ALPN_V2.to_vec();
+    let server_config = StreamTransportConfig {
+        address: "127.0.0.1:0".parse()?, // Random port
+        alpn: ALPN_V2.to_vec(),
+        ..Default::default()
+    };
     let server = StreamServer::new(server_config, &cert_manager).await?;
     let server_addr = server.local_addr()?;
 
@@ -41,7 +41,7 @@ async fn test_reconnect_storm_single_session_survives() -> Result<()> {
                         capabilities: vec![],
                     };
 
-                    if let Ok(peer) = perform_v2_handshake(&mut send0, &mut recv0, &local_id).await
+                    if let Ok(_peer) = perform_v2_handshake(&mut send0, &mut recv0, &local_id).await
                     {
                         // In the real server, we'd check ACTIVE_CLIENTS. Here we simulate it.
                         let mut count = active_sessions.lock().await;
@@ -65,24 +65,29 @@ async fn test_reconnect_storm_single_session_survives() -> Result<()> {
         let handle = tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(i * 10)).await; // Slight jitter
 
-            let mut client_config = StreamTransportConfig::default();
-            client_config.alpn = ALPN_V2.to_vec();
+            let client_config = StreamTransportConfig {
+                alpn: ALPN_V2.to_vec(),
+                ..Default::default()
+            };
             let client = StreamClient::new(client_config, &cert_mgr).unwrap();
 
-            if let Ok(conn) = client.connect(addr, "127.0.0.1").await {
-                if let Ok((mut send0, mut recv0)) = conn.open_bi().await {
-                    let local_id = IdentityPacketV2 {
-                        device_id: "same-client-id".to_string(), // SAME ID!
-                        device_name: "Storm Client".to_string(),
-                        min_version: 1,
-                        max_version: 1,
-                        capabilities: vec![],
-                    };
+            if let Ok(conn) = client.connect(addr, "127.0.0.1").await
+                && let Ok((mut send0, mut recv0)) = conn.open_bi().await
+            {
+                let local_id = IdentityPacketV2 {
+                    device_id: "same-client-id".to_string(), // SAME ID!
+                    device_name: "Storm Client".to_string(),
+                    min_version: 1,
+                    max_version: 1,
+                    capabilities: vec![],
+                };
 
-                    if let Ok(_) = perform_v2_handshake(&mut send0, &mut recv0, &local_id).await {
-                        // Hold open
-                        tokio::time::sleep(Duration::from_millis(500)).await;
-                    }
+                if perform_v2_handshake(&mut send0, &mut recv0, &local_id)
+                    .await
+                    .is_ok()
+                {
+                    // Hold open
+                    tokio::time::sleep(Duration::from_millis(500)).await;
                 }
             }
         });

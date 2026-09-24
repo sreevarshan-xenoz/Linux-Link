@@ -41,20 +41,20 @@ impl Plugin for MonitorsPlugin {
 /// xcap (cross-platform fallback).
 fn enumerate_monitors() -> Vec<MonitorInfo> {
     // Try xcap first as it's cross-platform and already a dependency
-    if let Ok(monitors) = xcap::Monitor::all() {
-        if !monitors.is_empty() {
-            return monitors
-                .into_iter()
-                .enumerate()
-                .map(|(i, m)| MonitorInfo {
-                    index: i as u32,
-                    name: m.name().unwrap_or_else(|_| format!("Monitor {i}")),
-                    width: m.width().unwrap_or(1920),
-                    height: m.height().unwrap_or(1080),
-                    is_primary: i == 0, // Heuristic: first one is primary
-                })
-                .collect();
-        }
+    if let Ok(monitors) = xcap::Monitor::all()
+        && !monitors.is_empty()
+    {
+        return monitors
+            .into_iter()
+            .enumerate()
+            .map(|(i, m)| MonitorInfo {
+                index: i as u32,
+                name: m.name().unwrap_or_else(|_| format!("Monitor {i}")),
+                width: m.width().unwrap_or(1920),
+                height: m.height().unwrap_or(1080),
+                is_primary: i == 0, // Heuristic: first one is primary
+            })
+            .collect();
     }
 
     // Fallback to manual enumeration logic if xcap fails

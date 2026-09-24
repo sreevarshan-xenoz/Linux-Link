@@ -166,7 +166,7 @@ mod tests {
     #[test]
     fn plugin_declares_reply_capability() {
         assert!(
-            NotificationReplyPlugin::default()
+            NotificationReplyPlugin
                 .incoming_capabilities()
                 .contains(&"kdeconnect.linuxlink.notification_reply")
         );

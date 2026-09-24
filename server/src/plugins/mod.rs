@@ -34,10 +34,10 @@ pub fn register_all() -> PluginSet {
     registry.register(monitors::MonitorsPlugin);
     registry.register(windows::WindowsPlugin);
     registry.register(siren::SirenPlugin::new());
-    registry.register(notification_reply::NotificationReplyPlugin::default());
-    registry.register(wake_relay::WakeRelayPlugin::default());
-    registry.register(privacy::PrivacyPlugin::default());
-    registry.register(audio_control::AudioControlPlugin::default());
-    registry.register(pair::PairPlugin::default());
+    registry.register(notification_reply::NotificationReplyPlugin);
+    registry.register(wake_relay::WakeRelayPlugin);
+    registry.register(privacy::PrivacyPlugin);
+    registry.register(audio_control::AudioControlPlugin);
+    registry.register(pair::PairPlugin);
     registry
 }

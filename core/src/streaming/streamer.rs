@@ -195,7 +195,7 @@ impl StreamingServer {
 
         async {
             let peer = connection.remote_address();
-            tracing::Span::current().record("peer", &peer.to_string());
+            tracing::Span::current().record("peer", peer.to_string());
             info!(
                 "Streaming client connected (v1 over v2-capable endpoint): {}",
                 peer
@@ -249,7 +249,7 @@ impl StreamingServer {
             let connection = QuinnConnection::shared(connection);
 
             let peer = connection.remote_address();
-            tracing::Span::current().record("peer", &peer.to_string());
+            tracing::Span::current().record("peer", peer.to_string());
             info!("Streaming client connected: {}", peer);
 
             // 3. Run the capture → encode → send pipeline
@@ -607,7 +607,7 @@ impl StreamingServer {
                                 // Encoder has no output yet (latency/drain phase)
                                 frames_dropped += 1;
                                 frames_since_packet += 1;
-                                if frames_dropped % 30 == 0 {
+                                if frames_dropped.is_multiple_of(30) {
                                     debug!("Encoder latency: {} frames waiting for output", frames_dropped);
                                 }
                                 if frames_since_packet >= STALL_FRAMES
@@ -756,7 +756,7 @@ impl StreamingServer {
                                         counter.fetch_add(data_len as u64, Ordering::Relaxed);
                                     }
 
-                                    if packets_sent % 60 == 0 {
+                                    if packets_sent.is_multiple_of(60) {
                                         debug!(
                                             sent = packets_sent,
                                             bytes = bytes_sent,
@@ -1301,7 +1301,7 @@ async fn run_audio_pipeline(connection: SharedConnection, cancel: CancellationTo
                     packets_sent += 1;
                     packet_seq += 1;
 
-                    if packets_sent % 600 == 0 {
+                    if packets_sent.is_multiple_of(600) {
                         debug!(sent = packets_sent, "Audio streaming healthy");
                     }
                 }

@@ -15,7 +15,7 @@ pub(crate) struct WindowEntry {
     monitor_size: [i32; 2],
 }
 
-fn monitor_of<'a>(monitors: &'a [HyprMonitor], index: i32) -> Option<&'a HyprMonitor> {
+fn monitor_of(monitors: &[HyprMonitor], index: i32) -> Option<&HyprMonitor> {
     usize::try_from(index).ok().and_then(|i| monitors.get(i))
 }
 

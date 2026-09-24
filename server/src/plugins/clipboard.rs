@@ -36,10 +36,10 @@ impl Plugin for ClipboardPlugin {
         match packet.packet_type.as_str() {
             "kdeconnect.clipboard" => {
                 // Remote clipboard update - set local clipboard
-                if let Some(content) = packet.body.get("content").and_then(|v| v.as_str()) {
-                    if let Err(e) = set_clipboard(content).await {
-                        tracing::warn!("Failed to set clipboard: {}", e);
-                    }
+                if let Some(content) = packet.body.get("content").and_then(|v| v.as_str())
+                    && let Err(e) = set_clipboard(content).await
+                {
+                    tracing::warn!("Failed to set clipboard: {}", e);
                 }
             }
             "kdeconnect.clipboard.connect" => {

@@ -9,21 +9,21 @@ use serde_json::json;
 use crate::service;
 use crate::state;
 
-/// PIN pairing (KDE Connect parity, R3 Tier-2 #11b).
-///
-/// Two flows, converging on the same `kdeconnect.pair` `{pin}` packet:
-/// - **push**: the phone requests a PIN (`kdeconnect.linuxlink.pair`
-///   `{requestPin:true}`); the desktop generates one, shows it via a desktop
-///   notification (and the log), and the phone echoes it back.
-/// - **pull**: `linux-link pair` on the desktop writes a PIN file; the phone
-///   enters that PIN and the request validates against the file.
-///
-/// On success the phone's deviceId (learned from its `kdeconnect.identity`)
-/// is persisted to the TrustStore and the response carries the desktop's own
-/// deviceId so the phone can trust *us* back. Enforcement lives in the
-/// service dispatch loop, which gates plugin packets on [`is_trusted`], and
-/// on the QUIC paths, which gate on [`is_paired_device`] (the v2 handshake /
-/// in-band identity carry the real deviceId directly).
+// PIN pairing (KDE Connect parity, R3 Tier-2 #11b).
+//
+// Two flows, converging on the same `kdeconnect.pair` `{pin}` packet:
+// - **push**: the phone requests a PIN (`kdeconnect.linuxlink.pair`
+//   `{requestPin:true}`); the desktop generates one, shows it via a desktop
+//   notification (and the log), and the phone echoes it back.
+// - **pull**: `linux-link pair` on the desktop writes a PIN file; the phone
+//   enters that PIN and the request validates against the file.
+//
+// On success the phone's deviceId (learned from its `kdeconnect.identity`)
+// is persisted to the TrustStore and the response carries the desktop's own
+// deviceId so the phone can trust *us* back. Enforcement lives in the
+// service dispatch loop, which gates plugin packets on [`is_trusted`], and
+// on the QUIC paths, which gate on [`is_paired_device`] (the v2 handshake /
+// in-band identity carry the real deviceId directly).
 
 /// How long a generated/CLI PIN stays valid.
 const PIN_TTL: Duration = Duration::from_secs(300);
@@ -32,7 +32,6 @@ const PIN_TTL: Duration = Duration::from_secs(300);
 struct PinEntry {
     pin: String,
     created: Instant,
-    phone_id: String,
 }
 
 /// connection key (peer IP) -> pending/used PIN
@@ -64,12 +63,11 @@ pub fn is_trusted(conn_key: &str) -> bool {
         .expect("pair state")
         .get(conn_key)
         .cloned();
-    if let Some(id) = &phone_id {
-        if let Ok(store) = TrustStore::load_or_create(state::trust_store_path().expect("state dir"))
-            && store.is_trusted(id)
-        {
-            return true;
-        }
+    if let Some(id) = &phone_id
+        && let Ok(store) = TrustStore::load_or_create(state::trust_store_path().expect("state dir"))
+        && store.is_trusted(id)
+    {
+        return true;
     }
     trusted_connections()
         .lock()
@@ -190,13 +188,6 @@ impl Plugin for PairPlugin {
 /// coming. If a CLI PIN file is live, the phone is told to expect manual
 /// entry instead.
 async fn request_pin(conn: &str, sender: &dyn DeviceSender) {
-    let phone_id = phone_ids()
-        .lock()
-        .expect("pair state")
-        .get(conn)
-        .cloned()
-        .unwrap_or_default();
-
     if cli_pin().is_some() {
         let response = NetworkPacket::new("kdeconnect.linuxlink.pair").with_body(json!({
             "pairStatus": "pinReady",
@@ -211,7 +202,6 @@ async fn request_pin(conn: &str, sender: &dyn DeviceSender) {
         PinEntry {
             pin: pin.clone(),
             created: Instant::now(),
-            phone_id,
         },
     );
     tracing::info!(
@@ -342,20 +332,18 @@ mod tests {
         let entry = PinEntry {
             pin: "123456".into(),
             created: Instant::now() - PIN_TTL - Duration::from_secs(1),
-            phone_id: "phone".into(),
         };
         assert!(pin_expired(&entry));
         let fresh = PinEntry {
             pin: "123456".into(),
             created: Instant::now(),
-            phone_id: "phone".into(),
         };
         assert!(!pin_expired(&fresh));
     }
 
     #[test]
     fn plugin_declares_pair_capabilities() {
-        let caps = PairPlugin::default().incoming_capabilities();
+        let caps = PairPlugin.incoming_capabilities();
         assert!(caps.contains(&"kdeconnect.pair"));
         assert!(caps.contains(&"kdeconnect.linuxlink.pair"));
     }

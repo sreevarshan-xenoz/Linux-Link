@@ -162,7 +162,7 @@ async fn receive_file(filepath: PathBuf, port: u16, expected_size: u64) -> Resul
         received += n as u64;
 
         // Progress logging every MB
-        if received % (1024 * 1024) == 0 {
+        if received.is_multiple_of(1024 * 1024) {
             tracing::debug!("Received {} MB", received / (1024 * 1024));
         }
 

@@ -416,7 +416,6 @@ fn on_process(stream: &pipewire::stream::Stream, user_data: &StreamUserData) {
             // Channel closed -- receiver dropped, stop capturing.
             debug!("Frame channel closed, stopping capture");
             user_data.cancel.cancel();
-            return;
         }
     }
 }

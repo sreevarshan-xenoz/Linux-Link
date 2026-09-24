@@ -66,17 +66,14 @@ async fn start_mock_server() -> (u16, Arc<Mutex<Vec<NetworkPacket>>>) {
                     if trimmed.is_empty() {
                         continue;
                     }
-                    match NetworkPacket::from_wire(trimmed) {
-                        Ok(pkt) => {
-                            {
-                                let mut rx = recv_clone.lock().await;
-                                rx.push(pkt.clone());
-                            }
-                            // Echo as response
-                            let resp = NetworkPacket::new(format!("{}.response", pkt.packet_type));
-                            writer.write_all(&resp.to_wire().unwrap()).await.unwrap();
+                    if let Ok(pkt) = NetworkPacket::from_wire(trimmed) {
+                        {
+                            let mut rx = recv_clone.lock().await;
+                            rx.push(pkt.clone());
                         }
-                        Err(_) => {}
+                        // Echo as response
+                        let resp = NetworkPacket::new(format!("{}.response", pkt.packet_type));
+                        writer.write_all(&resp.to_wire().unwrap()).await.unwrap();
                     }
                 }
                 Err(_) => break,
@@ -208,22 +205,17 @@ async fn test_concurrent_connections() {
 
     let count_clone = connection_count.clone();
     tokio::spawn(async move {
-        loop {
-            match listener.accept().await {
-                Ok((mut stream, _)) => {
-                    {
-                        let mut c = count_clone.lock().await;
-                        *c += 1;
-                    }
-                    let mut line = String::new();
-                    let mut reader = BufReader::new(&mut stream);
-                    let _ = reader.read_line(&mut line).await;
-                    let _ = stream
-                        .write_all(format!("{}\n", HANDSHAKE_OK).as_bytes())
-                        .await;
-                }
-                Err(_) => break,
+        while let Ok((mut stream, _)) = listener.accept().await {
+            {
+                let mut c = count_clone.lock().await;
+                *c += 1;
             }
+            let mut line = String::new();
+            let mut reader = BufReader::new(&mut stream);
+            let _ = reader.read_line(&mut line).await;
+            let _ = stream
+                .write_all(format!("{}\n", HANDSHAKE_OK).as_bytes())
+                .await;
         }
     });
 

@@ -48,7 +48,7 @@ pub fn parse_kick_file(raw: &str, now_unix: u64) -> Option<String> {
     }
     let stamp = lines.next()?.parse::<u64>().ok()?;
     // Wrap-safe freshness check: future stamps are treated as fresh.
-    let age = now_unix.checked_sub(stamp).unwrap_or(0);
+    let age = now_unix.saturating_sub(stamp);
     if age > KICK_TTL_SECS {
         return None;
     }
