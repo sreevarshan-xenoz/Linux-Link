@@ -58,8 +58,12 @@ XDG_CONFIG_HOME=$PWD/devconfig cargo run --bin linux-link -- start
 2. Make your changes with clear, focused commits
 3. Ensure all tests pass (`cargo test --workspace`)
 4. Ensure clippy passes (`cargo clippy --workspace -- -D warnings`)
-5. Push and open a PR with a clear description of changes
-6. Wait for review
+5. Check nothing sensitive is staged (`git diff --cached --name-only`): no private keys, QUIC/TLS
+   certs, pairing PINs, `trusted_devices.json`, `.env`, real device IDs or tailnet addresses, logs or
+   databases. Runtime state lives in `$XDG_STATE_HOME/linux-link`, outside this repo — keep it there.
+   Stage files by name rather than `git add -A`.
+6. Push and open a PR with a clear description of changes
+7. Wait for review
 
 ## Reporting Issues
 
