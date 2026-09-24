@@ -62,9 +62,19 @@ pub(crate) static RECONNECT_BACKOFF: LazyLock<
 pub(crate) static SESSION_STATUS: LazyLock<std::sync::Mutex<api::SessionStatus>> =
     LazyLock::new(|| std::sync::Mutex::new(api::SessionStatus::Disconnected));
 
-/// Last known RTT in microseconds, updated by the streaming stats task.
-pub(crate) static STREAMING_RTT_US: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
+/// The transport's RTT reports from this session, newest last, bounded to
+/// [`crate::rates::RTT_SAMPLES`]. The HUD quotes the median of these rather
+/// than whichever one-second poll happened to be current — quinn and iroh
+/// expose no variance, so successive samples are the only confidence a link
+/// figure can carry (roadmap 2056).
+pub(crate) static RTT_HISTORY: LazyLock<std::sync::Mutex<Vec<u64>>> =
+    LazyLock::new(std::sync::Mutex::default);
+
+/// Cumulative counter reads the HUD's rates are diffed across. Written when the
+/// HUD asks for stats, so the window advances on the display's own cadence and
+/// a poller that stops polling cannot make the numbers go stale.
+pub(crate) static RATE_SNAPSHOTS: LazyLock<std::sync::Mutex<crate::rates::History>> =
+    LazyLock::new(std::sync::Mutex::default);
 
 /// Atomic flag indicating whether streaming is active (avoids try_lock race).
 pub(crate) static STREAMING_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -94,11 +104,11 @@ pub(crate) static LINK_STATE: std::sync::atomic::AtomicU8 = std::sync::atomic::A
 /// quinn (LAN). Written by `install_streaming` before `STREAMING_ACTIVE`.
 pub(crate) static SESSION_IS_WAN: AtomicBool = AtomicBool::new(false);
 
-/// Streaming metrics for stats display.
+/// Video received so far this session, as cumulative counters. The HUD's rates
+/// are differences across reads of these (see [`crate::rates`]), never a total
+/// divided by the session's lifetime.
 pub(crate) static STREAMING_FRAME_COUNT: AtomicU64 = AtomicU64::new(0);
 pub(crate) static STREAMING_BYTE_COUNT: AtomicU64 = AtomicU64::new(0);
-pub(crate) static STREAMING_START_TIME: LazyLock<std::sync::Mutex<Option<std::time::Instant>>> =
-    LazyLock::new(|| std::sync::Mutex::new(None));
 
 /// Global handle for the active streaming client session.
 pub(crate) static STREAMING_HANDLE: LazyLock<TokioMutex<Option<StreamingHandle>>> =
@@ -199,7 +209,9 @@ pub(crate) struct V2Handle {
     pub(crate) task: tokio::task::JoinHandle<()>,
 }
 
-/// Update the global streaming RTT value (called from the stats task).
+/// Record one RTT poll from the stats task.
 pub(crate) fn update_streaming_rtt(rtt_us: u64) {
-    STREAMING_RTT_US.store(rtt_us, std::sync::atomic::Ordering::Relaxed);
+    let mut history = RTT_HISTORY.lock().unwrap();
+    history.push(rtt_us);
+    crate::rates::trim(&mut history, crate::rates::RTT_SAMPLES);
 }

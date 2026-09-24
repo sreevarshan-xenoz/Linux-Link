@@ -10,7 +10,7 @@ use linux_link_core::tailscale::TailscaleClient;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 use tokio::sync::broadcast;
@@ -20,8 +20,8 @@ use linux_link_core::streaming::{SAMPLE_DECODE, SAMPLE_RENDER, report_samples};
 
 use crate::{
     CONNECTION_STATE, CONTROL_PEER, CONTROL_WRITER, DECODE_SAMPLES, MAX_AUDIO_PACKETS_PER_RECEIVE,
-    MAX_FRAMES_PER_RECEIVE, RENDER_SAMPLES, STREAMING_ACTIVE, STREAMING_BYTE_COUNT,
-    STREAMING_FRAME_COUNT, STREAMING_HANDLE, STREAMING_RTT_US, StreamingHandle,
+    MAX_FRAMES_PER_RECEIVE, RATE_SNAPSHOTS, RENDER_SAMPLES, RTT_HISTORY, STREAMING_ACTIVE,
+    STREAMING_BYTE_COUNT, STREAMING_FRAME_COUNT, STREAMING_HANDLE, StreamingHandle,
     update_streaming_rtt,
 };
 
@@ -128,6 +128,13 @@ pub struct RemoteFileDto {
 pub struct StreamingStatsDto {
     pub fps: f64,
     pub bitrate_kbps: u64,
+    /// Milliseconds of received video the two rates above are divided by — the
+    /// sample basis of a number that used to be a lifetime average. Short right
+    /// after a connect, and the display is expected to say so rather than quote
+    /// it as a steady state (roadmap 2056).
+    pub rate_window_ms: u64,
+    /// How many one-second RTT polls `get_streaming_rtt` summarised.
+    pub rtt_samples: usize,
     pub e2e_latency_ms: u64,
     /// Video frames the link never delivered, measured on the client's own
     /// sequence window — not a placeholder.
@@ -1253,6 +1260,10 @@ async fn install_streaming(
     // record, and nothing is going to report them now that its server is gone.
     DECODE_SAMPLES.clear();
     RENDER_SAMPLES.clear();
+    // Same for the HUD's window: a rate or RTT carried over from the computer
+    // this session replaced would be quoted as if it were measured here.
+    RTT_HISTORY.lock().unwrap().clear();
+    RATE_SNAPSHOTS.lock().unwrap().clear();
 
     let cancel = client.cancel_token();
     let client_cancel = cancel.clone();
@@ -1546,8 +1557,6 @@ pub async fn stop_streaming() -> Result<(), String> {
     // Reset streaming metrics
     STREAMING_FRAME_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
     STREAMING_BYTE_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
-    *crate::STREAMING_START_TIME.lock().unwrap() = None;
-    STREAMING_RTT_US.store(0, std::sync::atomic::Ordering::Relaxed);
     crate::LINK_STATE.store(0, std::sync::atomic::Ordering::Relaxed);
     crate::SESSION_IS_WAN.store(false, std::sync::atomic::Ordering::Relaxed);
     crate::SESSION_RELAYED.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -1575,8 +1584,22 @@ pub fn is_streaming_active() -> bool {
 }
 
 /// Get the current RTT to the streaming server in microseconds.
+///
+/// The median of this session's recent one-second polls, not whichever poll was
+/// current when the HUD looked: the transport reports one smoothed value per
+/// sample and no variance at all, so a median over a stated number of samples is
+/// the most confidence a link figure can carry (roadmap 2056). Use
+/// [`rtt_samples`] alongside it before believing the number.
 pub fn get_streaming_rtt() -> u64 {
-    STREAMING_RTT_US.load(Ordering::Relaxed)
+    let history = RTT_HISTORY.lock().unwrap();
+    crate::rates::median(&history[..]).unwrap_or(0)
+}
+
+/// How many RTT polls [`get_streaming_rtt`] summarised, as the DTO reports it.
+/// Zero after a reconnect, which is when the HUD must not present a link figure
+/// as fact.
+pub fn rtt_samples() -> usize {
+    RTT_HISTORY.lock().unwrap().len()
 }
 
 /// Get the current high-level status of the streaming session.
@@ -1585,30 +1608,25 @@ pub fn get_session_status() -> SessionStatus {
 }
 
 /// Get detailed streaming session statistics.
+///
+/// The rates are measured over the last [`crate::rates::RATE_WINDOW`], not
+/// divided by the session's lifetime: a picture that stalled three seconds ago
+/// has to read as stalled, which a total-averaged figure cannot say.
 pub fn get_streaming_stats() -> StreamingStatsDto {
     let frame_count = STREAMING_FRAME_COUNT.load(Ordering::Relaxed);
     let byte_count = STREAMING_BYTE_COUNT.load(Ordering::Relaxed);
-    let elapsed = crate::STREAMING_START_TIME
-        .lock()
-        .unwrap()
-        .map(|t| t.elapsed())
-        .unwrap_or_default();
 
-    let fps = if elapsed.as_secs() > 0 {
-        frame_count as f64 / elapsed.as_secs_f64()
-    } else {
-        0.0
-    };
-
-    let bitrate_kbps = if elapsed.as_secs() > 0 {
-        (byte_count * 8) / elapsed.as_secs().max(1) / 1000
-    } else {
-        0
+    let rates = {
+        let mut history = RATE_SNAPSHOTS.lock().unwrap();
+        crate::rates::push_snapshot(&mut history, Instant::now(), frame_count, byte_count);
+        crate::rates::rates_over(&history, crate::rates::RATE_WINDOW)
     };
 
     StreamingStatsDto {
-        fps: (fps * 10.0).round() / 10.0,
-        bitrate_kbps,
+        fps: (rates.fps * 10.0).round() / 10.0,
+        bitrate_kbps: rates.kbps,
+        rate_window_ms: rates.span.as_millis() as u64,
+        rtt_samples: rtt_samples(),
         // R4 E3: real compositor-true estimate (capture→send age measured
         // on the desktop clock + one network leg), EWMA'd in the core
         // client. 0 until the session's first video packet.
@@ -1928,9 +1946,6 @@ pub async fn receive_frames(timeout_ms: u64) -> Vec<FrameDto> {
                     packet.data.len() as u64,
                     std::sync::atomic::Ordering::Relaxed,
                 );
-                if crate::STREAMING_START_TIME.lock().unwrap().is_none() {
-                    *crate::STREAMING_START_TIME.lock().unwrap() = Some(std::time::Instant::now());
-                }
                 frames.push(FrameDto {
                     data: packet.data,
                     is_keyframe: packet.is_keyframe,

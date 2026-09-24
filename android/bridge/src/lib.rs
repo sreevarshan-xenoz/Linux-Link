@@ -6,6 +6,7 @@
 //! polls; there is no callback channel yet.
 
 mod api;
+mod rates;
 mod session;
 
 pub(crate) use session::*;
