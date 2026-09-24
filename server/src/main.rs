@@ -16,7 +16,10 @@ async fn main() -> Result<()> {
 
     // Initialize logging with config log_level
     tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer())
+        // Logs go to stderr so a command's stdout is only ever its data —
+        // `capabilities --json` and `--markdown` are consumed by scripts and by
+        // the docs generator, which cannot filter an ANSI log line out of them.
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
                 tracing_subscriber::EnvFilter::try_new(&config.log_level)
@@ -39,7 +42,9 @@ async fn main() -> Result<()> {
         cli::Commands::Sessions { count } => session_telemetry::print_sessions(count),
         cli::Commands::List => service::list_peers().await,
         cli::Commands::Watch { interval } => service::watch_peers(interval).await,
-        cli::Commands::Capabilities => service::print_capabilities().await,
+        cli::Commands::Capabilities { json, markdown } => {
+            service::print_capabilities(json, markdown).await
+        }
         cli::Commands::Connect { peer, port } => {
             let identity = kde::host_identity();
             service::connect_peer(peer, port, &identity).await
