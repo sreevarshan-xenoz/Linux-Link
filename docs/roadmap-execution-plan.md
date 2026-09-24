@@ -134,8 +134,8 @@ Work in this order:
    (2151-2170) instead of the old roadmap's plan to "implement" congestion control and path-MTU, which are
    library internals with no application surface.
    **Landed 2026-09-24 for the statistics that exist.** `ConnectionStats` now carries what the connection
-   reports — cumulative lost packets/bytes, datagrams and bytes moved, and on quinn the congestion-event
-   count, congestion window, discovered path MTU and black-hole count — and the session recorder turns
+   reports — cumulative lost packets/bytes, datagrams and bytes moved, and the congestion-event count,
+   congestion window, discovered path MTU and black-hole count — and the session recorder turns
    that into a `LinkReport` in every record: peak window rather than last (a window that collapsed and is
    still recovering must not read as uncongested), the number of times the selected path's address changed
    (2155), and wall-clock seconds spent riding a relay (2157's "for how long"). The two halves of the old
@@ -143,12 +143,18 @@ Work in this order:
    reported (2151's "where exposed"), and the congestion controller is a `TransportConfig` field
    (quinn's default is CUBIC) — switching it is one line of configuration, not an implementation, and is
    deliberately not switched here because there is no measurement yet saying which tail it would move.
-   iroh's connection-level statistics sum bytes across paths and drop the per-path values outright, and the
-   per-path accessor is not re-exported, so those four fields are **absent** on a WAN record instead of
-   zero — the omission is asserted by a test in each family.
+   iroh's connection-level statistics sum bytes across paths and drop the per-path values outright, but the
+   per-path values are reachable: `iroh::endpoint::Connection::paths()` yields each open path and
+   `Path::stats()` returns the noq `PathStats` for it, so `core` reads the four fields off the path the
+   session actually rides. A `None` still means "no selected path in this snapshot", never "zero". (When
+   this step first landed it claimed the per-path accessor was unreachable and those four fields were
+   therefore absent on every WAN record; that was read off noq's `ConnectionStats`, not off iroh's
+   `Connection`, and it is wrong — the loopback test in `iroh_connection` now asserts all four fill in on a
+   real iroh connection.)
    **Open, with the reason:** 2152 (per-channel stream backlog — nothing counts it today), 2153 (datagram
-   queue state, gated on the datagram path in 2491 not existing), 2154's per-path split (one path is all
-   either library exposes to us), 2156 (neither reports connection-ID rotation), 2158 (the direct-vs-relay
+   queue state, gated on the datagram path in 2491 not existing), 2154's per-path split (iroh reports every
+   open path and we sample only the selected one; quinn still flattens to one path), 2156 (neither reports
+   connection-ID rotation), 2158 (the direct-vs-relay
    delta is now computable from the records, but nothing computes it), 2159 (a failed session is still one
    bucket, not attributed to a layer), 2160 (no live `stats --json`; the counters are historical), 2162
    (the session record has no schema version, unlike the benchmark record, so a shape change is not yet

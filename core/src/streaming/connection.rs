@@ -44,13 +44,15 @@ impl std::error::Error for ConnectionError {}
 /// bitrate) and telemetry records. Deliberately narrow: extend only when a
 /// caller actually needs another field.
 ///
-/// The `Option` fields are the honest boundary of what the libraries expose,
+/// The `Option` fields are the honest boundary of what a caller can be told,
 /// which is the whole point of this struct: both stacks keep congestion state
-/// per path, and only quinn's `stats()` flattens the current path's numbers
-/// into what it returns. iroh's connection-level aggregate sums the byte and
-/// packet counters and drops the per-path ones outright, so on a WAN session
-/// those are `None` — a reported absence, never a zero that would read as
-/// "no congestion".
+/// per path, quinn's `stats()` flattens the current path's numbers into what it
+/// returns, and iroh's connection-level `stats()` sums the byte and packet
+/// counters while dropping the per-path ones outright — so on iroh they are read
+/// off the *selected* path instead (`Connection::paths()`), which is also the
+/// only way to get the RTT of the path the video is really riding rather than the
+/// initial one. `None` therefore means "no selected path in this snapshot", and
+/// never "measured zero" — a zero would read as an uncongested link.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ConnectionStats {
     pub rtt: Duration,

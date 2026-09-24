@@ -978,9 +978,14 @@ mod tests {
     }
 
     #[test]
-    fn a_field_the_library_does_not_report_stays_absent_in_both_renderings() {
-        // WAN: noq's aggregate drops the per-path fields, so a session record
-        // must not show `mtu=0` where the honest answer is "not reported".
+    fn an_unreported_field_stays_absent_in_both_renderings() {
+        // The recorder's shape, not a claim about a library: a `None` here means
+        // the transport's snapshot had no selected path to read from, and the
+        // honest rendering of "not reported" is the key being absent. A `0`
+        // would be read as a link that never lost a packet or never grew a
+        // window. (Both families can report these four — quinn off the
+        // connection, iroh off the selected path — so absence is a gap in a
+        // sample, not a WAN-only property.)
         let rec = SessionRecorder::new(TransportFamily::Iroh, None);
         let (_, connection) = fake(
             ConnectionStats {
@@ -1012,7 +1017,7 @@ mod tests {
         assert!(json["link"]["path_mtu"].is_null(), "{json}");
         assert_eq!(json["link"]["lost_packets"], 3);
 
-        // LAN: the same record shape with the per-path fields present.
+        // The same record with the fields present: both renderings must show them.
         let rec = SessionRecorder::new(TransportFamily::Quinn, None);
         let (_, connection) = fake(
             ConnectionStats {

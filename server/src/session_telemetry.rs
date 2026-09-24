@@ -350,14 +350,15 @@ mod tests {
             bytes_sent: 5_000_000,
             path_changes: 1,
             relayed_secs: 4,
-            // iroh reports none of these; a `0` would read as an uncongested
-            // path and a missing key reads as unmeasured.
+            // A transport that had no selected path to sample reports these as
+            // `None`: a `0` would read as an uncongested path, a missing key
+            // reads as unmeasured.
             congestion_events: None,
             peak_cwnd_bytes: None,
             path_mtu: None,
             black_holes_detected: None,
-            // The phone's own reading does arrive over iroh, unlike the four
-            // above: it is measured by the client, not by the transport API.
+            // The phone's own reading arrives on every transport, unlike the
+            // four above: the client measures it, not the transport API.
             client_rtt_ms: Some(28),
             client_lost_packets: Some(3),
         });

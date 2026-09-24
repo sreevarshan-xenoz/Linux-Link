@@ -110,38 +110,47 @@ impl Connection for IrohConnection {
     }
 
     fn stats(&self) -> ConnectionStats {
-        // noq keeps RTT per path; path 0 is the initial path every
-        // connection has. None (no samples yet) reads as zero, like quinn's
-        // fresh-connection value.
+        // noq keeps RTT, congestion state and MTU *per path*. The
+        // connection-level `stats()` is an aggregate over every path that ever
+        // existed and deliberately drops those three (summing a congestion
+        // window across a relay and a direct path means nothing), so the only
+        // way to read them is the path that is actually carrying the session —
+        // which is also the honest source for the RTT: `PathId::ZERO` is the
+        // initial path, and once DCUtR has punched a direct one the traffic
+        // rides a different id, so reading ZERO would report the latency of a
+        // path the video no longer uses.
         //
         // `relayed` mirrors iroh's path selection: DCUtR keeps trying to
         // punch a direct path while traffic rides the relay, so this flips
         // false on its own once punching succeeds — callers surface it as
         // "relayed — trying direct…", never as a dead end.
-        let relayed = self
-            .inner
-            .paths()
-            .iter()
-            .any(|p| p.is_selected() && p.is_relay());
-        // noq's connection-level stats are an aggregate over every open path,
-        // and the aggregation deliberately discards rtt, cwnd and MTU (they
-        // have no meaning summed across paths) while iroh does not re-export
-        // the per-path accessor. Reporting them as `None` is what makes a WAN
-        // record comparable against a LAN one: a zero here would look like a
-        // healthy, uncongested path.
+        let paths = self.inner.paths();
+        let mut relayed = false;
+        // Stays `None` — absent, not zero — when the snapshot has no selected
+        // path (mid-handshake, or a path that closed between snapshots); a zero
+        // here would read as an uncongested link.
+        let mut path_stats = None;
+        if let Some(path) = paths.iter().find(|path| path.is_selected()) {
+            relayed = path.is_relay();
+            path_stats = Some(path.stats());
+        }
         let s = self.inner.stats();
         ConnectionStats {
-            rtt: self.inner.rtt(PathId::ZERO).unwrap_or(Duration::ZERO),
+            rtt: path_stats
+                .as_ref()
+                .map(|path| path.rtt)
+                .or_else(|| self.inner.rtt(PathId::ZERO))
+                .unwrap_or(Duration::ZERO),
             lost_packets: s.lost_packets,
             lost_bytes: s.lost_bytes,
             datagrams_sent: s.udp_tx.datagrams,
             datagrams_received: s.udp_rx.datagrams,
             bytes_sent: s.udp_tx.bytes,
             bytes_received: s.udp_rx.bytes,
-            congestion_events: None,
-            cwnd_bytes: None,
-            path_mtu: None,
-            black_holes_detected: None,
+            congestion_events: path_stats.as_ref().map(|p| p.congestion_events),
+            cwnd_bytes: path_stats.as_ref().map(|p| p.cwnd),
+            path_mtu: path_stats.as_ref().map(|p| p.current_mtu),
+            black_holes_detected: path_stats.as_ref().map(|p| p.black_holes_detected),
             relayed,
         }
     }
@@ -355,11 +364,26 @@ mod tests {
             stats.bytes_sent > 0 && stats.datagrams_sent > 0,
             "the aggregate counters do fill in: {stats:?}"
         );
-        assert_eq!(
-            (stats.cwnd_bytes, stats.path_mtu, stats.congestion_events),
-            (None, None, None),
-            "iroh's connection-level stats throw the per-path fields away, and a \
-             WAN record must say so rather than report a healthy-looking zero"
+        // The connection-level aggregate throws the per-path fields away, but a
+        // live connection always has a selected path to read them from, and this
+        // is the on-host proof that a WAN session is not structurally blind to
+        // congestion state or MTU. An earlier revision asserted the opposite —
+        // it had only looked at `Connection::stats()`, which really does drop
+        // them — and encoded that as a permanent gap in every WAN record.
+        assert!(
+            stats.cwnd_bytes.is_some()
+                && stats.path_mtu.is_some()
+                && stats.congestion_events.is_some()
+                && stats.black_holes_detected.is_some(),
+            "the selected path reports its congestion window, MTU and loss state: {stats:?}"
+        );
+        assert!(
+            stats.path_mtu.unwrap_or(0) >= 1200,
+            "a path MTU below the QUIC floor means it was not measured: {stats:?}"
+        );
+        assert!(
+            stats.rtt > Duration::ZERO,
+            "the RTT is the selected path's, not a zero because path 0 was queried: {stats:?}"
         );
 
         let payload = tokio::join!(
