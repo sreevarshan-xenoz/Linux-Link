@@ -665,8 +665,13 @@ each item is a live defect with a known location, not a wish.
   report and `docs/capabilities.md` state that `desktop -> phone` reaches the wire and no speaker, while
   `phone -> desktop` does reach one (`mic_relay.rs` → `pw-loopback`). The stale half of this item is now
   2791-2800: the playout path that would turn that row's `**no**` into a `yes`.
-- 2055 report e2e latency as a distribution sample stream rather than one EWMA scalar so a p95 regression
-  is visible at all (pairs with 2141-2146).
+- 2055 **CLOSED by Phase 1 step 3 (`7a1623e`), before this range was worked**: the e2e number stopped being
+  only an EWMA. The same per-frame sample that seeds the HUD's smoothed value is pushed raw into the client's
+  `SampleBatch` and shipped as `SAMPLE_E2E` (tag 14), which the server folds through the *same*
+  `metrics::Samples` reservoir that builds `enc_*`, so a session record carries `e2e_p50/p90/p95/p99/max`
+  and a p95 regression is visible in it (`session_telemetry` asserts the tail, `session_record.rs` asserts
+  it end to end over loopback QUIC). What is left of this item is the live HUD's single scalar — a p95 you
+  can watch while streaming rather than read afterwards — which is 2141-2146, not a missing measurement.
 - 2056 expose goodput/RTT with their confidence and sample count, not as bare numbers the HUD cannot
   contextualise.
 
